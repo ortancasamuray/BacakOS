@@ -116,7 +116,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(img) = load_file_icon("folder") {
         ui.set_new_folder_icon(img);
     }
-    ui.set_view_mode(cfg.prefs.view_mode);
+    ui.set_view_mode(0);
     ui.set_grid_scale(cfg.prefs.grid_scale.clamp(0.6, 2.2));
     ui.set_show_hidden_pref(cfg.prefs.show_hidden);
     ui.global::<Theme>().set_dark(cfg.prefs.dark);
