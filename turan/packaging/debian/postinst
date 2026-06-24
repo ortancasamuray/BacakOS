@@ -1,0 +1,32 @@
+#!/bin/sh
+# postinst — runtime dirs, systemd registration, DM alternative.
+set -e
+
+case "$1" in
+    configure)
+        # Greeter state dir + per-DM state dir.
+        mkdir -p /var/lib/bacak-greeter
+        chown bacak-greeter:bacak-greeter /var/lib/bacak-greeter
+        chmod 0700 /var/lib/bacak-greeter
+        mkdir -p /var/lib/bacak-display-manager
+        chmod 0755 /var/lib/bacak-display-manager
+
+        # Register with the x-display-manager alternatives system so the admin
+        # can pick BDM among installed display managers.
+        if command -v update-alternatives >/dev/null 2>&1; then
+            update-alternatives --install \
+                /usr/bin/x-display-manager x-display-manager \
+                /usr/bin/bacak-display-manager 60 || true
+        fi
+
+        if [ -d /run/systemd/system ]; then
+            systemctl daemon-reload || true
+            # Do NOT auto-start: switching the active display manager is the
+            # admin's decision (it conflicts with any running DM). Enable with:
+            #   systemctl enable --now bacak-display-manager
+            echo "BDM installed. Enable it with: systemctl enable --now bacak-display-manager" >&2
+        fi
+        ;;
+esac
+
+exit 0

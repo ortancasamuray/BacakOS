@@ -1,0 +1,17 @@
+#!/bin/sh
+# preinst — create the unprivileged greeter system account before files land.
+set -e
+
+case "$1" in
+    install|upgrade)
+        if ! getent passwd bacak-greeter >/dev/null; then
+            adduser --system --group \
+                    --home /var/lib/bacak-greeter \
+                    --gecos "Bacak Greeter" \
+                    --shell /usr/sbin/nologin \
+                    bacak-greeter
+        fi
+        ;;
+esac
+
+exit 0

@@ -1,0 +1,26 @@
+[package]
+name        = "bacak-plugin-desktop-settings"
+description = "Desktop Settings plugin for Bacak compositor (appearance, hostname, auto-login, password)"
+version     = { workspace = true }
+edition     = { workspace = true }
+license     = { workspace = true }
+authors     = { workspace = true }
+repository  = { workspace = true }
+
+[lib]
+path = "src/lib.rs"
+
+[package.metadata.deb]
+maintainer = "Bacak Desktop Project <packages@example.org>"
+copyright  = "2026, Bacak Desktop Project"
+section    = "x11"
+priority   = "optional"
+extended-description = """\
+Provides a Desktop Settings panel inside the Bacak compositor Control Center.
+Allows changing wallpaper colour, dark mode, system hostname, auto-login
+and user password. Root password is required for privileged operations."""
+depends = "bacak-compositor (>= 0.1.0)"
+assets = [
+    ["plugin.conf",           "usr/share/bacak/plugins/desktop-settings.plugin",                     "644"],
+    ["changelog.Debian.gz",   "usr/share/doc/bacak-plugin-desktop-settings/changelog.Debian.gz",     "644"],
+]

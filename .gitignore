@@ -1,0 +1,25 @@
+# Rust build artifacts
+**/target/
+**/*.rs.bk
+**/Cargo.lock.bak
+**/Cargo.backup
+
+# Debian packages
+**/*.deb
+
+# Logs
+**/*.log
+**/bdm-crash.log
+
+# Database / index files
+**/*.rvf
+**/*.rvf.lock
+**/ruvector.db
+**/agentdb.*
+
+# Claude Code settings
+**/.claude/
+
+# OS files
+.DS_Store
+Thumbs.db

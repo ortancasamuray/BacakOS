@@ -1,0 +1,30 @@
+.TH BACAK-GREETER 1 "June 2026" "BDM 0.1.0" "User Commands"
+.SH NAME
+bacak-greeter \- unprivileged login UI for the Bacak Display Manager
+.SH SYNOPSIS
+.B bacak-greeter
+.SH DESCRIPTION
+.B bacak-greeter
+is the login screen shown by
+.BR bacak-display-manager (8).
+It runs fully unprivileged as the
+.B bacak-greeter
+system user and communicates with the daemon only through the IPC socket named
+in the
+.B BDM_GREETER_SOCKET
+environment variable.
+.PP
+The greeter presents the user list, accepts a username and secret (relayed to
+PAM by the daemon), offers session and power menus, and \(em when a touchscreen
+is present \(em an on-screen keyboard. The protocol logic lives in a display
+free client core; a reference terminal frontend and a Wayland/iced graphical
+frontend share it.
+.SH ENVIRONMENT
+.TP
+.B BDM_GREETER_SOCKET
+Path to the daemon IPC socket. Set by the daemon when it spawns the greeter.
+.SH SEE ALSO
+.BR bacak-display-manager (8),
+.BR bacak-session-launcher (8)
+.SH AUTHOR
+Bacak Desktop Project.

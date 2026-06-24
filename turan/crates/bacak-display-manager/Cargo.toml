@@ -1,0 +1,86 @@
+[package]
+name = "bacak-display-manager"
+description = "BDM privileged daemon: seat management, PAM orchestration, session launching"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "bacak-display-manager"
+path = "src/main.rs"
+
+[features]
+default = []
+# Link the real PAM stack. Release/distro builds enable this.
+system-pam = ["bacak-pam/system-pam"]
+
+[dependencies]
+bacak-common = { workspace = true }
+bacak-pam = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
+nix = { workspace = true }
+serde = { workspace = true }
+serde_json = "1"
+
+# ---------------------------------------------------------------------------
+# Debian packaging (cargo-deb). Builds a single binary package `bacak-display-
+# manager` that ships all three BDM binaries plus config, the systemd unit, PAM
+# policy and the example session entry. Build with:
+#
+#     cargo build --release            # (add --features system-pam for prod)
+#     cargo deb --no-build -p bacak-display-manager
+# ---------------------------------------------------------------------------
+[package.metadata.deb]
+maintainer = "Bacak Desktop Project <packages@example.org>"
+copyright = "2026, Bacak Desktop Project"
+section = "x11"
+priority = "optional"
+extended-description = """\
+Bacak Display Manager (BDM) is a modern, Wayland-native display manager for the
+Bacak Desktop Environment, a lightweight and secure replacement for LightDM, GDM
+and SDDM. The greeter runs fully unprivileged; only the daemon core runs as root.
+Touchscreen-friendly, multi-user, with PAM authentication and systemd/logind
+integration."""
+# dpkg-shlibdeps fills $auto from the linked libraries (libc, libpam, …).
+depends = "$auto, systemd, libpam-modules, dbus, adduser"
+# weston is the prototype compositor shipped as /usr/bin/bacak-compositor.
+recommends = "weston, dbus-user-session"
+# Display managers coexist (only one is active via display-manager.service), so
+# we do NOT Conflict with gdm3/sddm/lightdm — that would force their removal on
+# install and could lock the user out. Selection is via `bacak-dm-setup enable`.
+provides = "x-display-manager"
+maintainer-scripts = "../../packaging/debian"
+conf-files = [
+    "/etc/bacak-display-manager.conf",
+    "/etc/pam.d/bacak-display-manager",
+    "/etc/pam.d/bacak-autologin",
+    "/etc/pam.d/bacak-greeter",
+    "/etc/bacak-display-manager/weston-greeter.ini",
+]
+assets = [
+    ["../../target/release/bacak-display-manager", "usr/bin/", "755"],
+    ["../../target/release/bacak-greeter", "usr/bin/", "755"],
+    ["../../target/release/bacak-session-launcher", "usr/bin/", "755"],
+    # Prototype/fallback compositor (weston wrapper). NOT at /usr/bin/bacak-
+    # compositor — that path belongs to the real compositor's own package. Point
+    # `[daemon] compositor` here to use the weston fallback.
+    ["../../packaging/prototype/bacak-compositor", "usr/share/bacak-display-manager/bacak-compositor-weston", "755"],
+    # Setup helper: install / enable / revert (recovery) / uninstall.
+    ["../../packaging/install.sh", "usr/bin/bacak-dm-setup", "755"],
+    ["../../config/bacak-display-manager.conf", "etc/bacak-display-manager.conf", "644"],
+    ["../../config/weston-greeter.ini", "etc/bacak-display-manager/weston-greeter.ini", "644"],
+    ["../../pam/bacak-display-manager", "etc/pam.d/bacak-display-manager", "644"],
+    ["../../pam/bacak-autologin", "etc/pam.d/bacak-autologin", "644"],
+    ["../../pam/bacak-greeter", "etc/pam.d/bacak-greeter", "644"],
+    ["../../systemd/bacak-display-manager.service", "usr/lib/systemd/system/bacak-display-manager.service", "644"],
+    ["../../README.md", "usr/share/doc/bacak-display-manager/README.md", "644"],
+    ["../../docs/*.md", "usr/share/doc/bacak-display-manager/", "644"],
+    ["../../packaging/changelog.Debian.gz", "usr/share/doc/bacak-display-manager/changelog.Debian.gz", "644"],
+    ["../../packaging/man/bacak-display-manager.8.gz", "usr/share/man/man8/bacak-display-manager.8.gz", "644"],
+    ["../../packaging/man/bacak-session-launcher.8.gz", "usr/share/man/man8/bacak-session-launcher.8.gz", "644"],
+    ["../../packaging/man/bacak-greeter.1.gz", "usr/share/man/man1/bacak-greeter.1.gz", "644"],
+    ["../../packaging/man/bacak-compositor.1.gz", "usr/share/man/man1/bacak-compositor.1.gz", "644"],
+    ["../../packaging/man/bacak-dm-setup.1.gz", "usr/share/man/man1/bacak-dm-setup.1.gz", "644"],
+]

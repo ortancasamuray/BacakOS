@@ -1,0 +1,49 @@
+.TH BACAK-DISPLAY-MANAGER 8 "June 2026" "BDM 0.1.0" "System Administration"
+.SH NAME
+bacak-display-manager \- Bacak Desktop Wayland display manager daemon
+.SH SYNOPSIS
+.B bacak-display-manager
+.SH DESCRIPTION
+.B bacak-display-manager
+is the privileged core of the Bacak Display Manager (BDM). It is started by
+systemd before user login, claims a virtual terminal, reads its configuration,
+and either performs an automatic login or launches the unprivileged greeter
+.BR bacak-greeter (1)
+on the Bacak compositor.
+.PP
+The daemon drives PAM authentication on the greeter's behalf over a local UNIX
+socket, then forks, drops privileges to the authenticated user, and hands off to
+.BR bacak-session-launcher (8)
+to start the chosen desktop session. It is the only BDM component that runs as
+root.
+.SH CONFIGURATION
+.TP
+.I /etc/bacak-display-manager.conf
+Main configuration (TOML). See the file's comments for all keys: autologin,
+greeter, theme, wallpaper, virtual keyboard, accessibility, power and sessions.
+.SH FILES
+.TP
+.I /etc/pam.d/bacak-display-manager
+PAM policy for interactive logins.
+.TP
+.I /etc/pam.d/bacak-autologin
+PAM policy for the autologin fast-path.
+.TP
+.I /run/bacak-display-manager/greeter.sock
+Greeter IPC socket (root-owned, greeter-group readable).
+.TP
+.I /var/lib/bacak-display-manager/
+Persisted last-user / last-session state.
+.SH SERVICE
+Managed via systemd:
+.PP
+.RS
+systemctl enable --now bacak-display-manager
+.RE
+.SH SEE ALSO
+.BR bacak-greeter (1),
+.BR bacak-session-launcher (8),
+.BR systemd-logind.service (8),
+.BR pam (8)
+.SH AUTHOR
+Bacak Desktop Project.

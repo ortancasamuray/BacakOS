@@ -1,0 +1,78 @@
+name: CI
+
+# Forgejo/Gitea Actions (act_runner). GitHub-Actions-compatible syntax, but with
+# no dependency on GitHub: Rust is installed via rustup in a run step, and only
+# `actions/checkout` is used (resolved by the runner from its configured actions
+# source). Run this on any Forgejo/Gitea runner that provides a Debian/Ubuntu
+# environment under the label below.
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    # Adjust to a label your act_runner advertises (e.g. `docker`, `linux`).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build deps + Rust
+        run: |
+          [ "$(id -u)" -eq 0 ] && SUDO= || SUDO=sudo
+          $SUDO apt-get update
+          $SUDO apt-get install -y --no-install-recommends \
+            build-essential pkg-config cmake curl ca-certificates \
+            libwayland-dev libxkbcommon-dev libfontconfig-1-dev
+          if ! command -v cargo >/dev/null; then
+            curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal \
+              --component rustfmt --component clippy
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          else
+            rustup component add rustfmt clippy || true
+          fi
+
+      - name: Format check
+        run: cargo fmt --all --check
+
+      - name: Clippy (default features)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test (default features)
+        run: cargo test --workspace --all-targets
+
+      - name: Feature builds (system-pam daemon + gui greeter)
+        run: |
+          cargo build -p bacak-display-manager --features system-pam
+          cargo build -p bacak-greeter --features gui
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build deps + Rust + cargo-deb
+        run: |
+          [ "$(id -u)" -eq 0 ] && SUDO= || SUDO=sudo
+          $SUDO apt-get update
+          $SUDO apt-get install -y --no-install-recommends \
+            build-essential pkg-config cmake curl ca-certificates lintian \
+            libwayland-dev libxkbcommon-dev libfontconfig-1-dev
+          if ! command -v cargo >/dev/null; then
+            curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"; export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          command -v cargo-deb >/dev/null || cargo install cargo-deb --locked
+
+      - name: Build production binaries + .deb
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          cargo build --release -p bacak-display-manager --features system-pam
+          cargo build --release -p bacak-greeter --features gui --bin bacak-greeter
+          cargo deb --no-build -p bacak-display-manager
+          lintian target/debian/bacak-display-manager_*_amd64.deb || true
+          # Keep the artifact where job logs / the Forgejo UI can find it.
+          ls -l target/debian/*.deb

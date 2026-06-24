@@ -1,0 +1,22 @@
+[package]
+name        = "bacak-cli"
+description = "Bacak OS demonstration CLI — exercises every service crate from a terminal."
+version     = { workspace = true }
+edition     = { workspace = true }
+license     = { workspace = true }
+authors     = { workspace = true }
+repository  = { workspace = true }
+
+[[bin]]
+name = "bacak"
+path = "src/main.rs"
+
+[dependencies]
+bacak-services   = { path = "../bacak-services" }
+bacak-compositor = { path = "../bacak-compositor" }
+
+tokio       = { workspace = true }
+clap        = { workspace = true }
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+anyhow      = { workspace = true }

@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Bacak OS — Desktop Prototype</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- ============ DESKTOP ROOT ============ -->
+  <main id="desktop" class="desktop" aria-label="Desktop">
+    <!-- Aegean gradient background layer with subtle parallax orbs -->
+    <div class="bg-layer" aria-hidden="true">
+      <div class="orb orb-a"></div>
+      <div class="orb orb-b"></div>
+      <div class="orb orb-c"></div>
+      <div class="grain"></div>
+    </div>
+
+    <!-- Workspace / window container -->
+    <div id="workspace" class="workspace">
+      <!-- Demo: Mock Firefox window -->
+      <section class="window" data-window-id="firefox" style="--w: 880px; --h: 560px; --x: 180px; --y: 90px;">
+        <header class="window-titlebar" data-drag-handle>
+          <div class="window-controls">
+            <button class="ctrl ctrl-close" aria-label="Close"></button>
+            <button class="ctrl ctrl-min" aria-label="Minimize"></button>
+            <button class="ctrl ctrl-max" aria-label="Maximize"></button>
+          </div>
+          <div class="window-title">Mozilla Firefox</div>
+          <div class="window-spacer"></div>
+        </header>
+
+        <div class="firefox-toolbar">
+          <button class="ff-nav" aria-label="Back">‹</button>
+          <button class="ff-nav" aria-label="Forward">›</button>
+          <button class="ff-nav" aria-label="Refresh">⟳</button>
+          <div class="ff-address">
+            <span class="ff-lock" aria-hidden="true">⌬</span>
+            <input
+              type="text"
+              class="ff-input"
+              placeholder="Search or enter address"
+              value="https://"
+              data-keyboard-target
+              autocomplete="off"
+              spellcheck="false"
+            />
+          </div>
+          <button class="ff-nav" aria-label="Menu">≡</button>
+        </div>
+
+        <div class="firefox-viewport" id="firefox-viewport">
+          <div class="ff-content">
+            <h1>Welcome to Bacak OS</h1>
+            <p class="lede">A glassmorphic desktop environment built on Rust and Tauri, with a fluid hybrid window manager and a keyboard that respects your content.</p>
+            <div class="ff-card-row">
+              <article class="ff-card">
+                <h3>Snap layouts</h3>
+                <p>Drag a window to the edge. Watch it preview, settle, and respect your other tiles.</p>
+              </article>
+              <article class="ff-card">
+                <h3>Virtual archives</h3>
+                <p>Browse a .tar.gz or .7z like any folder. No extraction step. Lazy, async, zero-copy where possible.</p>
+              </article>
+              <article class="ff-card">
+                <h3>Touch-first</h3>
+                <p>Hover magnification on the dock. Long-press to multi-select. Edge-reveal for fullscreen apps.</p>
+              </article>
+            </div>
+            <label class="ff-search-block">
+              <span>Try the on-screen keyboard</span>
+              <input
+                type="text"
+                class="ff-search"
+                placeholder="Tap or focus here…"
+                data-keyboard-target
+                autocomplete="off"
+              />
+            </label>
+            <p class="ff-foot">Press <kbd>Esc</kbd> to dismiss the keyboard. Drag the title bar to move. Drag to a screen edge to snap.</p>
+          </div>
+        </div>
+
+        <div class="window-glow" aria-hidden="true"></div>
+        <button class="resize-handle" aria-label="Resize"></button>
+      </section>
+
+      <!-- Snap preview overlay (toggled by JS) -->
+      <div id="snap-preview" class="snap-preview" aria-hidden="true"></div>
+    </div>
+
+    <!-- ============ ON-SCREEN KEYBOARD ============ -->
+    <aside id="osk" class="osk" aria-label="On-screen keyboard" aria-hidden="true">
+      <div class="osk-suggestions" id="osk-suggestions">
+        <button class="osk-sugg">https://</button>
+        <button class="osk-sugg">bacak.dev</button>
+        <button class="osk-sugg">rust-lang.org</button>
+      </div>
+      <div class="osk-rows" id="osk-rows"></div>
+    </aside>
+
+    <!-- ============ DOCK ============ -->
+    <nav id="dock" class="dock" aria-label="Application dock">
+      <div class="dock-inner">
+        <button class="dock-app" data-app="files" title="Files">
+          <span class="dock-icon icon-files">⏍</span>
+          <span class="dock-indicator"></span>
+        </button>
+        <button class="dock-app dock-app--active" data-app="firefox" title="Firefox">
+          <span class="dock-icon icon-firefox">◉</span>
+          <span class="dock-indicator dock-indicator--on"></span>
+        </button>
+        <button class="dock-app" data-app="terminal" title="Terminal">
+          <span class="dock-icon icon-terminal">›_</span>
+          <span class="dock-indicator"></span>
+        </button>
+        <button class="dock-app" data-app="editor" title="Editor">
+          <span class="dock-icon icon-editor">✎</span>
+          <span class="dock-indicator"></span>
+        </button>
+        <button class="dock-app" data-app="settings" title="Settings">
+          <span class="dock-icon icon-settings">⚙</span>
+          <span class="dock-indicator"></span>
+        </button>
+
+        <div class="dock-divider" role="separator"></div>
+
+        <button class="dock-tray" data-tray="network" title="Network" aria-label="Network">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+            <path fill="currentColor" d="M12 18a2 2 0 1 1 0 4 2 2 0 0 1 0-4Zm0-5c1.86 0 3.55.76 4.77 1.99l-1.42 1.42A4.98 4.98 0 0 0 12 15c-1.38 0-2.63.56-3.54 1.46l-1.42-1.41A6.97 6.97 0 0 1 12 13Zm0-5c3.18 0 6.06 1.29 8.14 3.37l-1.42 1.41A9.96 9.96 0 0 0 12 10c-2.76 0-5.26 1.12-7.07 2.93L3.51 11.5A11.94 11.94 0 0 1 12 8Zm0-5c4.84 0 9.23 1.96 12.41 5.14l-1.41 1.41A14.92 14.92 0 0 0 12 5C7.86 5 4.11 6.68 1.41 9.39L0 7.97A16.92 16.92 0 0 1 12 3Z"/>
+          </svg>
+        </button>
+        <button class="dock-tray" data-tray="bluetooth" title="Bluetooth" aria-label="Bluetooth">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+            <path fill="currentColor" d="M14.88 16.29 13 18.17v-3.76l1.88 1.88M13 5.83l1.88 1.88L13 9.59V5.83M17.71 7.71 12 2h-1v7.59L6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 11 14.41V22h1l5.71-5.71L13.41 12l4.3-4.29Z"/>
+          </svg>
+        </button>
+        <button class="dock-tray" data-tray="battery" title="Battery" aria-label="Battery">
+          <span class="battery-glyph"><span></span></span>
+        </button>
+        <button class="dock-tray" data-tray="sound" title="Sound" aria-label="Sound">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+            <path fill="currentColor" d="M5 9v6h4l5 4V5L9 9H5Zm11.5 3c0-1.77-1-3.29-2.5-4.03v8.05c1.5-.73 2.5-2.25 2.5-4.02Z"/>
+          </svg>
+        </button>
+        <button class="dock-clock" data-tray="clock" aria-label="Clock">
+          <span class="clock-time" id="clock-time">--:--</span>
+          <span class="clock-date" id="clock-date">— —</span>
+        </button>
+      </div>
+    </nav>
+
+    <!-- Hover preview / right-click placeholder -->
+    <div id="dock-tooltip" class="dock-tooltip" aria-hidden="true"></div>
+
+    <!-- ============ TRAY PANELS ============ -->
+
+    <!-- Network panel -->
+    <aside id="panel-network" class="tray-panel" data-panel="network" aria-hidden="true" aria-labelledby="net-title">
+      <header class="tp-header">
+        <div>
+          <h3 class="tp-title" id="net-title">Wi-Fi</h3>
+          <p class="tp-sub" id="net-sub">Bacak-Office</p>
+        </div>
+        <label class="switch" title="Toggle Wi-Fi">
+          <input type="checkbox" id="net-toggle" checked />
+          <span class="switch-track"><span class="switch-thumb"></span></span>
+        </label>
+      </header>
+
+      <section class="tp-section" id="net-current-section">
+        <button class="net-row net-row--current" data-ssid="Bacak-Office">
+          <span class="net-icon" aria-hidden="true">⌬</span>
+          <span class="net-body">
+            <span class="net-name">Bacak-Office</span>
+            <span class="net-meta">Connected · 192.168.1.42</span>
+          </span>
+          <span class="bars" data-strength="4" aria-label="signal 4 of 4"><i></i><i></i><i></i><i></i></span>
+        </button>
+      </section>
+
+      <section class="tp-section" id="net-others-section">
+        <div class="tp-section-label">Other networks</div>
+        <button class="net-row" data-ssid="Aegean-Mesh" data-secured="1">
+          <span class="net-icon" aria-hidden="true">◌</span>
+          <span class="net-body"><span class="net-name">Aegean-Mesh</span></span>
+          <span class="net-secured" title="Secured" aria-label="Secured">🔒</span>
+          <span class="bars" data-strength="3"><i></i><i></i><i></i><i></i></span>
+        </button>
+        <button class="net-row" data-ssid="Guest-WiFi">
+          <span class="net-icon" aria-hidden="true">◌</span>
+          <span class="net-body"><span class="net-name">Guest-WiFi</span></span>
+          <span class="bars" data-strength="2"><i></i><i></i><i></i><i></i></span>
+        </button>
+        <button class="net-row" data-ssid="rust-lang" data-secured="1">
+          <span class="net-icon" aria-hidden="true">◌</span>
+          <span class="net-body"><span class="net-name">rust-lang</span></span>
+          <span class="net-secured" aria-label="Secured">🔒</span>
+          <span class="bars" data-strength="1"><i></i><i></i><i></i><i></i></span>
+        </button>
+      </section>
+
+      <footer class="tp-footer">
+        <button class="tp-link">Network settings…</button>
+      </footer>
+    </aside>
+
+    <!-- Bluetooth panel -->
+    <aside id="panel-bluetooth" class="tray-panel" data-panel="bluetooth" aria-hidden="true" aria-labelledby="bt-title">
+      <header class="tp-header">
+        <div>
+          <h3 class="tp-title" id="bt-title">Bluetooth</h3>
+          <p class="tp-sub" id="bt-sub">Discoverable as “bacak-os”</p>
+        </div>
+        <label class="switch" title="Toggle Bluetooth">
+          <input type="checkbox" id="bt-toggle" checked />
+          <span class="switch-track"><span class="switch-thumb"></span></span>
+        </label>
+      </header>
+
+      <section class="tp-section">
+        <div class="tp-section-label">My devices</div>
+        <button class="bt-row bt-row--connected" data-mac="aa:bb:01">
+          <span class="bt-icon" aria-hidden="true">🎧</span>
+          <span class="bt-body">
+            <span class="bt-name">AirPods Pro</span>
+            <span class="bt-meta">Connected</span>
+          </span>
+          <span class="bt-battery" aria-label="Battery 78 percent">
+            <span class="bt-battery-bar"><span class="bt-battery-fill" style="width:78%"></span></span>
+            <span class="bt-battery-num">78%</span>
+          </span>
+        </button>
+        <button class="bt-row bt-row--connected" data-mac="aa:bb:02">
+          <span class="bt-icon" aria-hidden="true">🖱</span>
+          <span class="bt-body">
+            <span class="bt-name">Magic Mouse</span>
+            <span class="bt-meta">Connected</span>
+          </span>
+          <span class="bt-battery" aria-label="Battery 44 percent">
+            <span class="bt-battery-bar"><span class="bt-battery-fill" style="width:44%"></span></span>
+            <span class="bt-battery-num">44%</span>
+          </span>
+        </button>
+        <button class="bt-row" data-mac="aa:bb:03">
+          <span class="bt-icon" aria-hidden="true">⌨</span>
+          <span class="bt-body">
+            <span class="bt-name">Magic Keyboard</span>
+            <span class="bt-meta">Not connected</span>
+          </span>
+        </button>
+      </section>
+
+      <section class="tp-section">
+        <div class="tp-section-label">
+          <span>Nearby</span>
+          <button class="tp-mini-btn" id="bt-scan">Scan</button>
+        </div>
+        <div id="bt-nearby">
+          <button class="bt-row" data-mac="cc:dd:01">
+            <span class="bt-icon" aria-hidden="true">📱</span>
+            <span class="bt-body">
+              <span class="bt-name">iPhone — Mehmet</span>
+              <span class="bt-meta">Tap to pair</span>
+            </span>
+          </button>
+          <button class="bt-row" data-mac="cc:dd:02">
+            <span class="bt-icon" aria-hidden="true">🔊</span>
+            <span class="bt-body">
+              <span class="bt-name">JBL Flip 5</span>
+              <span class="bt-meta">Tap to pair</span>
+            </span>
+          </button>
+        </div>
+      </section>
+
+      <footer class="tp-footer">
+        <button class="tp-link">Bluetooth settings…</button>
+      </footer>
+    </aside>
+
+    <!-- Sound panel -->
+    <aside id="panel-sound" class="tray-panel" data-panel="sound" aria-hidden="true" aria-labelledby="sound-title">
+      <header class="tp-header">
+        <div>
+          <h3 class="tp-title" id="sound-title">Sound</h3>
+          <p class="tp-sub" id="sound-sub">MacBook Speakers · 72%</p>
+        </div>
+      </header>
+
+      <section class="tp-section">
+        <div class="vol-row">
+          <button class="vol-mute" id="vol-mute" aria-label="Mute">
+            <svg class="vol-icon" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+              <path fill="currentColor" d="M5 9v6h4l5 4V5L9 9H5Zm11.5 3c0-1.77-1-3.29-2.5-4.03v8.05c1.5-.73 2.5-2.25 2.5-4.02Z"/>
+            </svg>
+          </button>
+          <input type="range" class="volume-slider" id="vol-slider" min="0" max="100" value="72" aria-label="Volume" />
+          <span class="vol-value" id="vol-value">72</span>
+        </div>
+      </section>
+
+      <section class="tp-section">
+        <div class="tp-section-label">Output</div>
+        <button class="sound-row is-active" data-sink="speakers" data-kind="Internal">
+          <span class="sound-check" aria-hidden="true">✓</span>
+          <span class="sound-name">MacBook Speakers</span>
+          <span class="sound-kind">Internal</span>
+        </button>
+        <button class="sound-row" data-sink="airpods" data-kind="Bluetooth">
+          <span class="sound-check" aria-hidden="true"></span>
+          <span class="sound-name">AirPods Pro</span>
+          <span class="sound-kind">Bluetooth</span>
+        </button>
+        <button class="sound-row" data-sink="usb" data-kind="USB">
+          <span class="sound-check" aria-hidden="true"></span>
+          <span class="sound-name">USB-C Headphones</span>
+          <span class="sound-kind">USB</span>
+        </button>
+      </section>
+
+      <section class="tp-section">
+        <div class="tp-section-label">Input</div>
+        <button class="sound-row is-active" data-source="mic">
+          <span class="sound-check" aria-hidden="true">✓</span>
+          <span class="sound-name">MacBook Microphone</span>
+          <span class="sound-kind">Internal</span>
+        </button>
+        <button class="sound-row" data-source="airpods-mic">
+          <span class="sound-check" aria-hidden="true"></span>
+          <span class="sound-name">AirPods Pro</span>
+          <span class="sound-kind">Bluetooth</span>
+        </button>
+      </section>
+
+      <footer class="tp-footer">
+        <button class="tp-link">Sound settings…</button>
+      </footer>
+    </aside>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
