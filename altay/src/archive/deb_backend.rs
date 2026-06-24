@@ -92,10 +92,13 @@ fn with_data_tar<T>(
         if let Some(codec) = data_tar_codec(trimmed) {
             let reader: Box<dyn Read> = match codec {
                 None => Box::new(entry),
-                Some(Codec::Gzip) => Box::new(flate2::read::GzDecoder::new(entry)),
+                Some(Codec::Gzip)   => Box::new(flate2::read::GzDecoder::new(entry)),
                 Some(Codec::Xz) | Some(Codec::Lzma) => Box::new(xz2::read::XzDecoder::new(entry)),
-                Some(Codec::Bzip2) => Box::new(bzip2::read::BzDecoder::new(entry)),
-                Some(Codec::Zstd) => Box::new(zstd::stream::read::Decoder::new(entry)?),
+                Some(Codec::Bzip2)  => Box::new(bzip2::read::BzDecoder::new(entry)),
+                Some(Codec::Zstd)   => Box::new(zstd::stream::read::Decoder::new(entry)?),
+                Some(Codec::Brotli) => Box::new(brotli::Decompressor::new(entry, 65536)),
+                // Lzip/Lzop/Compress require external tools; not typical in .deb
+                Some(_) => return Err(ArchiveError::Unsupported),
             };
             return f(reader);
         }
