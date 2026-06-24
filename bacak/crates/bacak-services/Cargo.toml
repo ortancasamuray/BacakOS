@@ -1,0 +1,19 @@
+[package]
+name        = "bacak-services"
+description = "Bacak OS service layer — filesystem, archives, device control, and network surfaces."
+version     = { workspace = true }
+edition     = { workspace = true }
+license     = { workspace = true }
+authors     = { workspace = true }
+repository  = { workspace = true }
+
+[dependencies]
+tokio       = { workspace = true }
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+thiserror   = { workspace = true }
+parking_lot = { workspace = true }
+notify      = { workspace = true }
+zip         = { workspace = true }
+tar         = { workspace = true }
+flate2      = { workspace = true }

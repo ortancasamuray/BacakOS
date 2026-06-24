@@ -1,0 +1,47 @@
+.TH BACAK-COMPOSITOR 1 "June 2026" "BDM 0.1.0" "User Commands"
+.SH NAME
+bacak-compositor \- prototype weston-backed compositor for the BDM greeter
+.SH SYNOPSIS
+.B bacak-compositor
+.RB [ --greeter
+.IR PATH ]
+.SH DESCRIPTION
+.B bacak-compositor
+is a prototype stand-in for the (not-yet-written) native Bacak compositor. It
+wraps
+.BR weston (1),
+generating a configuration that uses the kiosk shell and weston's
+.B [autolaunch]
+to host the greeter given by
+.B --greeter
+fullscreen. With
+.B watch=true
+weston exits when the greeter exits, letting
+.BR bacak-display-manager (8)
+proceed to the user session.
+.SH ENVIRONMENT
+.TP
+.B WESTON_BACKEND
+Force a weston backend module (e.g.
+.IR x11-backend.so ,
+.IR wayland-backend.so ,
+.IR headless-backend.so ).
+On real hardware, leave unset so weston auto-selects the drm backend.
+.TP
+.B WESTON_EXTRA_ARGS
+Extra arguments passed to weston (e.g.
+.IR "--width=1024 --height=720" ).
+.TP
+.B BDM_WESTON_CONFIG
+Path to a base weston config to extend (kiosk shell + greeter autolaunch are
+always appended).
+.SH FILES
+.TP
+.I /etc/bacak-display-manager/weston-greeter.ini
+Reference weston configuration.
+.SH SEE ALSO
+.BR bacak-display-manager (8),
+.BR bacak-greeter (1),
+.BR weston (1)
+.SH AUTHOR
+Bacak Desktop Project.

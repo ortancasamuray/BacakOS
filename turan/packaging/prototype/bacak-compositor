@@ -1,0 +1,68 @@
+#!/bin/sh
+# bacak-compositor (PROTOTYPE) — a weston-backed stand-in for the real Bacak
+# compositor, so BDM can show its greeter on a working Wayland seat today.
+#
+# The BDM daemon invokes the configured compositor as:
+#
+#     bacak-compositor --greeter /usr/bin/bacak-greeter
+#
+# This wrapper translates that into a weston launch that hosts the greeter
+# fullscreen via the kiosk shell, using weston's [autolaunch] to start the
+# greeter and to shut weston down again when the greeter exits (so the daemon
+# can proceed to the session).
+#
+# Backend selection:
+#   * real hardware on a VT  -> let weston auto-pick the drm backend (default).
+#   * nested demo inside X11 -> WESTON_BACKEND=x11-backend.so
+#   * nested inside Wayland  -> WESTON_BACKEND=wayland-backend.so
+#   * headless (CI/screens.) -> WESTON_BACKEND=headless-backend.so
+#
+# Extra weston args (e.g. --width/--height for nested) via WESTON_EXTRA_ARGS.
+
+set -eu
+
+GREETER="/usr/bin/bacak-greeter"
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --greeter) GREETER="${2:?--greeter needs a path}"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+
+: "${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR must be set (the daemon sets it per-user)}"
+
+# Generate the greeter weston config. A site may provide a base config in
+# BDM_WESTON_CONFIG; we always (re)assert kiosk shell + autolaunch of the greeter.
+CONF="$(mktemp "${XDG_RUNTIME_DIR}/bdm-weston.XXXXXX.ini")"
+trap 'rm -f "$CONF"' EXIT INT TERM
+
+if [ -n "${BDM_WESTON_CONFIG:-}" ] && [ -f "${BDM_WESTON_CONFIG}" ]; then
+    cat "${BDM_WESTON_CONFIG}" > "$CONF"
+    printf '\n' >> "$CONF"
+fi
+cat >> "$CONF" <<EOF
+[core]
+shell=kiosk-shell.so
+idle-time=0
+require-input=false
+
+[autolaunch]
+path=${GREETER}
+watch=true
+EOF
+
+# If no backend is forced and the seat has no DRM device (e.g. a VM whose kernel
+# lacks a GPU driver), fall back to weston's headless backend so the greeter can
+# still run — useful for CI / smoke tests. On real hardware /dev/dri exists and
+# weston auto-selects the drm backend.
+if [ -z "${WESTON_BACKEND:-}" ] && ! ls /dev/dri/card* >/dev/null 2>&1; then
+    WESTON_BACKEND=headless-backend.so
+fi
+
+set -- weston --config="$CONF"
+if [ -n "${WESTON_BACKEND:-}" ]; then
+    set -- "$@" --backend="${WESTON_BACKEND}"
+fi
+
+# shellcheck disable=SC2086
+exec "$@" ${WESTON_EXTRA_ARGS:-}

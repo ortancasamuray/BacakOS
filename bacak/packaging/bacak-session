@@ -1,0 +1,11 @@
+#!/bin/sh
+# Bacak desktop session: start audio services, set Wayland IM env, exec compositor.
+export GTK_IM_MODULE=wayland
+export QT_IM_MODULE=wayland
+export XMODIFIERS=@im=none
+
+# Start PipeWire audio stack as user services if not already running.
+systemctl --user is-active --quiet pipewire || \
+    systemctl --user start pipewire wireplumber pipewire-pulse
+
+exec /usr/bin/bacak-compositor "$@"

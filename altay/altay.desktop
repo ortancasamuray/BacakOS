@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Altay
+GenericName=File Manager
+Comment=Modern, touch-friendly, sandboxed file manager
+Exec=altay %U
+Icon=altay
+Terminal=false
+Categories=System;FileManager;
+MimeType=inode/directory;
+Keywords=files;file manager;explorer;folders;archive;storage;
+StartupNotify=true

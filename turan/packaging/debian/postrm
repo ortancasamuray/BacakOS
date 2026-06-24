@@ -1,0 +1,20 @@
+#!/bin/sh
+# postrm — reload systemd after removal; purge data + greeter user on purge.
+set -e
+
+case "$1" in
+    remove)
+        if [ -d /run/systemd/system ]; then
+            systemctl --system daemon-reload >/dev/null 2>&1 || true
+        fi
+        ;;
+    purge)
+        rm -rf /var/lib/bacak-display-manager
+        rm -rf /var/lib/bacak-greeter
+        if getent passwd bacak-greeter >/dev/null; then
+            deluser --system bacak-greeter || true
+        fi
+        ;;
+esac
+
+exit 0

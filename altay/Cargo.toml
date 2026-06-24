@@ -1,0 +1,108 @@
+[package]
+name = "altay"
+version = "0.1.0"
+edition = "2021"
+description = "Modern touch-friendly sandboxed Linux file manager (Wayland-first, Rust + Slint)"
+license = "GPL-3.0-or-later"
+homepage = "https://anadolupanteri.org.tr"
+repository = "https://anadolupanteri.org.tr"
+authors = ["Anadolu Panteri <bilgi@anadolupanteri.org.tr>"]
+rust-version = "1.80"
+
+[dependencies]
+# UI
+slint = { version = "1.8", default-features = false, features = ["compat-1-2", "backend-winit", "renderer-skia", "std"] }
+
+# Error handling
+anyhow = "1"
+thiserror = "1"
+
+# System calls (disk usage via statvfs)
+libc = "0.2"
+
+# Filesystem
+dirs = "5"
+walkdir = "2"
+notify = "6"
+
+# Trash (freedesktop spec)
+trash = "5"
+
+# Utilities
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+humansize = "2"
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+# Async (network ops, transfers)
+tokio = { version = "1", features = ["rt-multi-thread", "fs", "io-util", "sync", "macros", "time"] }
+
+# Archive formats
+zip = { version = "2", default-features = false, features = ["deflate", "bzip2", "zstd", "aes-crypto", "time"] }
+tar = "0.4"
+flate2 = "1"
+bzip2 = "0.4"
+xz2 = "0.1"
+zstd = "0.13"
+sevenz-rust = { version = "0.6", features = ["compress", "aes256", "bzip2"] }
+infer = "0.16"
+unrar = "0.5"
+ar = "0.9"
+cpio = "0.4"
+
+# D-Bus (udisks2 device hotplug)
+zbus = { version = "4", default-features = false, features = ["tokio"] }
+futures-util = "0.3"
+
+# Config persistence (saved network connections, settings)
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
+# System keyring (Secret Service) for network passwords
+keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
+
+# xdg-desktop-portal (file chooser)
+ashpd = { version = "0.9", default-features = false, features = ["tokio"] }
+
+# Preview & thumbnails
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp", "tiff", "ico"] }
+md5 = "0.7"
+
+[build-dependencies]
+slint-build = "1.8"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+# `cargo deb` packaging (cargo install cargo-deb && cargo deb)
+[package.metadata.deb]
+maintainer = "Anadolu Panteri <bilgi@anadolupanteri.org.tr>"
+copyright = "2026, Anadolu Panteri <bilgi@anadolupanteri.org.tr>"
+changelog = "debian/changelog"
+section = "utils"
+priority = "optional"
+extended-description = """
+Altay is a modern, touch-friendly file manager for Wayland desktops. It \
+sandboxes access to the user's home, removable devices and network shares, \
+never requiring root. Features archives (zip/tar/7z/rar/deb/rpm), udisks2 \
+device mounting, gvfs network shares, previews, indexed + content search."""
+# `$auto` resolves directly-linked libs (libc, libstdc++ from unrar, bz2, lzma,
+# dbus, fontconfig, freetype). The windowing/GPU libs are dlopen-ed by winit at
+# runtime, so they aren't auto-detected and are listed explicitly.
+depends = "$auto, libwayland-client0, libwayland-cursor0, libwayland-egl1, libxkbcommon0, libegl1, libgl1"
+# Optional runtime helpers — the app degrades gracefully without them.
+recommends = "gvfs, udisks2, polkitd | policykit-1, xdg-desktop-portal, poppler-utils, wl-clipboard"
+suggests = "ffmpeg | ffmpegthumbnailer, ghostscript, gnome-keyring"
+assets = [
+    ["target/release/altay", "usr/bin/", "755"],
+    ["altay.desktop", "usr/share/applications/", "644"],
+    ["assets/altay.png", "usr/share/icons/hicolor/256x256/apps/altay.png", "644"],
+    ["altay.1", "usr/share/man/man1/altay.1", "644"],
+    ["debian/lintian-overrides", "usr/share/lintian/overrides/altay", "644"],
+    ["README.md", "usr/share/doc/altay/README.md", "644"],
+    ["README.tr.md", "usr/share/doc/altay/README.tr.md", "644"],
+]

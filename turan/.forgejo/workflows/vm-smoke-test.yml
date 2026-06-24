@@ -1,0 +1,102 @@
+name: VM smoke test
+
+# Bare-metal proof for docs/PROTOTYPE.md path B, on Forgejo/Gitea Actions: boots
+# a Debian VM with a virtio-gpu (virgl 3D) seat and asserts an active logind
+# 'greeter' session on seat0 hosted by the **real bacak-compositor** (DRM master
+# + $BACAK_STARTUP). The real compositor is the default and is built from source.
+#
+# RUNNER REQUIREMENT: this job needs /dev/kvm. Use a Forgejo runner that either
+# runs jobs on the host, or in a container started with `--device /dev/kvm`
+# (act_runner config.yaml: `container: { options: "--device /dev/kvm" }`).
+# Point `runs-on` at a label that runner advertises.
+#
+# Cross-repo compositor checkout — configure under repo settings:
+#   vars.BACAK_COMPOSITOR_REPO  (default: bacak-os/bacak)
+#   vars.BACAK_COMPOSITOR_REF   (default: that repo's default branch)
+#   secrets.BACAK_REPO_TOKEN    (a token with read access to that repo)
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * 1'   # Mondays 06:00 UTC
+  push:
+    paths:
+      - 'crates/bacak-display-manager/**'
+      - 'crates/bacak-pam/**'
+      - 'packaging/prototype/**'
+      - 'packaging/vm/**'
+      - 'pam/bacak-greeter'
+      - '.forgejo/workflows/vm-smoke-test.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  vm-smoke:
+    name: real compositor on a logind greeter seat (qemu/KVM)
+    # Adjust to your KVM-capable runner's label.
+    runs-on: self-hosted
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout bacak-compositor (the real compositor)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.BACAK_COMPOSITOR_REPO || 'bacak-os/bacak' }}
+          ref: ${{ vars.BACAK_COMPOSITOR_REF || '' }}
+          token: ${{ secrets.BACAK_REPO_TOKEN }}
+          path: bacak
+
+      - name: Install toolchain + deps (BDM + compositor)
+        run: |
+          [ "$(id -u)" -eq 0 ] && SUDO= || SUDO=sudo
+          $SUDO apt-get update
+          $SUDO apt-get install -y --no-install-recommends \
+            qemu-system-x86 qemu-utils cloud-image-utils curl ca-certificates \
+            build-essential pkg-config cmake \
+            libwayland-dev libxkbcommon-dev libfontconfig-1-dev \
+            libdrm-dev libgbm-dev libegl-dev libgles-dev libgl-dev \
+            libinput-dev libudev-dev libseat-dev libsystemd-dev \
+            libfreetype-dev libexpat1-dev
+          if ! command -v cargo >/dev/null; then
+            curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"; export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          command -v cargo-deb >/dev/null || cargo install cargo-deb --locked
+
+      - name: Ensure /dev/kvm is usable
+        run: |
+          [ "$(id -u)" -eq 0 ] && SUDO= || SUDO=sudo
+          if [ -e /dev/kvm ]; then
+            $SUDO chmod 666 /dev/kvm 2>/dev/null || true
+            ls -l /dev/kvm
+          else
+            echo "ERROR: /dev/kvm not present — this runner cannot nest a VM." >&2
+            exit 1
+          fi
+
+      - name: Build the .deb (system-pam daemon + gui greeter)
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          cargo build --release -p bacak-display-manager --features system-pam
+          cargo build --release -p bacak-greeter --features gui --bin bacak-greeter
+          cargo deb --no-build -p bacak-display-manager
+
+      - name: Run VM smoke test (real compositor required)
+        env:
+          # Persist the cloud image across runs on a self-hosted runner.
+          BDM_IMAGE: /var/tmp/bdm-vm/base.qcow2
+          BDM_WORKDIR: ${{ github.workspace }}/vmrun
+          BDM_COMPOSITOR_SRC: ${{ github.workspace }}/bacak
+          BDM_ALLOW_WESTON_FALLBACK: '0'
+          BDM_TIMEOUT: '2400'
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          mkdir -p /var/tmp/bdm-vm vmrun
+          packaging/vm/smoke-test.sh
+
+      - name: Save serial log
+        if: always()
+        run: |
+          cp -f vmrun/serial.log /var/tmp/bdm-vm/last-serial.log 2>/dev/null || true
+          echo "serial log: /var/tmp/bdm-vm/last-serial.log"

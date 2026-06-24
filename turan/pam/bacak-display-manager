@@ -1,0 +1,34 @@
+# /etc/pam.d/bacak-display-manager
+#
+# PAM policy for interactive logins through the BDM greeter. Mirrors a typical
+# graphical-login stack (compare /etc/pam.d/gdm-password, lightdm). Administrators
+# compose policy here — BDM never hard-codes authentication logic.
+
+# --- auth -------------------------------------------------------------------
+# Lock out the screen-unlock-only fast path; this service is for full logins.
+auth     requisite      pam_nologin.so
+# Optional: fingerprint / PIN modules can be inserted here as `sufficient`.
+# auth   sufficient     pam_fprintd.so
+# Brute-force protection (counts failures, denies after the configured limit).
+auth     required       pam_faillock.so preauth
+auth     [success=1 default=bad] pam_unix.so try_first_pass
+auth     [default=die]  pam_faillock.so authfail
+auth     required       pam_faillock.so authsucc
+auth     optional       pam_gnome_keyring.so
+
+# --- account ----------------------------------------------------------------
+account  required       pam_unix.so
+account  required       pam_nologin.so
+
+# --- password ---------------------------------------------------------------
+password required       pam_unix.so try_first_pass
+
+# --- session ----------------------------------------------------------------
+session  required       pam_loginuid.so
+# Registers the session with logind, creates XDG_RUNTIME_DIR, joins the seat.
+session  required       pam_systemd.so
+session  required       pam_limits.so
+session  required       pam_unix.so
+session  optional       pam_keyinit.so force revoke
+session  optional       pam_gnome_keyring.so auto_start
+session  optional       pam_env.so readenv=1
