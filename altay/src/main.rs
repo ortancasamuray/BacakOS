@@ -1407,7 +1407,7 @@ fn extract_selected(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
     let mut ok = 0;
     let mut last_err = String::new();
     for arc in &archives {
-        let stem = arc.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "extracted".into());
+        let stem = archive_stem(arc);
         let dest = unique_path(&dir, &stem, "");
         let result = archive::extract(
             &state.borrow().sandbox,
@@ -1427,6 +1427,29 @@ fn extract_selected(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
         ui.set_status_text(sx(ui, format!("Extracted {ok}/{} — {last_err}", archives.len()), format!("{ok}/{} çıkarıldı — {last_err}", archives.len()), format!("Extraídos {ok}/{} — {last_err}", archives.len())));
     }
     reload(ui, state);
+}
+
+/// Strip compound archive suffixes (.tar.gz → name, .tar.bz2 → name, etc.)
+fn archive_stem(path: &std::path::Path) -> String {
+    let name = path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "extracted".into());
+    const COMPOUND: &[&str] = &[
+        ".tar.gz", ".tar.bz2", ".tar.xz", ".tar.zst", ".tar.lz", ".tar.lzo",
+        ".tar.lzma", ".tar.br", ".tar.z",
+        ".tgz", ".tbz2", ".txz", ".tlz", ".tzo", ".taz",
+    ];
+    let lower = name.to_lowercase();
+    for suffix in COMPOUND {
+        if lower.ends_with(suffix) {
+            return name[..name.len() - suffix.len()].to_string();
+        }
+    }
+    // Single-extension: strip once
+    std::path::Path::new(&name)
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or(name)
 }
 
 /// Build a non-colliding `dir/<base>.<ext>` (or `dir/<base>` if ext empty).
