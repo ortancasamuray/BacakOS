@@ -46,6 +46,7 @@ flate2 = "1"
 bzip2 = "0.4"
 xz2 = "0.1"
 zstd = "0.13"
+brotli = "7"
 sevenz-rust = { version = "0.6", features = ["compress", "aes256", "bzip2"] }
 infer = "0.16"
 unrar = "0.5"

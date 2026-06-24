@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use crate::filesystem::Progress;
 use crate::security::{AccessDenied, Sandbox};
 
+mod cmd_backend;
 mod deb_backend;
 mod rar_backend;
 mod rpm_backend;
@@ -22,9 +23,25 @@ mod zip_backend;
 /// Every archive container/codec Altay intends to support, mapped from the spec.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
-    Zip, Zipx, SevenZ, Rar, Rar5,
-    Tar, TarGz, TarBz2, TarXz, TarZst,
-    Gzip, Bzip2, Xz, Lzma, Zstd,
+    // Zip family
+    Zip, Zipx,
+    // 7-zip
+    SevenZ,
+    // RAR / comic-book variants
+    Rar, Rar5, Cbr,
+    // Legacy containers (7z-backed, read-only)
+    Ace, Alz, Arj, Lzh, Zoo,
+    // Plain tar
+    Tar,
+    // Tar + standard codecs
+    TarGz, TarBz2, TarXz, TarZst,
+    // Tar + extended codecs
+    TarLz, TarLzo, TarLzma, TarBr, TarZ,
+    // Single-file standard codecs
+    Gzip, Bzip2, Bz, Xz, Lzma, Zstd,
+    // Single-file extended codecs
+    Lzip, Lzop, Brotli, Compress, Rzip,
+    // System / package / disk image
     Cab, Ar, Cpio, Iso, Dmg, Wim,
     Apk, Jar, War, Ear, Deb, Rpm, Pkg,
 }
@@ -50,53 +67,71 @@ impl Format {
         let mut buf = [0u8; 8];
         let n = std::fs::File::open(path).ok()?.read(&mut buf).ok()?;
         let b = &buf[..n];
-        // Container magics that are unambiguous.
-        if b.starts_with(b"7z\xBC\xAF\x27\x1C") {
-            return Some(Format::SevenZ);
-        }
-        if b.starts_with(b"Rar!\x1A\x07") {
-            return Some(Format::Rar);
-        }
+        if b.starts_with(b"7z\xBC\xAF\x27\x1C") { return Some(Format::SevenZ); }
+        if b.starts_with(b"Rar!\x1A\x07") { return Some(Format::Rar); }
         if b.starts_with(b"PK\x03\x04") || b.starts_with(b"PK\x05\x06") {
-            // zip family — refine to jar/apk/etc. via extension if present.
-            return Some(Format::from_path(path).filter(|f| matches!(f, Format::Jar | Format::War | Format::Ear | Format::Apk | Format::Zipx)).unwrap_or(Format::Zip));
+            return Some(Format::from_path(path)
+                .filter(|f| matches!(f, Format::Jar | Format::War | Format::Ear | Format::Apk | Format::Zipx))
+                .unwrap_or(Format::Zip));
         }
+        // ARJ: magic \x60\xEA
+        if b.starts_with(b"\x60\xEA") { return Some(Format::Arj); }
+        // ACE: bytes 2-6 = **ACE
+        if b.len() >= 7 && &b[2..7] == b"**ACE" { return Some(Format::Ace); }
         None
     }
 
     /// Best-effort detection from a file name (extension based).
     pub fn from_path(path: &Path) -> Option<Format> {
         let name = path.file_name()?.to_string_lossy().to_lowercase();
-        let two = |suffix: &str| name.ends_with(suffix);
+        let two = |s: &str| name.ends_with(s);
         Some(match () {
-            _ if two(".tar.gz") || two(".tgz") => Format::TarGz,
-            _ if two(".tar.bz2") || two(".tbz2") => Format::TarBz2,
-            _ if two(".tar.xz") || two(".txz") => Format::TarXz,
-            _ if two(".tar.zst") => Format::TarZst,
-            _ if two(".tar") => Format::Tar,
+            // Multi-part suffixes must come before single-extension checks.
+            _ if two(".tar.gz")   || two(".tgz")   => Format::TarGz,
+            _ if two(".tar.bz2")  || two(".tbz2")  => Format::TarBz2,
+            _ if two(".tar.xz")   || two(".txz")   => Format::TarXz,
+            _ if two(".tar.zst")                   => Format::TarZst,
+            _ if two(".tar.lz")   || two(".tlz")   => Format::TarLz,
+            _ if two(".tar.lzo")  || two(".tzo")   => Format::TarLzo,
+            _ if two(".tar.lzma")                  => Format::TarLzma,
+            _ if two(".tar.br")                    => Format::TarBr,
+            _ if two(".tar.z")    || two(".taz")   => Format::TarZ,
+            _ if two(".tar")                       => Format::Tar,
             _ => match path.extension()?.to_string_lossy().to_lowercase().as_str() {
-                "zip" => Format::Zip,
+                "zip"  => Format::Zip,
                 "zipx" => Format::Zipx,
-                "7z" => Format::SevenZ,
-                "rar" => Format::Rar,
-                "gz" => Format::Gzip,
-                "bz2" => Format::Bzip2,
-                "xz" => Format::Xz,
+                "7z"   => Format::SevenZ,
+                "rar"  => Format::Rar,
+                "cbr"  => Format::Cbr,
+                "ace"  => Format::Ace,
+                "alz"  => Format::Alz,
+                "arj"  => Format::Arj,
+                "lzh" | "lha" => Format::Lzh,
+                "zoo"  => Format::Zoo,
+                "gz"   => Format::Gzip,
+                "bz2"  => Format::Bzip2,
+                "bz"   => Format::Bz,
+                "xz"   => Format::Xz,
                 "lzma" => Format::Lzma,
-                "zst" => Format::Zstd,
-                "cab" => Format::Cab,
-                "ar" => Format::Ar,
+                "zst"  => Format::Zstd,
+                "lz"   => Format::Lzip,
+                "lzo"  => Format::Lzop,
+                "br"   => Format::Brotli,
+                "rz"   => Format::Rzip,
+                "z"    => Format::Compress,
+                "cab"  => Format::Cab,
+                "ar"   => Format::Ar,
                 "cpio" => Format::Cpio,
-                "iso" => Format::Iso,
-                "dmg" => Format::Dmg,
-                "wim" => Format::Wim,
-                "apk" => Format::Apk,
-                "jar" => Format::Jar,
-                "war" => Format::War,
-                "ear" => Format::Ear,
-                "deb" => Format::Deb,
-                "rpm" => Format::Rpm,
-                "pkg" => Format::Pkg,
+                "iso"  => Format::Iso,
+                "dmg"  => Format::Dmg,
+                "wim"  => Format::Wim,
+                "apk"  => Format::Apk,
+                "jar"  => Format::Jar,
+                "war"  => Format::War,
+                "ear"  => Format::Ear,
+                "deb"  => Format::Deb,
+                "rpm"  => Format::Rpm,
+                "pkg"  => Format::Pkg,
                 _ => return None,
             },
         })
@@ -104,7 +139,11 @@ impl Format {
 
     /// Whether Altay can currently write this format (vs read-only).
     pub fn is_writable(self) -> bool {
-        !matches!(self, Format::Dmg | Format::Rpm | Format::Deb | Format::Iso | Format::Wim)
+        !matches!(self,
+            Format::Dmg | Format::Rpm | Format::Deb | Format::Iso | Format::Wim |
+            Format::Cbr | Format::Ace | Format::Alz | Format::Arj | Format::Lzh | Format::Zoo |
+            Format::Rzip | Format::Cab | Format::Cpio | Format::Ar
+        )
     }
 }
 
@@ -182,23 +221,38 @@ pub enum Codec {
     Xz,
     Zstd,
     Lzma,
+    // Extended codecs (process-based or brotli crate)
+    Lzip,
+    Lzop,
+    Brotli,
+    Compress,
 }
 
 impl Format {
     pub fn family(self) -> Family {
         match self {
-            Format::Zip | Format::Zipx | Format::Jar | Format::War | Format::Ear | Format::Apk => Family::Zip,
+            Format::Zip | Format::Zipx | Format::Jar | Format::War | Format::Ear | Format::Apk
+                => Family::Zip,
             Format::SevenZ => Family::SevenZ,
-            Format::Tar => Family::Tar(None),
-            Format::TarGz => Family::Tar(Some(Codec::Gzip)),
-            Format::TarBz2 => Family::Tar(Some(Codec::Bzip2)),
-            Format::TarXz => Family::Tar(Some(Codec::Xz)),
-            Format::TarZst => Family::Tar(Some(Codec::Zstd)),
-            Format::Gzip => Family::Single(Codec::Gzip),
-            Format::Bzip2 => Family::Single(Codec::Bzip2),
-            Format::Xz => Family::Single(Codec::Xz),
-            Format::Zstd => Family::Single(Codec::Zstd),
-            Format::Lzma => Family::Single(Codec::Lzma),
+            Format::Tar     => Family::Tar(None),
+            Format::TarGz   => Family::Tar(Some(Codec::Gzip)),
+            Format::TarBz2  => Family::Tar(Some(Codec::Bzip2)),
+            Format::TarXz   => Family::Tar(Some(Codec::Xz)),
+            Format::TarZst  => Family::Tar(Some(Codec::Zstd)),
+            Format::TarLz   => Family::Tar(Some(Codec::Lzip)),
+            Format::TarLzo  => Family::Tar(Some(Codec::Lzop)),
+            Format::TarLzma => Family::Tar(Some(Codec::Lzma)),
+            Format::TarBr   => Family::Tar(Some(Codec::Brotli)),
+            Format::TarZ    => Family::Tar(Some(Codec::Compress)),
+            Format::Gzip    => Family::Single(Codec::Gzip),
+            Format::Bzip2 | Format::Bz => Family::Single(Codec::Bzip2),
+            Format::Xz      => Family::Single(Codec::Xz),
+            Format::Zstd    => Family::Single(Codec::Zstd),
+            Format::Lzma    => Family::Single(Codec::Lzma),
+            Format::Lzip    => Family::Single(Codec::Lzip),
+            Format::Lzop    => Family::Single(Codec::Lzop),
+            Format::Brotli  => Family::Single(Codec::Brotli),
+            Format::Compress => Family::Single(Codec::Compress),
             _ => Family::Unsupported,
         }
     }
@@ -206,19 +260,31 @@ impl Format {
 
 /// Resolve a backend for a format.
 pub fn backend_for(format: Format) -> Result<Box<dyn Backend>, ArchiveError> {
-    // Package/proprietary formats with dedicated read-only backends.
     match format {
-        Format::Rar | Format::Rar5 => return Ok(Box::new(rar_backend::RarBackend)),
-        Format::Deb => return Ok(Box::new(deb_backend::DebBackend)),
-        Format::Rpm => return Ok(Box::new(rpm_backend::RpmBackend)),
+        Format::Rar | Format::Rar5 | Format::Cbr
+            => return Ok(Box::new(rar_backend::RarBackend)),
+        Format::Deb
+            => return Ok(Box::new(deb_backend::DebBackend)),
+        Format::Rpm
+            => return Ok(Box::new(rpm_backend::RpmBackend)),
+        Format::Ace | Format::Alz | Format::Arj | Format::Lzh | Format::Zoo
+        | Format::Cab | Format::Iso | Format::Cpio | Format::Ar
+            => return Ok(Box::new(cmd_backend::CmdBackend)),
+        Format::Rzip
+            => return Ok(Box::new(single::SinglePipedBackend {
+                decompress_cmd: "rzip",
+                decompress_args: &["-d", "-k", "-o", "/dev/stdout"],
+                compress_cmd: "rzip",
+                compress_args: &["-k", "-o"],
+            })),
         _ => {}
     }
     match format.family() {
-        Family::Zip => Ok(Box::new(zip_backend::ZipBackend)),
+        Family::Zip    => Ok(Box::new(zip_backend::ZipBackend)),
         Family::SevenZ => Ok(Box::new(sevenz::SevenZBackend)),
-        Family::Tar(codec) => Ok(Box::new(tar_backend::TarBackend { codec })),
+        Family::Tar(codec)    => Ok(Box::new(tar_backend::TarBackend { codec })),
         Family::Single(codec) => Ok(Box::new(single::SingleBackend { codec })),
-        Family::Unsupported => Err(ArchiveError::Unsupported),
+        Family::Unsupported   => Err(ArchiveError::Unsupported),
     }
 }
 

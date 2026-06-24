@@ -2030,8 +2030,10 @@ fn glyph_for(e: &Entry) -> &'static str {
         "txt" | "md" | "log" => "📝",
         "mp4" | "mkv" | "webm" | "mov" | "avi" | "m4v" => "🎬",
         "mp3" | "flac" | "wav" | "ogg" | "m4a" | "opus" => "🎵",
-        "zip" | "zipx" | "7z" | "rar" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "zst" => "🗜",
-        "deb" | "rpm" | "appimage" | "apk" | "jar" => "📦",
+        "zip" | "zipx" | "7z" | "rar" | "cbr" | "ace" | "alz" | "arj" | "lzh" | "lha" | "zoo"
+        | "tar" | "gz" | "tgz" | "bz2" | "bz" | "xz" | "zst" | "lz" | "lzo" | "br" | "rz"
+        | "tbz2" | "txz" | "tlz" | "tzo" | "taz" | "z" => "🗜",
+        "deb" | "rpm" | "appimage" | "apk" | "jar" | "war" | "ear" | "cab" | "iso" | "cpio" => "📦",
         "sh" | "bin" | "run" => "⚙",
         _ => "📄",
     }
@@ -2050,8 +2052,10 @@ fn icon_name_for(e: &Entry) -> &'static str {
         "pdf" | "doc" | "docx" | "odt" | "rtf" => "x-office-document",
         "xls" | "xlsx" | "ods" | "csv" => "x-office-spreadsheet",
         "ppt" | "pptx" | "odp" => "x-office-presentation",
-        "zip" | "zipx" | "7z" | "rar" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "zst" => "package-x-generic",
-        "deb" | "rpm" | "appimage" | "apk" | "jar" => "package-x-generic",
+        "zip" | "zipx" | "7z" | "rar" | "cbr" | "ace" | "alz" | "arj" | "lzh" | "lha" | "zoo"
+        | "tar" | "gz" | "tgz" | "bz2" | "bz" | "xz" | "zst" | "lz" | "lzo" | "br" | "rz"
+        | "tbz2" | "txz" | "tlz" | "tzo" | "taz" | "z" => "package-x-generic",
+        "deb" | "rpm" | "appimage" | "apk" | "jar" | "war" | "ear" | "cab" | "iso" | "cpio" => "package-x-generic",
         "sh" | "bash" | "zsh" | "fish" | "py" | "rb" | "js" | "ts" | "rs" | "c" | "cpp" | "h" => "text-x-script",
         "html" | "htm" => "text-html",
         "txt" | "md" | "log" | "conf" | "ini" | "toml" | "yaml" | "yml" | "json" => "text-x-generic",
