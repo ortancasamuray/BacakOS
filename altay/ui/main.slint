@@ -882,6 +882,8 @@ export component MainWindow inherits Window {
     callback navigate-category(string);
     callback show-recent();
     callback sort-by-column(string);
+    callback rename-selected();
+    callback open-with-selected();
 
     forward-focus: key-scope;
     key-scope := FocusScope {
@@ -1717,6 +1719,15 @@ export component MainWindow inherits Window {
             more-col := VerticalLayout {
                 padding: 6px;
                 spacing: 2px;
+                MenuItem {
+                    label: L.open-with;
+                    clicked => { root.show-more-actions = false; root.open-with-selected(); }
+                }
+                MenuItem {
+                    label: L.rename-item;
+                    clicked => { root.show-more-actions = false; root.rename-selected(); }
+                }
+                Rectangle { height: 1px; background: Theme.surface-hi; }
                 MenuItem {
                     label: L.act-new-folder;
                     clicked => { root.show-more-actions = false; root.new-folder(); }

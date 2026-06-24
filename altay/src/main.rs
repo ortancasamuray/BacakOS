@@ -377,6 +377,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let ui_w = ui.as_weak();
         let st = state.clone();
+        ui.on_rename_selected(move || {
+            if let Some(ui) = ui_w.upgrade() {
+                let first = st.borrow().selected.iter().min().copied();
+                if let Some(i) = first {
+                    ui.global::<ContextState>().set_index(i as i32);
+                    ctx_rename(&ui, &st);
+                }
+            }
+        });
+    }
+    {
+        let ui_w = ui.as_weak();
+        let st = state.clone();
+        ui.on_open_with_selected(move || {
+            if let Some(ui) = ui_w.upgrade() {
+                let first = st.borrow().selected.iter().min().copied();
+                if let Some(i) = first {
+                    ui.global::<ContextState>().set_index(i as i32);
+                    open_with_dialog(&ui, &st);
+                }
+            }
+        });
+    }
+    {
+        let ui_w = ui.as_weak();
+        let st = state.clone();
         ui.on_ow_pick(move |id| {
             if let Some(ui) = ui_w.upgrade() {
                 ow_pick(&ui, &st, id.as_str());
