@@ -124,8 +124,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     apply_language(&ui, &lang);
     ui.set_lang(SharedString::from(lang));
     populate_roots(&ui, &state.borrow());
-    sync_volumes(&ui);
     sync_connections(&ui);
+
+    // Defer the blocking udisks2 D-Bus call so the window appears immediately.
+    // volumes are populated ~150 ms after startup instead of blocking main thread.
+    {
+        let weak = ui.as_weak();
+        slint::Timer::single_shot(std::time::Duration::from_millis(150), move || {
+            if let Some(ui) = weak.upgrade() {
+                sync_volumes(&ui);
+            }
+        });
+    }
 
     // Live device hotplug: rebuild the sandbox roots (which pick up new mount
     // points) and the sidebar whenever udisks2 reports a change.
