@@ -40,14 +40,7 @@ impl Index {
         let map: Arc<RwLock<HashMap<PathBuf, Entry>>> = Arc::new(RwLock::new(HashMap::new()));
         let ready = Arc::new(AtomicBool::new(false));
 
-        // Instant start: load the persisted index from a previous run, if any.
-        if let Some(loaded) = load_map(&root) {
-            log::info!("search index loaded from cache for {} ({} entries)", root.display(), loaded.len());
-            *map.write().unwrap() = loaded;
-            ready.store(true, Ordering::SeqCst);
-        }
-
-        // Background full walk to refresh the (possibly stale) cache and persist.
+        // Background thread: load cache first for instant search, then full walk.
         {
             let root = root.clone();
             let map = map.clone();
@@ -55,6 +48,13 @@ impl Index {
             std::thread::Builder::new()
                 .name("search-index-build".into())
                 .spawn(move || {
+                    // Load persisted cache so search is available without a full walk.
+                    if let Some(loaded) = load_map(&root) {
+                        log::info!("search index loaded from cache for {} ({} entries)", root.display(), loaded.len());
+                        *map.write().unwrap() = loaded;
+                        ready.store(true, Ordering::SeqCst);
+                    }
+                    // Full walk to refresh the stale cache.
                     let mut local = HashMap::new();
                     for entry in walkdir::WalkDir::new(&root).follow_links(false).into_iter().flatten() {
                         if let Some(e) = entry_from_path(entry.path()) {
