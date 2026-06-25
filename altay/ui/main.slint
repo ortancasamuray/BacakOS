@@ -801,6 +801,9 @@ export component MainWindow inherits Window {
     in-out property <bool> connect-save: true;
     in property <string> connect-error;
     in property <[TransferModel]> transfers;
+    in-out property <bool> extract-active: false;
+    in property <float> extract-fraction: 0;
+    in property <string> extract-label: "";
     in-out property <bool> show-preview: false;
     in property <bool> preview-is-image: false;
     in property <image> preview-image;
@@ -1458,10 +1461,43 @@ export component MainWindow inherits Window {
                 HorizontalLayout {
                     padding-left: 10px;
                     padding-right: 10px;
-                    spacing: 4px;
+                    spacing: 8px;
                     alignment: center;
-                    // Görünüm seçici
-                    Text {
+
+                    if root.extract-active : VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 4px;
+                        alignment: center;
+                        Text {
+                            text: root.extract-label;
+                            color: Theme.text-dim;
+                            font-size: 11px;
+                            overflow: elide;
+                            horizontal-alignment: left;
+                        }
+                        Rectangle {
+                            height: 6px;
+                            border-radius: 3px;
+                            background: Theme.bg;
+                            // indeterminate shimmer when fraction == 0, filled bar otherwise
+                            property <float> shimmer: 0;
+                            animate shimmer { duration: 1200ms; iteration-count: -1; easing: linear; }
+                            init => { shimmer = 1; }
+                            Rectangle {
+                                x: root.extract-fraction > 0 ? 0
+                                    : (parent.width - self.width) * parent.shimmer;
+                                width: root.extract-fraction > 0
+                                    ? parent.width * max(0.02, root.extract-fraction)
+                                    : parent.width * 0.35;
+                                height: parent.height;
+                                border-radius: 3px;
+                                background: Theme.accent;
+                                animate width { duration: 150ms; }
+                            }
+                        }
+                    }
+
+                    if !root.extract-active : Text {
                         text: status-text;
                         color: Theme.text-dim;
                         font-size: 12px;
@@ -1469,6 +1505,7 @@ export component MainWindow inherits Window {
                         horizontal-alignment: center;
                         horizontal-stretch: 1;
                     }
+
                     HorizontalLayout {
                         spacing: 4px;
                         alignment: center;
