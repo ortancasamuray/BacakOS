@@ -178,7 +178,8 @@ export global L {
     in property <string> set-default: "Varsayılan olarak ayarla";
     in property <string> tip-paste: "Yapıştır";
     in property <string> tip-select: "Seç";
-    in property <string> tip-up: "Yukarı";
+    in property <string> tip-up: "Üst Dizin";
+    in property <string> tip-down: "Alt Dizine Gir";
     in property <string> tip-home: "Ana Dizin";
     in property <string> tip-refresh: "Yenile";
     in property <string> tip-zoom-in: "Yakınlaş";
@@ -843,6 +844,7 @@ export component MainWindow inherits Window {
     callback open-entry(int);
     callback toggle-entry(int);
     callback go-up();
+    callback go-down();
     callback go-home();
     callback refresh();
     callback do-search(string);
@@ -1178,6 +1180,7 @@ export component MainWindow inherits Window {
                         padding-bottom: 7px;
                         spacing: 2px;
                         IconButton { icon: "⬆"; tip: L.tip-up;      clicked => { root.go-up(); } }
+                        IconButton { icon: "⬇"; tip: L.tip-down;    clicked => { root.go-down(); } }
                         IconButton { icon: "🏠"; tip: L.tip-home;    clicked => { root.go-home(); } }
                         IconButton { icon: "⟳"; tip: L.tip-refresh; clicked => { root.refresh(); } }
                         Rectangle { horizontal-stretch: 1; }
