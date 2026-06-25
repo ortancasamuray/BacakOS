@@ -165,11 +165,11 @@ fn dist(ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
 
 /// Centroid travel (logical px) that promotes a two-finger touch from a tap to
 /// a window move.
-const TWO_FINGER_SLOP: f32 = 12.0;
+const TWO_FINGER_SLOP: f32 = 28.0;
 /// Longest a two-finger touch can last and still count as a tap, not a drag.
-const TWO_FINGER_TAP_MS: u64 = 280;
+const TWO_FINGER_TAP_MS: u64 = 420;
 /// Longest gap between two two-finger taps to chain them into a double-tap.
-const TWO_FINGER_DOUBLE_MS: u64 = 340;
+const TWO_FINGER_DOUBLE_MS: u64 = 520;
 
 /// What a two-finger sequence produced this event.
 #[derive(Debug, Clone, Copy, PartialEq)]
