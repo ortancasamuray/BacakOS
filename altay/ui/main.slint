@@ -142,7 +142,7 @@ export global L {
     in property <string> in-files: "İçerikte";
     in property <string> places: "KONUMLAR";
     in property <string> devices: "AYGITLAR";
-    in property <string> usb-storage: "USB DEPOLAMA";
+    in property <string> usb-storage: "USB Depolama";
     in property <string> network: "AĞ";
     in property <string> trash-place: "Çöp Kutusu";
     in property <string> perms: "İzinler: ";
@@ -540,7 +540,7 @@ component VolumeRow inherits Rectangle {
     in property <VolumeModel> vol;
     callback activate();
     callback eject();
-    height: 38px;
+    height: vol.label != "" ? 48px : 38px;
     border-radius: 10px;
     background: touch.has-hover ? Theme.surface-hi : transparent;
     animate background { duration: 120ms; }
@@ -550,14 +550,23 @@ component VolumeRow inherits Rectangle {
         padding-right: 8px;
         spacing: 10px;
         alignment: center;
-        Text { text: "💾"; font-size: 16px; vertical-alignment: center; }
-        Text {
-            text: vol.label;
-            color: Theme.text;
-            font-size: 14px;
-            vertical-alignment: center;
-            overflow: elide;
+        Text { text: "🔌"; font-size: 16px; vertical-alignment: center; }
+        VerticalLayout {
             horizontal-stretch: 1;
+            spacing: 1px;
+            alignment: center;
+            Text {
+                text: L.usb-storage;
+                color: Theme.text;
+                font-size: 14px;
+                overflow: elide;
+            }
+            if vol.label != "" : Text {
+                text: vol.label;
+                color: Theme.text-dim;
+                font-size: 10px;
+                overflow: elide;
+            }
         }
         Text {
             text: vol.mounted ? "●" : "○";
@@ -1042,16 +1051,6 @@ export component MainWindow inherits Window {
                                     }
                                 }
                             }
-                        }
-
-                        if volumes.length > 0 : Text {
-                            text: L.usb-storage;
-                            color: Theme.text-dim;
-                            font-size: 10px;
-                            font-weight: 700;
-                            height: 18px;
-                            vertical-alignment: bottom;
-                            x: 12px;
                         }
 
                         for v in volumes : VerticalLayout {
