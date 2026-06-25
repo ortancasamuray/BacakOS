@@ -2099,7 +2099,7 @@ fn populate_roots(ui: &MainWindow, state: &AppState) {
         .iter()
         .filter(|r| match r.kind() {
             RootKind::Home | RootKind::Network => true,
-            RootKind::Removable => is_mount_point(r.path()),
+            RootKind::Removable => false, // volumes section handles removable drives
         })
         .map(|r| {
             let (used, total) = disk_usage_bytes(r.path());
