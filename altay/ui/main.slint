@@ -415,6 +415,7 @@ component GridTile inherits Rectangle {
     in property <bool> selection-mode;
     in property <int> idx;
     in property <length> tile-size: 132px;
+    in property <bool> focused: false;
     callback activate();
     callback toggle();
     callback dropped();
@@ -427,8 +428,8 @@ component GridTile inherits Rectangle {
     property <bool> long-pressed;
     background: drop-hot ? #2f5fbf
         : (entry.selected ? Theme.surface-hi : (ta.has-hover ? Theme.surface : transparent));
-    border-width: entry.selected ? 2px : 0px;
-    border-color: Theme.accent;
+    border-width: (entry.selected || focused) ? 2px : 0px;
+    border-color: focused ? Theme.accent.brighter(0.4) : Theme.accent;
     animate background { duration: 100ms; }
 
     property <color> icon-bg:
@@ -801,6 +802,9 @@ export component MainWindow inherits Window {
     in property <bool> in-trash: false;
     in-out property <float> grid-scale: 1.0;
     in-out property <bool> selection-mode: false;
+    in-out property <int> focused-idx: -1;
+    property <int> nav-cols: max(1, floor((self.width - 264px - (self.show-preview ? 220px : 0px) - 24px) / (132px * self.grid-scale + 8px)));
+    property <length> nav-tile-h: 132px * self.grid-scale + 8px;
     in-out property <bool> has-clipboard: false;
     in property <string> status-text;
     in-out property <string> search-text;
@@ -886,6 +890,12 @@ export component MainWindow inherits Window {
     callback do-rename();
     callback grid-scale-changed(float);
     changed grid-scale => { root.grid-scale-changed(root.grid-scale); }
+    changed focused-idx => {
+        if (root.view-mode == 0 && root.focused-idx >= 0) {
+            root.nav-viewport-y = -(floor(root.focused-idx / root.nav-cols) * root.nav-tile-h);
+        }
+    }
+    in-out property <length> nav-viewport-y: 0px;
     callback key-rename();
     callback select-all();
     callback clear-selection();
@@ -915,6 +925,26 @@ export component MainWindow inherits Window {
             if (e.text == Key.Backspace) { root.go-up(); return EventResult.accept; }
             if (e.text == Key.F2) { root.key-rename(); return EventResult.accept; }
             if (e.text == Key.F5) { root.refresh(); return EventResult.accept; }
+            if (e.text == Key.Return && root.focused-idx >= 0 && root.focused-idx < entries.length) {
+                root.open-entry(root.focused-idx);
+                return EventResult.accept;
+            }
+            if (e.text == Key.LeftArrow) {
+                root.focused-idx = max(0, (root.focused-idx < 0 ? 0 : root.focused-idx) - 1);
+                return EventResult.accept;
+            }
+            if (e.text == Key.RightArrow) {
+                root.focused-idx = min(entries.length - 1, (root.focused-idx < 0 ? 0 : root.focused-idx) + 1);
+                return EventResult.accept;
+            }
+            if (e.text == Key.UpArrow) {
+                root.focused-idx = max(0, (root.focused-idx < 0 ? 0 : root.focused-idx) - root.nav-cols);
+                return EventResult.accept;
+            }
+            if (e.text == Key.DownArrow) {
+                root.focused-idx = min(entries.length - 1, (root.focused-idx < 0 ? 0 : root.focused-idx) + root.nav-cols);
+                return EventResult.accept;
+            }
             if (e.text == Key.Escape) {
                 if (root.editing-path) { root.editing-path = false; }
                 else if (ContextState.active) { ContextState.active = false; }
@@ -925,6 +955,8 @@ export component MainWindow inherits Window {
             if (e.modifiers.control && e.text == "x") { root.cut-selected(); return EventResult.accept; }
             if (e.modifiers.control && e.text == "v") { root.paste(); return EventResult.accept; }
             if (e.modifiers.control && e.text == "a") { root.select-all(); return EventResult.accept; }
+            if (e.modifiers.control && (e.text == "+" || e.text == "=")) { root.grid-scale = clamp(root.grid-scale + 0.1, 0.6, 2.2); return EventResult.accept; }
+            if (e.modifiers.control && e.text == "-") { root.grid-scale = clamp(root.grid-scale - 0.1, 0.6, 2.2); return EventResult.accept; }
             if (e.modifiers.control && e.text == "l") { root.editing-path = true; return EventResult.accept; }
             if (e.modifiers.control && e.text == "f") { sidebar-search.focus(); return EventResult.accept; }
             return EventResult.reject;
@@ -1281,41 +1313,34 @@ export component MainWindow inherits Window {
                     horizontal-stretch: 1;
 
                     // Grid view
-                    if view-mode == 0 : ScrollView {
-                        TouchArea {
-                            clicked => {
-                                if (root.selection-mode) { root.toggle-selection-mode(); }
-                            }
-                            scroll-event(e) => {
-                                if (e.modifiers.control) {
-                                    root.grid-scale = clamp(root.grid-scale + (e.delta-y > 0 ? 0.1 : -0.1), 0.6, 2.2);
-                                    return EventResult.accept;
-                                }
-                                return EventResult.reject;
-                            }
-                            grid := VerticalLayout {
-                                property <length> tile-size: 132px * root.grid-scale;
-                                property <int> columns: max(1, floor((root.width - 264px - (root.show-preview ? 220px : 0px) - 24px) / (grid.tile-size + 8px)));
-                                padding: 12px;
+                    if view-mode == 0 : file-scroll := ScrollView {
+                        viewport-y: root.nav-viewport-y;
+                        grid := VerticalLayout {
+                            property <length> tile-size: 132px * root.grid-scale;
+                            property <int> columns: max(1, floor((root.width - 264px - (root.show-preview ? 220px : 0px) - 24px) / (grid.tile-size + 8px)));
+                            padding: 12px;
+                            spacing: 8px;
+                            for row-start in ceil(entries.length / grid.columns) : HorizontalLayout {
                                 spacing: 8px;
-                                for row-start in ceil(entries.length / grid.columns) : HorizontalLayout {
-                                    spacing: 8px;
-                                    alignment: start;
-                                    for col in grid.columns : GridTile {
-                                        idx: row-start * grid.columns + col;
-                                        tile-size: grid.tile-size;
-                                        visible: self.idx < entries.length;
-                                        entry: self.idx < entries.length ? entries[self.idx]
-                                            : { name: "", path: "", is-dir: false, is-symlink: false,
-                                                is-archive: false, size-text: "", modified-text: "",
-                                                type-text: "", glyph: "", selected: false };
-                                        selection-mode: root.selection-mode;
-                                        activate => { root.open-entry(self.idx); }
-                                        toggle => { root.toggle-entry(self.idx); }
-                                        dropped => { root.perform-drop(); }
-                                        enter-selection => {
-                                            if (!root.selection-mode) { root.toggle-selection-mode(); }
-                                        }
+                                alignment: start;
+                                for col in grid.columns : GridTile {
+                                    idx: row-start * grid.columns + col;
+                                    tile-size: grid.tile-size;
+                                    focused: root.focused-idx == self.idx;
+                                    visible: self.idx < entries.length;
+                                    entry: self.idx < entries.length ? entries[self.idx]
+                                        : { name: "", path: "", is-dir: false, is-symlink: false,
+                                            is-archive: false, size-text: "", modified-text: "",
+                                            type-text: "", glyph: "", selected: false };
+                                    selection-mode: root.selection-mode;
+                                    activate => {
+                                        root.focused-idx = self.idx;
+                                        root.open-entry(self.idx);
+                                    }
+                                    toggle => { root.toggle-entry(self.idx); }
+                                    dropped => { root.perform-drop(); }
+                                    enter-selection => {
+                                        if (!root.selection-mode) { root.toggle-selection-mode(); }
                                     }
                                 }
                             }
