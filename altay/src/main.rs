@@ -210,6 +210,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let ui_w = ui.as_weak();
         let st = state.clone();
+        ui.on_go_down(move || {
+            let Some(ui) = ui_w.upgrade() else { return };
+            // Enter the first selected directory, or first directory in the listing.
+            let target = {
+                let s = st.borrow();
+                let selected_dir = s.selected.iter()
+                    .filter_map(|&i| s.entries.get(i))
+                    .find(|e| e.is_dir)
+                    .map(|e| e.path.clone());
+                selected_dir.or_else(|| {
+                    s.entries.iter().find(|e| e.is_dir).map(|e| e.path.clone())
+                })
+            };
+            if let Some(path) = target {
+                navigate(&ui, &st, &path.to_string_lossy());
+            }
+        });
+    }
+    {
+        let ui_w = ui.as_weak();
+        let st = state.clone();
         ui.on_go_home(move || {
             if let Some(ui) = ui_w.upgrade() {
                 let home = st.borrow().sandbox.home().into_path_buf();
