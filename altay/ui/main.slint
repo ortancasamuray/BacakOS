@@ -1313,8 +1313,10 @@ export component MainWindow inherits Window {
                     horizontal-stretch: 1;
 
                     // Grid view
-                    if view-mode == 0 : file-scroll := ScrollView {
+                    if view-mode == 0 : file-scroll := Flickable {
+                        interactive: true;
                         viewport-y: root.nav-viewport-y;
+                        viewport-height: max(self.height, grid.preferred-height);
                         grid := VerticalLayout {
                             property <length> tile-size: 132px * root.grid-scale;
                             property <int> columns: max(1, floor((root.width - 264px - (root.show-preview ? 220px : 0px) - 24px) / (grid.tile-size + 8px)));
