@@ -1355,7 +1355,7 @@ export component MainWindow inherits Window {
                             }
                             grid := VerticalLayout {
                                 property <length> tile-size: 132px * root.grid-scale;
-                                property <int> columns: max(1, floor((root.width - 264px - (root.show-preview ? 320px : 0px) - 24px) / (grid.tile-size + 8px)));
+                                property <int> columns: max(1, floor((root.width - 264px - (root.show-preview ? 220px : 0px) - 24px) / (grid.tile-size + 8px)));
                                 padding: 12px;
                                 spacing: 8px;
                                 for row-start in ceil(entries.length / grid.columns) : HorizontalLayout {
@@ -1386,7 +1386,7 @@ export component MainWindow inherits Window {
 
                 // Preview pane — always in layout; width 0 when hidden so file area gets correct space
                 Rectangle {
-                    width: show-preview ? 320px : 0px;
+                    width: show-preview ? 220px : 0px;
                     clip: true;
                     background: Theme.surface;
                     VerticalLayout {
