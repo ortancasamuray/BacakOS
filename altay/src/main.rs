@@ -250,6 +250,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     {
         let ui_w = ui.as_weak();
+        ui.on_toggle_fullscreen(move || {
+            if let Some(ui) = ui_w.upgrade() {
+                let w = ui.window();
+                w.set_fullscreen(!w.is_fullscreen());
+            }
+        });
+    }
+    {
+        let ui_w = ui.as_weak();
         let st = state.clone();
         ui.on_do_search(move |term| {
             if let Some(ui) = ui_w.upgrade() {
