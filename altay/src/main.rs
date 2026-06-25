@@ -66,6 +66,8 @@ struct AppState {
     pending_chmod: Option<(PathBuf, u32)>,
     /// File currently shown in the "Open With" dialog.
     open_with_path: Option<PathBuf>,
+    /// If Some, we're in archive-browser mode for this archive file.
+    archive_path: Option<PathBuf>,
 }
 
 impl AppState {
@@ -88,6 +90,7 @@ impl AppState {
             preview_path: None,
             pending_chmod: None,
             open_with_path: None,
+            archive_path: None,
         }
     }
 }
@@ -188,9 +191,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let st = state.clone();
         ui.on_go_up(move || {
             if let Some(ui) = ui_w.upgrade() {
-                let parent = st.borrow().current.parent().map(PathBuf::from);
-                if let Some(p) = parent {
-                    navigate(&ui, &st, &p.to_string_lossy());
+                // If in archive-browser mode, exit back to the folder containing the archive.
+                let arc = st.borrow().archive_path.clone();
+                if let Some(arc_path) = arc {
+                    st.borrow_mut().archive_path = None;
+                    ui.set_in_archive(false);
+                    let parent = arc_path.parent().map(PathBuf::from).unwrap_or_else(|| st.borrow().current.clone());
+                    navigate(&ui, &st, &parent.to_string_lossy());
+                } else {
+                    let parent = st.borrow().current.parent().map(PathBuf::from);
+                    if let Some(p) = parent {
+                        navigate(&ui, &st, &p.to_string_lossy());
+                    }
                 }
             }
         });
@@ -275,6 +287,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ui.on_extract_selected(move || {
             if let Some(ui) = ui_w.upgrade() {
                 extract_selected(&ui, &st);
+            }
+        });
+    }
+    {
+        let ui_w = ui.as_weak();
+        let st = state.clone();
+        ui.on_extract_archive(move || {
+            if let Some(ui) = ui_w.upgrade() {
+                extract_from_archive_view(&ui, &st);
             }
         });
     }
@@ -662,6 +683,7 @@ fn navigate(ui: &MainWindow, state: &Rc<RefCell<AppState>>, target: &str) {
                 let mut s = state.borrow_mut();
                 s.current = safe.into_path_buf();
                 s.in_trash_view = false;
+                s.archive_path = None;
                 s.selected.clear();
             }
             reload(ui, state);
@@ -1212,25 +1234,7 @@ fn open_entry_real(ui: &MainWindow, state: &Rc<RefCell<AppState>>, idx: usize) {
     if is_dir {
         navigate(ui, state, &path.to_string_lossy());
     } else if archive::Format::detect(&path).is_some() {
-        // Opening an archive extracts it beside itself ("open as folder" virtual
-        // browsing is a later refinement).
-        let dir = path.parent().map(PathBuf::from).unwrap_or_else(|| state.borrow().current.clone());
-        let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "extracted".into());
-        let dest = unique_path(&dir, &stem, "");
-        let result = archive::extract(
-            &state.borrow().sandbox,
-            &path,
-            &dest,
-            &archive::Options::default(),
-            &mut |_p| {},
-        );
-        match result {
-            Ok(()) => {
-                ui.set_status_text(sx(ui, format!("Extracted → {}", dest.file_name().unwrap_or_default().to_string_lossy()), format!("Çıkarıldı → {}", dest.file_name().unwrap_or_default().to_string_lossy()), format!("Extraído → {}", dest.file_name().unwrap_or_default().to_string_lossy())));
-                reload(ui, state);
-            }
-            Err(e) => ui.set_status_text(sx(ui, format!("Extract failed: {e}"), format!("Çıkarma başarısız: {e}"), format!("Error al extraer: {e}"))),
-        }
+        open_archive_view(ui, state, &path);
     } else {
         // Launch in the associated/default application (exo-utils opener,
         // falling back to xdg-open).
@@ -1239,6 +1243,113 @@ fn open_entry_real(ui: &MainWindow, state: &Rc<RefCell<AppState>>, idx: usize) {
             Err(e) => ui.set_status_text(sx(ui, format!("Open failed: {e}"), format!("Açma başarısız: {e}"), format!("Error al abrir: {e}"))),
         }
     }
+}
+
+/// Enter archive-browser mode: list the archive members and show them in the grid.
+fn open_archive_view(ui: &MainWindow, state: &Rc<RefCell<AppState>>, archive: &std::path::Path) {
+    let sandbox = state.borrow().sandbox.clone();
+    let members = match archive::list_members(&sandbox, archive, &archive::Options::default()) {
+        Ok(m) => m,
+        Err(e) => {
+            ui.set_status_text(sx(ui, format!("Cannot read archive: {e}"), format!("Arşiv okunamadı: {e}"), format!("Error al leer: {e}")));
+            return;
+        }
+    };
+    let entries: Vec<Entry> = members
+        .into_iter()
+        .map(|m| {
+            let name = m.path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| m.path.to_string_lossy().into_owned());
+            let extension = if m.is_dir {
+                String::new()
+            } else {
+                m.path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default()
+            };
+            Entry {
+                path: archive.join(&m.path),
+                name,
+                is_dir: m.is_dir,
+                is_symlink: false,
+                size: m.size,
+                modified: None,
+                extension,
+            }
+        })
+        .collect();
+    let count = entries.len();
+    let arc_name = archive
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    {
+        let mut s = state.borrow_mut();
+        s.archive_path = Some(archive.to_path_buf());
+        s.entries = entries;
+        s.selected.clear();
+    }
+    ui.set_in_archive(true);
+    ui.set_archive_name(SharedString::from(arc_name));
+    ui.set_status_text(sx(ui, format!("{count} items"), format!("{count} öğe"), format!("{count} elementos")));
+    refresh_view(ui, state);
+}
+
+/// Extract the archive currently open in archive-browser mode to the folder beside it.
+fn extract_from_archive_view(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
+    let (arc, dir, sandbox) = {
+        let s = state.borrow();
+        let arc = match s.archive_path.clone() {
+            Some(p) => p,
+            None => return,
+        };
+        let dir = arc.parent().map(PathBuf::from).unwrap_or_else(|| s.current.clone());
+        (arc, dir, s.sandbox.clone())
+    };
+    let stem = archive_stem(&arc);
+    let dest = unique_path(&dir, &stem, "");
+    let total = 1usize;
+    let arc_name = arc.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+
+    ui.set_extract_active(true);
+    ui.set_extract_fraction(0.0);
+    ui.set_extract_label(SharedString::from(format!("1/1 — {arc_name}")));
+
+    let weak = ui.as_weak();
+    std::thread::Builder::new()
+        .name("extract".into())
+        .spawn(move || {
+            let result = archive::extract(
+                &sandbox,
+                &arc,
+                &dest,
+                &archive::Options::default(),
+                &mut |p| {
+                    let frac = if p.files_total > 0 {
+                        p.files_done as f32 / p.files_total as f32
+                    } else { 0.0 };
+                    let _ = weak.upgrade_in_event_loop(move |ui| {
+                        ui.set_extract_fraction(frac.clamp(0.0, 1.0));
+                    });
+                },
+            );
+            let msg = match result {
+                Ok(()) => SharedString::from(format!("{arc_name} çıkarıldı")),
+                Err(e) => SharedString::from(format!("Çıkarma başarısız: {e}")),
+            };
+            let _ = weak.upgrade_in_event_loop(move |ui| {
+                ui.set_extract_active(false);
+                ui.set_extract_fraction(0.0);
+                ui.set_status_text(msg);
+                APP.with(|a| {
+                    if let Some(state) = a.borrow().as_ref() {
+                        // Stay in archive view; the extracted folder appeared beside the archive
+                        let _ = total; // suppress unused warning
+                    }
+                });
+            });
+        })
+        .ok();
 }
 
 fn reload(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
@@ -1259,6 +1370,7 @@ fn reload(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
             ui.set_active_root_path(SharedString::from(active_root(&state.borrow(), &dir)));
             set_breadcrumbs(ui, state, &dir);
             ui.set_in_trash(false);
+            ui.set_in_archive(false);
             ui.set_status_text(sx(ui, format!("{count} items"), format!("{count} öğe"), format!("{count} elementos")));
             refresh_view(ui, state);
         }
