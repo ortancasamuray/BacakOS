@@ -1901,6 +1901,7 @@ fn load_trash(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
 // ---- View synchronisation ---------------------------------------------------
 
 fn refresh_view(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
+    ui.set_focused_idx(-1);
     let s = state.borrow();
     let models: Vec<EntryModel> = s
         .entries
