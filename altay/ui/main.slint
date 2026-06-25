@@ -142,6 +142,7 @@ export global L {
     in property <string> in-files: "İçerikte";
     in property <string> places: "KONUMLAR";
     in property <string> devices: "AYGITLAR";
+    in property <string> usb-storage: "USB DEPOLAMA";
     in property <string> network: "AĞ";
     in property <string> trash-place: "Çöp Kutusu";
     in property <string> perms: "İzinler: ";
@@ -1041,6 +1042,16 @@ export component MainWindow inherits Window {
                                     }
                                 }
                             }
+                        }
+
+                        if volumes.length > 0 : Text {
+                            text: L.usb-storage;
+                            color: Theme.text-dim;
+                            font-size: 10px;
+                            font-weight: 700;
+                            height: 18px;
+                            vertical-alignment: bottom;
+                            x: 12px;
                         }
 
                         for v in volumes : VerticalLayout {

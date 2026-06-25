@@ -2011,6 +2011,7 @@ fn apply_language(ui: &MainWindow, lang: &str) {
     t!(set_in_files, "In files", "Dosya içinde", "En archivos");
     t!(set_places, "PLACES", "YERLER", "LUGARES");
     t!(set_devices, "DEVICES", "AYGITLAR", "DISPOSITIVOS");
+    t!(set_usb_storage, "USB STORAGE", "USB DEPOLAMA", "USB ALMACENAMIENTO");
     t!(set_network, "NETWORK", "AĞ", "RED");
     t!(set_trash_place, "Trash", "Çöp", "Papelera");
     t!(set_perms, "Permissions: ", "İzinler: ", "Permisos: ");
