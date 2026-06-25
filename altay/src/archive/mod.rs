@@ -182,6 +182,21 @@ pub struct Options {
 /// Implemented by each format backend.
 pub trait Backend {
     fn list(&self, archive: &Path, opts: &Options) -> Result<Vec<Member>, ArchiveError>;
+
+    /// List members, calling `on_progress(done, total)` after each entry.
+    /// `total == 0` means the total count is unknown (show indeterminate UI).
+    /// Default: calls `list()` once and reports `(total, total)` at the end.
+    fn list_streamed(
+        &self,
+        archive: &Path,
+        opts: &Options,
+        on_progress: &mut dyn FnMut(usize, usize),
+    ) -> Result<Vec<Member>, ArchiveError> {
+        let members = self.list(archive, opts)?;
+        on_progress(members.len(), members.len());
+        Ok(members)
+    }
+
     fn extract(
         &self,
         archive: &Path,
@@ -363,6 +378,21 @@ pub fn list_members(
     let combined = combine_if_split(safe.as_path())?;
     let format = Format::detect(combined.path()).ok_or(ArchiveError::Unsupported)?;
     backend_for(format)?.list(combined.path(), opts)
+}
+
+/// Like `list_members` but calls `on_progress(done, total)` after each entry.
+/// `total == 0` means total is unknown; `done == total` means complete.
+/// Fraction ≈ `done as f32 / total as f32` (only when total > 0).
+pub fn list_members_tracked(
+    sandbox: &Sandbox,
+    archive: impl AsRef<Path>,
+    opts: &Options,
+    on_progress: &mut dyn FnMut(usize, usize),
+) -> Result<Vec<Member>, ArchiveError> {
+    let safe = sandbox.resolve(archive)?;
+    let combined = combine_if_split(safe.as_path())?;
+    let format = Format::detect(combined.path()).ok_or(ArchiveError::Unsupported)?;
+    backend_for(format)?.list_streamed(combined.path(), opts, on_progress)
 }
 
 /// Extract an archive into a destination directory, both sandbox-validated.

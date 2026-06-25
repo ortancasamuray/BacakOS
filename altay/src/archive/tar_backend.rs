@@ -16,15 +16,27 @@ pub struct TarBackend {
 }
 
 impl Backend for TarBackend {
-    fn list(&self, archive: &Path, _opts: &Options) -> Result<Vec<Member>, ArchiveError> {
+    fn list(&self, archive: &Path, opts: &Options) -> Result<Vec<Member>, ArchiveError> {
+        self.list_streamed(archive, opts, &mut |_, _| {})
+    }
+
+    fn list_streamed(
+        &self,
+        archive: &Path,
+        _opts: &Options,
+        on_progress: &mut dyn FnMut(usize, usize),
+    ) -> Result<Vec<Member>, ArchiveError> {
+        let file_size = std::fs::metadata(archive).map(|m| m.len()).unwrap_or(0);
         let reader = decompressing_reader(archive, self.codec)?;
         let mut tar = tar::Archive::new(reader);
         let mut out = Vec::new();
+        let mut bytes_seen: u64 = 0;
         for entry in tar.entries().map_err(io_err)? {
             let entry = entry.map_err(io_err)?;
             let header = entry.header();
             let is_dir = header.entry_type().is_dir();
             let path = entry.path().map_err(io_err)?.into_owned();
+            bytes_seen = bytes_seen.saturating_add(512 + header.size().unwrap_or(0));
             out.push(Member {
                 path,
                 is_dir,
@@ -32,6 +44,12 @@ impl Backend for TarBackend {
                 compressed_size: header.size().unwrap_or(0),
                 encrypted: false,
             });
+            // Encode progress as (bytes_seen * total / file_size, total) so the
+            // caller can compute fraction = done as f32 / total as f32.
+            // Use total = file_size so fraction ≈ bytes_read / file_size.
+            let done = if file_size > 0 { bytes_seen.min(file_size) as usize } else { out.len() };
+            let total = if file_size > 0 { file_size as usize } else { 0 };
+            on_progress(done, total);
         }
         Ok(out)
     }
