@@ -1399,7 +1399,7 @@ fn compress_selected(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
 }
 
 fn extract_selected(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
-    let (dir, archives) = {
+    let (dir, archives, sandbox) = {
         let s = state.borrow();
         let archives: Vec<PathBuf> = s
             .selected
@@ -1408,35 +1408,75 @@ fn extract_selected(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
             .filter(|e| !e.is_dir && archive::Format::detect(&e.path).is_some())
             .map(|e| e.path.clone())
             .collect();
-        (s.current.clone(), archives)
+        (s.current.clone(), archives, s.sandbox.clone())
     };
     if archives.is_empty() {
         ui.set_status_text(sx(ui, "No archive selected", "Arşiv seçilmedi", "Ningún archivo seleccionado"));
         return;
     }
-    let mut ok = 0;
-    let mut last_err = String::new();
-    for arc in &archives {
-        let stem = archive_stem(arc);
-        let dest = unique_path(&dir, &stem, "");
-        let result = archive::extract(
-            &state.borrow().sandbox,
-            arc,
-            &dest,
-            &archive::Options::default(),
-            &mut |_p| {},
-        );
-        match result {
-            Ok(()) => ok += 1,
-            Err(e) => last_err = e.to_string(),
-        }
-    }
-    if ok == archives.len() {
-        ui.set_status_text(sx(ui, format!("Extracted {ok} archive(s)"), format!("{ok} arşiv çıkarıldı"), format!("{ok} archivo(s) extraído(s)")));
-    } else {
-        ui.set_status_text(sx(ui, format!("Extracted {ok}/{} — {last_err}", archives.len()), format!("{ok}/{} çıkarıldı — {last_err}", archives.len()), format!("Extraídos {ok}/{} — {last_err}", archives.len())));
-    }
-    reload(ui, state);
+    let total = archives.len();
+    ui.set_extract_active(true);
+    ui.set_extract_fraction(0.0);
+    ui.set_extract_label(SharedString::from("Hazırlanıyor…"));
+
+    let weak = ui.as_weak();
+    std::thread::Builder::new()
+        .name("extract".into())
+        .spawn(move || {
+            let mut ok = 0usize;
+            let mut last_err = String::new();
+            for (idx, arc) in archives.iter().enumerate() {
+                let stem = archive_stem(arc);
+                let dest = unique_path(&dir, &stem, "");
+                let arc_name = arc.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                let label = format!("{}/{} — {}", idx + 1, total, arc_name);
+                let fraction = idx as f32 / total as f32;
+                let lbl = SharedString::from(label.clone());
+                let _ = weak.upgrade_in_event_loop(move |ui| {
+                    ui.set_extract_label(lbl);
+                    ui.set_extract_fraction(fraction);
+                });
+                let result = archive::extract(
+                    &sandbox,
+                    arc,
+                    &dest,
+                    &archive::Options::default(),
+                    &mut |p| {
+                        // send per-file progress within a single archive
+                        let file_frac = if p.files_total > 0 {
+                            p.files_done as f32 / p.files_total as f32
+                        } else {
+                            0.0
+                        };
+                        let overall = (idx as f32 + file_frac) / total as f32;
+                        let _ = weak.upgrade_in_event_loop(move |ui| {
+                            ui.set_extract_fraction(overall);
+                        });
+                    },
+                );
+                match result {
+                    Ok(()) => ok += 1,
+                    Err(e) => last_err = e.to_string(),
+                }
+            }
+            let msg = if ok == total {
+                format!("{ok} arşiv çıkarıldı")
+            } else {
+                format!("{ok}/{total} çıkarıldı — {last_err}")
+            };
+            let msg = SharedString::from(msg);
+            let _ = weak.upgrade_in_event_loop(move |ui| {
+                ui.set_extract_active(false);
+                ui.set_extract_fraction(0.0);
+                ui.set_status_text(msg);
+                APP.with(|a| {
+                    if let Some(state) = a.borrow().as_ref() {
+                        reload(&ui, state);
+                    }
+                });
+            });
+        })
+        .ok();
 }
 
 /// Strip compound archive suffixes (.tar.gz → name, .tar.bz2 → name, etc.)
