@@ -896,6 +896,7 @@ export component MainWindow inherits Window {
         }
     }
     in-out property <length> nav-viewport-y: 0px;
+    callback toggle-fullscreen();
     callback key-rename();
     callback select-all();
     callback clear-selection();
@@ -922,6 +923,7 @@ export component MainWindow inherits Window {
     key-scope := FocusScope {
         key-pressed(e) => {
             if (e.text == Key.Delete && !in-trash) { root.trash-selected(); return EventResult.accept; }
+            if (e.text == Key.F11) { root.toggle-fullscreen(); return EventResult.accept; }
             if (e.text == Key.Backspace) { root.go-up(); return EventResult.accept; }
             if (e.text == Key.F2) { root.key-rename(); return EventResult.accept; }
             if (e.text == Key.F5) { root.refresh(); return EventResult.accept; }
