@@ -1468,18 +1468,28 @@ export component MainWindow inherits Window {
                         horizontal-stretch: 1;
                         spacing: 4px;
                         alignment: center;
-                        Text {
-                            text: root.extract-label;
-                            color: Theme.text-dim;
-                            font-size: 11px;
-                            overflow: elide;
-                            horizontal-alignment: left;
+                        HorizontalLayout {
+                            Text {
+                                text: root.extract-label;
+                                color: Theme.text-dim;
+                                font-size: 11px;
+                                overflow: elide;
+                                horizontal-alignment: left;
+                                horizontal-stretch: 1;
+                            }
+                            Text {
+                                text: root.extract-fraction > 0
+                                    ? Math.round(root.extract-fraction * 100) + "%"
+                                    : "";
+                                color: Theme.accent;
+                                font-size: 11px;
+                                horizontal-alignment: right;
+                            }
                         }
                         Rectangle {
                             height: 6px;
                             border-radius: 3px;
                             background: Theme.bg;
-                            // indeterminate shimmer when fraction == 0, filled bar otherwise
                             property <float> shimmer: 0;
                             animate shimmer { duration: 1200ms; iteration-count: -1; easing: linear; }
                             init => { shimmer = 1; }
