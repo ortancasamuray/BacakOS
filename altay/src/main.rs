@@ -1248,51 +1248,86 @@ fn open_entry_real(ui: &MainWindow, state: &Rc<RefCell<AppState>>, idx: usize) {
 /// Enter archive-browser mode: list the archive members and show them in the grid.
 fn open_archive_view(ui: &MainWindow, state: &Rc<RefCell<AppState>>, archive: &std::path::Path) {
     let sandbox = state.borrow().sandbox.clone();
-    let members = match archive::list_members(&sandbox, archive, &archive::Options::default()) {
-        Ok(m) => m,
-        Err(e) => {
-            ui.set_status_text(sx(ui, format!("Cannot read archive: {e}"), format!("Arşiv okunamadı: {e}"), format!("Error al leer: {e}")));
-            return;
-        }
-    };
-    let entries: Vec<Entry> = members
-        .into_iter()
-        .map(|m| {
-            let name = m.path
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| m.path.to_string_lossy().into_owned());
-            let extension = if m.is_dir {
-                String::new()
-            } else {
-                m.path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default()
-            };
-            Entry {
-                path: archive.join(&m.path),
-                name,
-                is_dir: m.is_dir,
-                is_symlink: false,
-                size: m.size,
-                modified: None,
-                extension,
-            }
-        })
-        .collect();
-    let count = entries.len();
     let arc_name = archive
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
+    let archive_path = archive.to_path_buf();
+
+    // Show the archive banner immediately with loading state.
     {
         let mut s = state.borrow_mut();
-        s.archive_path = Some(archive.to_path_buf());
-        s.entries = entries;
+        s.archive_path = Some(archive_path.clone());
+        s.entries = Vec::new();
         s.selected.clear();
     }
     ui.set_in_archive(true);
+    ui.set_archive_loading(true);
+    ui.set_archive_loaded_count(0);
+    ui.set_archive_load_fraction(0.0);
     ui.set_archive_name(SharedString::from(arc_name));
-    ui.set_status_text(sx(ui, format!("{count} items"), format!("{count} öğe"), format!("{count} elementos")));
-    refresh_view(ui, state);
+
+    let weak = ui.as_weak();
+    std::thread::Builder::new()
+        .name("archive-list".into())
+        .spawn(move || {
+            let result = archive::list_members_tracked(
+                &sandbox,
+                &archive_path,
+                &archive::Options::default(),
+                &mut |done, total| {
+                    let fraction = if total > 0 { (done as f32 / total as f32).clamp(0.0, 1.0) } else { 0.0 };
+                    let count = done as i32;
+                    let _ = weak.upgrade_in_event_loop(move |ui| {
+                        ui.set_archive_loaded_count(count);
+                        ui.set_archive_load_fraction(fraction);
+                    });
+                },
+            );
+
+            let _ = weak.upgrade_in_event_loop(move |ui| {
+                ui.set_archive_loading(false);
+                ui.set_archive_load_fraction(0.0);
+                match result {
+                    Err(e) => {
+                        ui.set_in_archive(false);
+                        ui.set_status_text(sx(&ui,
+                            format!("Cannot read archive: {e}"),
+                            format!("Arşiv okunamadı: {e}"),
+                            format!("Error al leer: {e}")));
+                    }
+                    Ok(members) => {
+                        APP.with(|a| {
+                            if let Some(state) = a.borrow().as_ref() {
+                                let entries: Vec<Entry> = members.into_iter().map(|m| {
+                                    let name = m.path.file_name()
+                                        .map(|n| n.to_string_lossy().into_owned())
+                                        .unwrap_or_else(|| m.path.to_string_lossy().into_owned());
+                                    let extension = if m.is_dir { String::new() } else {
+                                        m.path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default()
+                                    };
+                                    Entry {
+                                        path: archive_path.join(&m.path),
+                                        name,
+                                        is_dir: m.is_dir,
+                                        is_symlink: false,
+                                        size: m.size,
+                                        modified: None,
+                                        extension,
+                                    }
+                                }).collect();
+                                let count = entries.len();
+                                state.borrow_mut().entries = entries;
+                                let msg = sx(&ui, format!("{count} items"), format!("{count} öğe"), format!("{count} elementos"));
+                                ui.set_status_text(msg);
+                                refresh_view(&ui, state);
+                            }
+                        });
+                    }
+                }
+            });
+        })
+        .ok();
 }
 
 /// Extract the archive currently open in archive-browser mode to the folder beside it.

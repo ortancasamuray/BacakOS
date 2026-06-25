@@ -14,11 +14,21 @@ use super::{safe_join, ArchiveError, Backend, Member, Options};
 pub struct ZipBackend;
 
 impl Backend for ZipBackend {
-    fn list(&self, archive: &Path, _opts: &Options) -> Result<Vec<Member>, ArchiveError> {
+    fn list(&self, archive: &Path, opts: &Options) -> Result<Vec<Member>, ArchiveError> {
+        self.list_streamed(archive, opts, &mut |_, _| {})
+    }
+
+    fn list_streamed(
+        &self,
+        archive: &Path,
+        _opts: &Options,
+        on_progress: &mut dyn FnMut(usize, usize),
+    ) -> Result<Vec<Member>, ArchiveError> {
         let file = std::fs::File::open(archive)?;
         let mut zip = zip::ZipArchive::new(file).map_err(zip_err)?;
-        let mut out = Vec::with_capacity(zip.len());
-        for i in 0..zip.len() {
+        let total = zip.len();
+        let mut out = Vec::with_capacity(total);
+        for i in 0..total {
             let entry = zip.by_index_raw(i).map_err(zip_err)?;
             let name = entry.name().to_string();
             out.push(Member {
@@ -28,6 +38,7 @@ impl Backend for ZipBackend {
                 compressed_size: entry.compressed_size(),
                 encrypted: entry.encrypted(),
             });
+            on_progress(i + 1, total);
         }
         Ok(out)
     }

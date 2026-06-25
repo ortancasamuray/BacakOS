@@ -818,6 +818,9 @@ export component MainWindow inherits Window {
     in property <string> extract-label: "";
     in-out property <bool> in-archive: false;
     in property <string> archive-name: "";
+    in-out property <bool> archive-loading: false;
+    in property <int> archive-loaded-count: 0;
+    in property <float> archive-load-fraction: 0;
     callback extract-archive();
     in-out property <bool> show-preview: false;
     in property <bool> preview-is-image: false;
@@ -1268,8 +1271,9 @@ export component MainWindow inherits Window {
 
             // Archive browser banner — shown above the file area when browsing an archive
             if root.in-archive : Rectangle {
-                height: 48px;
+                height: root.archive-loading ? 64px : 48px;
                 background: Theme.surface;
+                animate height { duration: 150ms; }
                 Rectangle { x: 0; y: parent.height - 1px; width: parent.width; height: 1px; background: Theme.surface-hi; }
                 HorizontalLayout {
                     padding-left: 12px;
@@ -1277,16 +1281,51 @@ export component MainWindow inherits Window {
                     spacing: 8px;
                     alignment: center;
                     Text { text: "📦"; font-size: 18px; vertical-alignment: center; }
-                    Text {
-                        text: root.archive-name;
-                        color: Theme.text;
-                        font-size: 13px;
-                        font-weight: 600;
-                        vertical-alignment: center;
+                    VerticalLayout {
                         horizontal-stretch: 1;
-                        overflow: elide;
+                        spacing: 4px;
+                        alignment: center;
+                        Text {
+                            text: root.archive-name;
+                            color: Theme.text;
+                            font-size: 13px;
+                            font-weight: 600;
+                            overflow: elide;
+                        }
+                        if root.archive-loading : HorizontalLayout {
+                            spacing: 8px;
+                            alignment: center;
+                            Rectangle {
+                                horizontal-stretch: 1;
+                                height: 5px;
+                                border-radius: 2px;
+                                background: Theme.bg;
+                                property <float> shimmer: 0;
+                                animate shimmer { duration: 1100ms; iteration-count: -1; easing: linear; }
+                                init => { shimmer = 1; }
+                                Rectangle {
+                                    x: root.archive-load-fraction > 0 ? 0
+                                        : (parent.width - self.width) * parent.shimmer;
+                                    width: root.archive-load-fraction > 0
+                                        ? parent.width * max(0.03, root.archive-load-fraction)
+                                        : parent.width * 0.3;
+                                    height: parent.height;
+                                    border-radius: 2px;
+                                    background: Theme.accent;
+                                    animate width { duration: 120ms; }
+                                }
+                            }
+                            Text {
+                                text: root.archive-load-fraction > 0
+                                    ? Math.round(root.archive-load-fraction * 100) + "%"
+                                    : root.archive-loaded-count + " dosya";
+                                color: Theme.accent;
+                                font-size: 11px;
+                                vertical-alignment: center;
+                            }
+                        }
                     }
-                    Button {
+                    if !root.archive-loading : Button {
                         text: "📂 " + L.act-extract;
                         clicked => { root.extract-archive(); }
                     }
