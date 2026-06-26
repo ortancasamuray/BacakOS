@@ -1322,7 +1322,11 @@ export component MainWindow inherits Window {
                         TouchArea {
                             width: parent.viewport-width;
                             height: parent.viewport-height;
-                            clicked => { root.clear-selection(); root.focused-idx = -1; }
+                            clicked => {
+                                if (root.selection-mode) { root.toggle-selection-mode(); }
+                                else { root.clear-selection(); }
+                                root.focused-idx = -1;
+                            }
                         }
                         grid := VerticalLayout {
                             property <length> tile-size: 132px * root.grid-scale;
