@@ -673,6 +673,19 @@ impl WindowManager {
                 changed = true;
             }
         }
+        // If app_id was never received, derive one from the window title so the
+        // dock can look up an icon (e.g. "Altay" → "altay", "Firefox ESR" → "firefox").
+        if w.app.is_empty() && !w.title.is_empty() {
+            let derived = w.title
+                .split_whitespace()
+                .next()
+                .unwrap_or(&w.title)
+                .to_lowercase();
+            if !derived.is_empty() {
+                w.app = derived;
+                changed = true;
+            }
+        }
         Ok(changed)
     }
 
