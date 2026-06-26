@@ -2178,20 +2178,23 @@ impl BacakState {
         let run = n * side + (n - 1.0).max(0.0) * gap;
         let b = o.bounds;
         let step = side + gap;
-        // Visual slot remap: the three trailing sentinel entries are the
-        // apps button (drawn in slot 0, leading edge), then recents and
-        // settings drawn in the last two slots (trailing edge); every
-        // regular tile sits one slot in from the leading edge. Entry
-        // *order* is untouched, so all index-based click/drag math still
-        // sees pins as the first `dock_pinned.len()` entries.
+        // Visual slot remap: the four trailing sentinel entries are
+        // apps (slot 0, leading edge), then the regular pinned/running
+        // tiles in slots 1..n-3, then recents, screenshot, settings in
+        // the last three slots (trailing edge). Entry *order* is untouched
+        // so all index-based click/drag math still sees pins as the first
+        // `dock_pinned.len()` entries.
         let count = entries.len();
-        let settings_idx = count.saturating_sub(1);
-        let recents_idx = count.saturating_sub(2);
-        let apps_idx = count.saturating_sub(3);
+        let settings_idx   = count.saturating_sub(1);
+        let screenshot_idx = count.saturating_sub(2);
+        let recents_idx    = count.saturating_sub(3);
+        let apps_idx       = count.saturating_sub(4);
         let slot = |i: usize| {
             if i == apps_idx {
                 0
             } else if i == recents_idx {
+                count - 3
+            } else if i == screenshot_idx {
                 count - 2
             } else if i == settings_idx {
                 count - 1

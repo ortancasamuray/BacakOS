@@ -1368,9 +1368,8 @@ fn push_recents_glyph(
     ));
 }
 
-/// Screenshot button glyph: a stylised camera body with a lens circle
-/// approximated as a small square, matching the solid-rect drawing style
-/// used by the other sentinel button glyphs.
+/// Screenshot button glyph: camera body + viewfinder bump + lens ring,
+/// built from solid rectangles like the other sentinel button glyphs.
 fn push_screenshot_glyph(
     tile: Rect,
     fade: f32,
@@ -1380,37 +1379,26 @@ fn push_screenshot_glyph(
     out: &mut Vec<BacakElements>,
 ) {
     let color = Color32F::new(0.85, 0.9, 0.95, 0.9 * fade);
+    let dark  = Color32F::new(0.04, 0.08, 0.14, 0.9 * fade);
     let cx = tile.x + tile.w / 2.0;
-    let cy = tile.y + tile.h / 2.0;
-    // Camera body.
-    let bw = tile.w * 0.62;
-    let bh = tile.h * 0.42;
+    // Camera body — slightly below centre so the bump fits.
+    let bw = tile.w * 0.64;
+    let bh = tile.h * 0.40;
+    let by = tile.y + tile.h * 0.38;
+    out.push(solid_element(Rect::new(cx - bw / 2.0, by, bw, bh), color, output_scale, off_x, off_y));
+    // Viewfinder bump (top centre).
+    let vw = bw * 0.30;
+    let vh = tile.h * 0.13;
     out.push(solid_element(
-        Rect::new(cx - bw / 2.0, cy - bh / 2.0 + tile.h * 0.04, bw, bh),
-        color,
-        output_scale,
-        off_x,
-        off_y,
+        Rect::new(cx - vw / 2.0, by - vh + 1.0, vw, vh),
+        color, output_scale, off_x, off_y,
     ));
-    // Viewfinder bump (top centre of body).
-    let vw = bw * 0.32;
-    let vh = tile.h * 0.12;
-    out.push(solid_element(
-        Rect::new(cx - vw / 2.0, cy - bh / 2.0 - vh * 0.6 + tile.h * 0.04, vw, vh),
-        color,
-        output_scale,
-        off_x,
-        off_y,
-    ));
-    // Lens — dark cutout represented as a smaller dim square.
-    let lr = tile.w * 0.13;
-    out.push(solid_element(
-        Rect::new(cx - lr, cy - lr + tile.h * 0.04, lr * 2.0, lr * 2.0),
-        Color32F::new(0.08, 0.12, 0.18, 0.9 * fade),
-        output_scale,
-        off_x,
-        off_y,
-    ));
+    // Lens ring: bright outer square, dark inner square (ring illusion).
+    let lr = tile.w * 0.155;
+    let lcy = by + bh * 0.5;
+    out.push(solid_element(Rect::new(cx - lr, lcy - lr, lr * 2.0, lr * 2.0), color, output_scale, off_x, off_y));
+    let li = lr * 0.58;
+    out.push(solid_element(Rect::new(cx - li, lcy - li, li * 2.0, li * 2.0), dark, output_scale, off_x, off_y));
 }
 
 /// Render the applications grid menu (Launchpad-style) when open on this
