@@ -975,7 +975,9 @@ fn pick_first_connected_connector(drm: &DrmDevice) -> Result<u32> {
 /// (it doesn't have to match the kernel naming), but matching makes
 /// debugging against `xrandr` / `wlr-randr` quieter.
 fn connector_interface_name(info: &connector::Info) -> String {
-    format!("{:?}-{}", info.interface(), info.interface_id())
+    // Use as_str() so names match sysfs/xrandr: "DP-1", "HDMI-A-1", "eDP-1".
+    // {:#?} (Debug) would give "DisplayPort-1" which surprises users.
+    format!("{}-{}", info.interface().as_str(), info.interface_id())
 }
 
 /// Convert a raw u32 to `connector::Handle`. Returns `None` on zero,
