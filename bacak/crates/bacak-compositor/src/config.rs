@@ -14,6 +14,7 @@
 //! Pure serde/std — no Smithay — so the CLI (`bacak config`) can read
 //! and validate it without pulling in the Wayland runtime.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -38,6 +39,39 @@ impl DockEdge {
     /// axis is the row axis.
     pub fn is_horizontal(self) -> bool {
         matches!(self, Self::Bottom | Self::Top)
+    }
+}
+
+/// Per-connector output overrides — keyed by connector name in
+/// `compositor.json` under `"outputs"`, e.g.:
+/// ```json
+/// "outputs": { "HDMI-1": { "mode": "1920x1080@60", "scale": 1 } }
+/// ```
+/// Absent fields are auto-detected (preferred DRM mode, DPI-based scale).
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct OutputConfig {
+    /// Requested mode: `"WIDTHxHEIGHT"` or `"WIDTHxHEIGHT@REFRESH"`.
+    /// The compositor picks the closest matching DRM mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    /// Integer output scale (1–3). Overrides DPI auto-detection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale: Option<i32>,
+}
+
+impl OutputConfig {
+    /// Parse `"WIDTHxHEIGHT"` or `"WIDTHxHEIGHT@REFRESH"` into
+    /// `(width, height, refresh_hz)`. `refresh_hz` is 0 when absent
+    /// (match any refresh).
+    pub fn parse_mode(s: &str) -> Option<(u16, u16, u32)> {
+        let s = s.trim();
+        let (res, hz) = if let Some((r, h)) = s.split_once('@') {
+            (r, h.parse::<u32>().ok()?)
+        } else {
+            (s, 0u32)
+        };
+        let (w, h) = res.split_once('x').or_else(|| res.split_once('X'))?;
+        Some((w.trim().parse().ok()?, h.trim().parse().ok()?, hz))
     }
 }
 
@@ -89,6 +123,11 @@ pub struct CompositorConfig {
     /// precedence over the solid colour. `null` / absent → solid colour only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wallpaper_image: Option<String>,
+    /// Per-connector output overrides. Key = connector name reported by
+    /// DRM (e.g. `"HDMI-1"`, `"eDP-1"`, `"DP-1"`). Absent connectors
+    /// use auto-detected mode (preferred DRM mode) and scale (DPI-based).
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub outputs: HashMap<String, OutputConfig>,
 }
 
 impl Default for CompositorConfig {
@@ -108,6 +147,7 @@ impl Default for CompositorConfig {
             dock_pinned: Vec::new(),
             wallpaper_color: [10, 14, 22],
             wallpaper_image: None,
+            outputs: HashMap::new(),
         }
     }
 }
