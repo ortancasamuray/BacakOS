@@ -7846,6 +7846,21 @@ impl BacakState {
             }
             return;
         }
+        // Screenshot tile: trigger the built-in capture (flash + toast +
+        // clipboard) instead of launching an external tool.
+        if entry.app == "bacak-screenshot" && entry.window.is_none() {
+            if let Some(output) = self.wm.output_at(
+                entry.rect.x + entry.rect.w / 2.0,
+                entry.rect.y + entry.rect.h / 2.0,
+            ) {
+                self.pending_screenshot = Some(crate::state::ScreenshotReq {
+                    output,
+                    region: None,
+                    window: None,
+                });
+            }
+            return;
+        }
         // Launching or focusing a real app from the dock tucks the dock away
         // again (window-presence model): a launch maps a window (handled by
         // the rising-edge clear), but focusing an existing one needs this.
