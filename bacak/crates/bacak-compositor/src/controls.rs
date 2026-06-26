@@ -251,6 +251,43 @@ pub struct WifiDetails {
     pub device: String,
 }
 
+/// Find the first physical ethernet device from sysfs (no nmcli needed).
+/// Criteria: ARPHRD_ETHER (type=1), no `wireless/` subdir, has `device` symlink.
+fn eth_device_sysfs() -> Option<String> {
+    let entries = std::fs::read_dir("/sys/class/net").ok()?;
+    for entry in entries.flatten() {
+        let dev = entry.file_name().to_string_lossy().to_string();
+        if dev == "lo" {
+            continue;
+        }
+        let base = format!("/sys/class/net/{dev}");
+        let Ok(t) = std::fs::read_to_string(format!("{base}/type")) else { continue };
+        if t.trim() != "1" {
+            continue;
+        }
+        if std::path::Path::new(&format!("{base}/wireless")).exists() {
+            continue;
+        }
+        if !std::path::Path::new(&format!("{base}/device")).exists() {
+            continue;
+        }
+        return Some(dev);
+    }
+    None
+}
+
+/// True when the first physical ethernet device has an active link.
+/// Reads /sys/class/net/<dev>/operstate — works without nmcli.
+pub fn ethernet_link_up() -> bool {
+    if let Some(dev) = eth_device_sysfs() {
+        let path = format!("/sys/class/net/{dev}/operstate");
+        if let Ok(state) = std::fs::read_to_string(&path) {
+            return matches!(state.trim(), "up" | "unknown");
+        }
+    }
+    false
+}
+
 /// The Wi-Fi device name (e.g. "wlp2s0"), skipping the p2p pseudo-device.
 /// First device of `dev_type` ("wifi" / "ethernet"), skipping p2p pseudo-devices.
 fn net_device(dev_type: &str) -> Option<String> {
@@ -265,10 +302,27 @@ fn net_device(dev_type: &str) -> Option<String> {
     None
 }
 
-/// Read the active connection's details for a device. Unlike `dev wifi list`,
-/// the `device show` / `connection show` terse output is NOT colon-escaped, so
-/// we split on the first ':' only (the MAC and IPv6 value keep their colons).
-/// Returns `None` if the device has no active NM connection (e.g. unmanaged).
+/// nmcli terse mode escapes `:` as `\:` and `\` as `\\` in values.
+/// Unescape after splitting on the first raw `:` (the key never contains `:`).
+fn nmcli_unescape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.peek() {
+                Some(':') => { out.push(':'); chars.next(); }
+                Some('\\') => { out.push('\\'); chars.next(); }
+                _ => out.push(c),
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Read the active connection's details for a device.
+/// Returns `None` if the device cannot be found in nmcli output.
 fn details_for_device(dev: &str) -> Option<WifiDetails> {
     let show = capture(
         "nmcli",
@@ -284,17 +338,18 @@ fn details_for_device(dev: &str) -> Option<WifiDetails> {
     let mut d = WifiDetails { device: dev.to_string(), ..Default::default() };
     for line in show.lines() {
         let Some((k, v)) = line.split_once(':') else { continue };
+        let v = nmcli_unescape(v);
         match k {
-            "GENERAL.HWADDR" => d.mac = v.to_string(),
-            "GENERAL.CONNECTION" => d.conn = v.to_string(),
+            "GENERAL.HWADDR" => d.mac = v,
+            "GENERAL.CONNECTION" => d.conn = v,
             // "100 (connected)" → connected; "10 (unmanaged)"/"20"/"30" → not.
             "GENERAL.STATE" => d.connected = v.starts_with("100"),
             "GENERAL.NM-MANAGED" => d.managed = v == "yes",
-            _ if k.starts_with("IP4.ADDRESS") && d.ipv4.is_empty() => d.ipv4 = v.to_string(),
-            _ if k.starts_with("IP6.ADDRESS") && d.ipv6.is_empty() => d.ipv6 = v.to_string(),
+            _ if k.starts_with("IP4.ADDRESS") && d.ipv4.is_empty() => d.ipv4 = v,
+            _ if k.starts_with("IP6.ADDRESS") && d.ipv6.is_empty() => d.ipv6 = v,
             // Active gateway/DNS (sensible prefills for the static form).
-            "IP4.GATEWAY" => d.gateway = v.to_string(),
-            _ if k.starts_with("IP4.DNS") && d.dns.is_empty() => d.dns = v.to_string(),
+            "IP4.GATEWAY" => d.gateway = v,
+            _ if k.starts_with("IP4.DNS") && d.dns.is_empty() => d.dns = v,
             _ => {}
         }
     }
@@ -310,6 +365,7 @@ fn details_for_device(dev: &str) -> Option<WifiDetails> {
         .unwrap_or_default();
         for line in props.lines() {
             let Some((k, v)) = line.split_once(':') else { continue };
+            let v = nmcli_unescape(v);
             match k {
                 "connection.autoconnect" => d.autoconnect = v == "yes",
                 "ipv4.method" => d.dhcp = v == "auto",
@@ -320,13 +376,10 @@ fn details_for_device(dev: &str) -> Option<WifiDetails> {
     Some(d)
 }
 
-/// Bring the Ethernet link up or down. When managed, NM connect/disconnect is
-/// the clean path (polkit `network-control`, allow_active=yes); for an unmanaged
-/// device `connect` makes NM adopt + activate it. Blocking — off the render thread.
+/// Bring the Ethernet link up or down via `ip link set`.
 pub fn ethernet_set_link(on: bool) {
-    if let Some(dev) = net_device("ethernet") {
-        let verb = if on { "connect" } else { "disconnect" };
-        let _ = capture("nmcli", &["device", verb, &dev]);
+    if let Some(dev) = eth_device_sysfs() {
+        run_ok("ip", &["link", "set", &dev, if on { "up" } else { "down" }]);
     }
 }
 
@@ -335,9 +388,78 @@ pub fn wifi_details() -> Option<WifiDetails> {
     details_for_device(&net_device("wifi")?)
 }
 
-/// Details of the active Ethernet connection. Blocking — **off the render thread**.
+/// Details of the ethernet interface using sysfs + `ip addr show`.
+/// Works without NetworkManager.
 pub fn ethernet_details() -> Option<WifiDetails> {
-    details_for_device(&net_device("ethernet")?)
+    let dev = eth_device_sysfs()?;
+    let base = format!("/sys/class/net/{dev}");
+
+    let mac = std::fs::read_to_string(format!("{base}/address"))
+        .map(|s| s.trim().to_uppercase())
+        .unwrap_or_default();
+    if mac.is_empty() {
+        return None;
+    }
+
+    let connected = std::fs::read_to_string(format!("{base}/operstate"))
+        .map(|s| matches!(s.trim(), "up" | "unknown"))
+        .unwrap_or(false);
+
+    let mut ipv4 = String::new();
+    let mut ipv6 = String::new();
+    if let Some(out) = capture("ip", &["addr", "show", &dev]) {
+        for line in out.lines() {
+            let line = line.trim();
+            if line.starts_with("inet ") && ipv4.is_empty() {
+                if let Some(addr) = line.split_whitespace().nth(1) {
+                    ipv4 = addr.to_string();
+                }
+            } else if line.starts_with("inet6 ") && ipv6.is_empty() {
+                if let Some(addr) = line.split_whitespace().nth(1) {
+                    ipv6 = addr.to_string();
+                }
+            }
+        }
+    }
+
+    let mut gateway = String::new();
+    if let Some(out) = capture("ip", &["route", "show", "default", "dev", &dev]) {
+        for line in out.lines() {
+            let mut parts = line.split_whitespace();
+            if parts.next() == Some("default") && parts.next() == Some("via") {
+                if let Some(gw) = parts.next() {
+                    gateway = gw.to_string();
+                }
+            }
+        }
+    }
+
+    let mut dns = String::new();
+    if let Ok(resolv) = std::fs::read_to_string("/etc/resolv.conf") {
+        for line in resolv.lines() {
+            if let Some(rest) = line.trim().strip_prefix("nameserver") {
+                let ns = rest.trim();
+                if !ns.is_empty() && !ns.starts_with('#') {
+                    dns = ns.to_string();
+                    break;
+                }
+            }
+        }
+    }
+
+    Some(WifiDetails {
+        device: dev,
+        mac,
+        conn: String::new(),
+        autoconnect: false,
+        dhcp: true,
+        ipv4,
+        ipv6,
+        gateway,
+        dns,
+        connected,
+        managed: false,
+    })
 }
 
 /// Convenience: details for the wifi/ethernet device by kind.

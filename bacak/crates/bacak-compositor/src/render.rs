@@ -1803,10 +1803,19 @@ pub(crate) fn render_control_center(
                 cc_blit_label(out, renderer, &tile.label, tx, r.y + 7.0, output_scale, off_x, off_y);
             }
             crate::state::CcKind::Button { .. } => {
-                if let Some((_, w, h)) = &tile.label {
+                let label_h = tile.label.as_ref().map(|(_, _, h)| *h as f32).unwrap_or(0.0);
+                let sub_h = tile.sub.as_ref().map(|(_, _, h)| *h as f32).unwrap_or(0.0);
+                let gap = if sub_h > 0.0 { 2.0 } else { 0.0 };
+                let block_h = label_h + gap + sub_h;
+                let mut ly = r.y + (r.h - block_h) / 2.0;
+                if let Some((_, w, _)) = &tile.label {
                     let lx = r.x + (r.w - *w as f32) / 2.0;
-                    let ly = r.y + (r.h - *h as f32) / 2.0;
                     cc_blit_label(out, renderer, &tile.label, lx, ly, output_scale, off_x, off_y);
+                }
+                ly += label_h + gap;
+                if let Some((_, w, _)) = &tile.sub {
+                    let lx = r.x + (r.w - *w as f32) / 2.0;
+                    cc_blit_label(out, renderer, &tile.sub, lx, ly, output_scale, off_x, off_y);
                 }
             }
             crate::state::CcKind::Toggle => {
