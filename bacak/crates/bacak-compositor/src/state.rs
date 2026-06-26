@@ -7767,10 +7767,18 @@ impl BacakState {
             top.with_pending_state(|s| {
                 if maximized {
                     s.states.set(xdg_toplevel::State::Maximized);
+                    s.size = Some((geom.w as i32, geom.h as i32).into());
                 } else {
                     s.states.unset(xdg_toplevel::State::Maximized);
+                    // Send size=None so the client restores its own pre-maximise
+                    // size. Clients like Chromium/Firefox track their own restore
+                    // size; sending a specific size is ignored by some toolkits
+                    // (e.g. Slint/winit) that don't honour the compositor hint.
+                    // The WM geometry is already reset by wm.r#move() above, and
+                    // the surface commit handler will sync it to the actual
+                    // rendered size once the client commits its new buffer.
+                    s.size = None;
                 }
-                s.size = Some((geom.w as i32, geom.h as i32).into());
             });
             top.send_configure();
         } else {
