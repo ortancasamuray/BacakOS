@@ -7752,7 +7752,7 @@ impl BacakState {
             let ch = (area.h - bar).max(1.0);
             let target = Rect::new(area.x, area.y + bar, area.w, ch);
             if bar > 0.0 {
-                let _ = self.wm.r#move(id, target);
+                let _ = self.wm.set_geom(id, target);
             }
             self.notify_maximize(id, true, target);
         }
@@ -8337,7 +8337,7 @@ impl BacakState {
                         if self.decorated.contains(&id) {
                             if let Ok(w) = self.wm.get(id) {
                                 let b = crate::decoration::BAR_H;
-                                let _ = self.wm.r#move(
+                                let _ = self.wm.set_geom(
                                     id,
                                     Rect::new(
                                         w.geom.x,

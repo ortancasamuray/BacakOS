@@ -690,7 +690,7 @@ impl XdgShellHandler for BacakState {
         };
         let ch = (area.h - bar).max(1.0);
         if bar > 0.0 {
-            let _ = self.wm.r#move(id, Rect::new(area.x, area.y + bar, area.w, ch));
+            let _ = self.wm.set_geom(id, Rect::new(area.x, area.y + bar, area.w, ch));
         }
         surface.with_pending_state(|s| {
             s.states.set(xdg_toplevel::State::Maximized);

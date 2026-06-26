@@ -842,6 +842,16 @@ impl WindowManager {
         Ok(())
     }
 
+    /// Set window geometry without changing the window state. Used when the
+    /// compositor needs to fine-tune the geometry of a snapped/maximized window
+    /// (e.g. reserving the title-bar strip) without losing the Maximized state.
+    pub fn set_geom(&self, id: WindowId, geom: Rect) -> Result<()> {
+        let mut g = self.inner.windows.write();
+        let w = g.get_mut(&id).ok_or(WmError::NotFound(id))?;
+        w.geom = geom;
+        Ok(())
+    }
+
     pub fn snap(&self, id: WindowId, zone: SnapZone) -> Result<Rect> {
         // Resolve the window's output (via its workspace) first; then
         // re-take the windows lock as a writer to mutate. Holding both at
