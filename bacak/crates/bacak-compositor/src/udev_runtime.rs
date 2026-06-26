@@ -63,7 +63,7 @@ use smithay::input::touch::{DownEvent, MotionEvent as TouchMotionEvent, TouchHan
 use smithay::output::{Mode as OutputMode, Output, PhysicalProperties, Subpixel};
 use smithay::backend::allocator::Fourcc as DrmFourcc;
 use smithay::wayland::dmabuf::DmabufFeedbackBuilder;
-use smithay::reexports::drm::control::{connector, crtc, Device as DrmControlDevice};
+use smithay::reexports::drm::control::{connector, crtc, Device as DrmControlDevice, ModeTypeFlags};
 use smithay::reexports::input::Libinput;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{Client, Display, DisplayHandle, ListeningSocket};
@@ -401,6 +401,7 @@ pub fn run() -> Result<()> {
         primary_oid,
         (0, 0),
         &dh,
+        &state.config,
     )
     .context("boot target bring-up failed")?;
     // Sync the WM's primary bounds with the actual mode we just lit up;
@@ -454,6 +455,7 @@ pub fn run() -> Result<()> {
                 *output,
                 (bounds.x as i32, bounds.y as i32),
                 &dh,
+                &state.config,
             ) {
                 Ok(t) => {
                     info!(connector, output, "secondary connector brought up at boot");
@@ -1002,12 +1004,23 @@ fn pick_scale(mode_px: (u16, u16), phys_mm: (u32, u32)) -> i32 {
     }
     let (pw, ph) = phys_mm;
     if pw == 0 || ph == 0 {
-        return 1;
+        // No physical size info (e.g. virtual/headless output). Use pixel
+        // count as a proxy: 4K resolution almost certainly needs 2×.
+        let (w, h) = mode_px;
+        return if w >= 3200 || h >= 1800 { 2 } else { 1 };
     }
     let px_diag = ((mode_px.0 as f64).powi(2) + (mode_px.1 as f64).powi(2)).sqrt();
     let mm_diag = ((pw as f64).powi(2) + (ph as f64).powi(2)).sqrt();
     let dpi = px_diag / (mm_diag / 25.4);
+    // ≥ 192 DPI: true HiDPI (laptop Retina, small 4K panels) → 3× on
+    // extreme cases but 2× is the common sweet spot.
+    // 150–192 DPI: 4K on typical 24–27″ monitors at desk distance → 2×.
+    // < 150 DPI: Full HD or 4K on large/distant display → 1× (or user
+    // can override via `outputs.<connector>.scale` in compositor.json).
     if dpi >= 192.0 {
+        2
+    } else if dpi >= 150.0 {
+        // 4K at ~24–27″: pixel density justifies 2× scaling.
         2
     } else {
         1
@@ -1028,6 +1041,7 @@ fn try_bringup_target(
     output_id: OutputId,
     location_logical: (i32, i32),
     dh: &DisplayHandle,
+    cfg: &crate::config::CompositorConfig,
 ) -> Result<RenderTarget> {
     let res = drm
         .resource_handles()
@@ -1042,12 +1056,55 @@ fn try_bringup_target(
         return Err(anyhow!("connector {connector_raw} is not connected"));
     }
 
-    let drm_mode = info
-        .modes()
-        .iter()
-        .copied()
-        .next()
-        .ok_or_else(|| anyhow!("connected connector {connector_raw} reports no modes"))?;
+    let connector_name = connector_interface_name(&info);
+    let output_cfg = cfg.outputs.get(&connector_name);
+
+    let modes = info.modes();
+    // Mode selection priority:
+    // 1. If compositor.json specifies a mode for this connector, find the
+    //    closest DRM mode match (exact WxH, then best refresh, fallback preferred).
+    // 2. Otherwise prefer the mode with the PREFERRED flag from EDID/firmware.
+    // 3. Fall back to the first mode in the driver list.
+    let drm_mode = if let Some(cfg_mode) = output_cfg.and_then(|c| c.mode.as_deref()) {
+        if let Some((req_w, req_h, req_hz)) = crate::config::OutputConfig::parse_mode(cfg_mode) {
+            let matched = modes.iter().copied().filter(|m| {
+                let s = m.size();
+                s.0 == req_w && s.1 == req_h && (req_hz == 0 || m.vrefresh() as u32 == req_hz)
+            })
+            .max_by_key(|m| m.vrefresh());
+            if let Some(m) = matched {
+                info!(
+                    connector = connector_raw,
+                    mode = cfg_mode,
+                    "using config-specified output mode"
+                );
+                m
+            } else {
+                warn!(
+                    connector = connector_raw,
+                    mode = cfg_mode,
+                    "config mode not found in connector's mode list; falling back to preferred"
+                );
+                modes.iter().copied()
+                    .find(|m| m.mode_type().contains(ModeTypeFlags::PREFERRED))
+                    .or_else(|| modes.iter().copied().next())
+                    .ok_or_else(|| anyhow!("connector {connector_raw} reports no modes"))?
+            }
+        } else {
+            warn!(connector = connector_raw, mode = cfg_mode, "could not parse configured mode string");
+            modes.iter().copied()
+                .find(|m| m.mode_type().contains(ModeTypeFlags::PREFERRED))
+                .or_else(|| modes.iter().copied().next())
+                .ok_or_else(|| anyhow!("connector {connector_raw} reports no modes"))?
+        }
+    } else {
+        // No config override — prefer the PREFERRED mode (highest-quality mode
+        // recommended by the display's EDID), then fall back to first.
+        modes.iter().copied()
+            .find(|m| m.mode_type().contains(ModeTypeFlags::PREFERRED))
+            .or_else(|| modes.iter().copied().next())
+            .ok_or_else(|| anyhow!("connected connector {connector_raw} reports no modes"))?
+    };
     let mode_size = drm_mode.size();
 
     // Find a CRTC that's both compatible with this connector's encoders
@@ -1085,7 +1142,16 @@ fn try_bringup_target(
         size: (mode_size.0 as i32, mode_size.1 as i32).into(),
         refresh: (drm_mode.vrefresh() as i32) * 1000,
     };
-    let scale = pick_scale(mode_size, (phys_w, phys_h));
+    let scale = if let Some(&s) = output_cfg.and_then(|c| c.scale.as_ref()) {
+        let clamped = s.clamp(1, 3);
+        if clamped != s {
+            warn!(connector = connector_raw, requested = s, used = clamped, "scale clamped to 1–3");
+        }
+        info!(connector = connector_raw, scale = clamped, "using config-specified output scale");
+        clamped
+    } else {
+        pick_scale(mode_size, (phys_w, phys_h))
+    };
     info!(
         connector = connector_raw,
         mode_w = mode_size.0,
@@ -1093,7 +1159,7 @@ fn try_bringup_target(
         phys_mm_w = phys_w,
         phys_mm_h = phys_h,
         scale,
-        "selected output scale (override with BACAK_SCALE=1|2|3)"
+        "selected output mode and scale (override via compositor.json outputs.<connector>)"
     );
     smithay_output.set_preferred(smithay_mode);
     smithay_output.change_current_state(
@@ -1453,6 +1519,7 @@ fn apply_hotplug(data: &mut LoopData) {
                     output,
                     (bounds.x as i32, bounds.y as i32),
                     &dh,
+                    &data.state.config,
                 ) {
                     Ok(t) => {
                         info!(connector, output, "hotplug: target brought up");
@@ -1502,6 +1569,7 @@ fn apply_hotplug(data: &mut LoopData) {
                         output,
                         (bounds.x as i32, bounds.y as i32),
                         &dh,
+                        &data.state.config,
                     ) {
                         Ok(t) => {
                             info!(connector, output, "hotplug: target re-modeset");
