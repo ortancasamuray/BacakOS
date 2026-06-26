@@ -1069,7 +1069,11 @@ pub(crate) fn render_dock(
         } else if entry.app == crate::state::RECENTS_BUTTON_APP {
             push_recents_glyph(tile, fade, output_scale, off_x, off_y, out);
         } else if entry.app == crate::state::SCREENSHOT_BUTTON_APP {
-            push_screenshot_glyph(tile, fade, output_scale, off_x, off_y, out);
+            if let Some(el) = app_icon_element(state, renderer, "bacak-screenshot", tile, fade, output_scale, off_x, off_y) {
+                out.push(el);
+            } else {
+                push_screenshot_glyph(tile, fade, output_scale, off_x, off_y, out);
+            }
         } else if let Some(el) = app_icon_element(
             state, renderer, &entry.app, tile, fade, output_scale, off_x, off_y,
         ) {
