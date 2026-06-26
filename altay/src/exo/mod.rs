@@ -45,6 +45,8 @@ pub struct AppEntry {
     pub icon: String,
     /// `NoDisplay=true` / `Hidden=true` apps are excluded from menus.
     pub no_display: bool,
+    /// `Terminal=true` — must be launched inside a terminal emulator.
+    pub terminal: bool,
 }
 
 // ---- Discovery --------------------------------------------------------------
@@ -67,8 +69,8 @@ fn application_dirs() -> Vec<PathBuf> {
 /// Only the `[Desktop Entry]` group is read.
 pub fn parse_entry(id: &str, text: &str) -> Option<AppEntry> {
     let mut in_group = false;
-    let (mut name, mut exec, mut mimes, mut no_display, mut is_app, mut icon) =
-        (String::new(), String::new(), Vec::new(), false, false, String::new());
+    let (mut name, mut exec, mut mimes, mut no_display, mut is_app, mut icon, mut terminal) =
+        (String::new(), String::new(), Vec::new(), false, false, String::new(), false);
     for line in text.lines() {
         let line = line.trim();
         if line.starts_with('[') {
@@ -92,6 +94,11 @@ pub fn parse_entry(id: &str, text: &str) -> Option<AppEntry> {
                     no_display = true;
                 }
             }
+            "Terminal" => {
+                if val.trim().eq_ignore_ascii_case("true") {
+                    terminal = true;
+                }
+            }
             _ => {}
         }
     }
@@ -101,7 +108,7 @@ pub fn parse_entry(id: &str, text: &str) -> Option<AppEntry> {
     if name.is_empty() {
         name = id.trim_end_matches(".desktop").to_string();
     }
-    Some(AppEntry { id: id.to_string(), name, exec, mime_types: mimes, icon, no_display })
+    Some(AppEntry { id: id.to_string(), name, exec, mime_types: mimes, icon, no_display, terminal })
 }
 
 /// Memoized icon name → resolved file. Theme lookups touch many directories, so
@@ -354,28 +361,36 @@ pub fn open_with(sandbox: &Sandbox, path: impl AsRef<Path>, app_id: &str) -> Res
     }
 }
 
-/// Launch an application id with one file, preferring the freedesktop launchers
-/// (which apply field codes and startup notification), then a parsed `Exec`.
+/// Terminal emulators to try when launching a Terminal=true app, in order.
+const TERM_EMULATORS: &[(&str, &str)] = &[
+    ("alacritty", "-e"),
+    ("xterm", "-e"),
+    ("gnome-terminal", "--"),
+    ("xfce4-terminal", "-e"),
+    ("konsole", "-e"),
+];
+
+/// Launch an application id with one file.
+/// Prefers parsing the Exec line directly (reliable) over gio/gtk-launch
+/// (which require specific installation paths or portal access). Terminal=true
+/// apps are wrapped in a terminal emulator.
 fn launch_app(app_id: &str, file: &Path) -> bool {
-    // 1) gio launch <desktop-file> <file>
-    for dir in application_dirs() {
-        let df = dir.join(app_id);
-        if df.exists() && spawn("gio", &[Path::new("launch").as_ref(), df.as_path(), file]) {
-            return true;
+    let Some(app) = app_by_id(app_id) else { return false };
+    let Some((prog, args)) = expand_exec(&app.exec, file) else { return false };
+
+    if app.terminal {
+        // Wrap in terminal emulator: `alacritty -e <prog> [args...]`
+        for (term, flag) in TERM_EMULATORS {
+            let mut full_args: Vec<&Path> = vec![Path::new(flag), Path::new(&prog)];
+            full_args.extend(args.iter().map(|s| Path::new(s.as_str())));
+            if spawn(term, &full_args) {
+                return true;
+            }
         }
+        return false;
     }
-    // 2) gtk-launch <id-without-suffix> <file>
-    let short = app_id.trim_end_matches(".desktop");
-    if spawn("gtk-launch", &[Path::new(short), file]) {
-        return true;
-    }
-    // 3) Parse the Exec line ourselves and spawn it.
-    if let Some(app) = app_by_id(app_id) {
-        if let Some((prog, args)) = expand_exec(&app.exec, file) {
-            return spawn(&prog, &args.iter().map(|s| s.as_ref()).collect::<Vec<&Path>>());
-        }
-    }
-    false
+
+    spawn(&prog, &args.iter().map(|s| Path::new(s.as_str())).collect::<Vec<_>>())
 }
 
 /// Expand a desktop `Exec=` line for a single file, returning (program, args).
@@ -494,13 +509,14 @@ Exec=gedit --new-window";
             mime_types: vec![],
             icon: iconf.to_string_lossy().into_owned(),
             no_display: false,
+            terminal: false,
         };
         let r1 = icon_path(&app);
         let r2 = icon_path(&app); // second call served from cache
         assert_eq!(r1.as_deref(), Some(iconf.as_path()));
         assert_eq!(r1, r2);
         // A miss is cached as None and returns None.
-        let miss = AppEntry { icon: "altay-no-such-icon-xyz".into(), ..app.clone() };
+        let miss = AppEntry { icon: "altay-no-such-icon-xyz".into(), terminal: false, ..app.clone() };
         assert_eq!(icon_path(&miss), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
