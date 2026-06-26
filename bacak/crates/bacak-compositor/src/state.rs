@@ -1098,6 +1098,10 @@ pub const SETTINGS_BUTTON_APP: &str = "\u{1}bacak:settings";
 /// Sentinel `DockEntry::app` for the dock's Recents/Overview button.
 pub const RECENTS_BUTTON_APP: &str = "\u{1}bacak:recents";
 
+/// Sentinel `DockEntry::app` for the dock's Screenshot shortcut button.
+/// Opens the same dialog as the Control Center screenshot action.
+pub const SCREENSHOT_BUTTON_APP: &str = "\u{1}bacak:screenshot";
+
 /// Upward travel (px) a card must be dragged before release closes its
 /// window; a smaller move that stays within [`OVERVIEW_TAP_SLOP`] of the
 /// press is treated as a tap (switch to that app) instead.
@@ -2139,13 +2143,19 @@ impl BacakState {
             pinned: false,
         });
 
-        // Recents/Overview button, then the Control-Center (gear) button.
+        // Recents/Overview button, Screenshot shortcut, then Control-Center.
         // Like the apps button these are kept last in the entries vec so
         // they never shift the pinned-slot indices; the layout draws them
-        // in the *trailing* visual slots (recents, then settings rightmost).
+        // in the *trailing* visual slots (recents, screenshot, settings rightmost).
         entries.push(DockEntry {
             rect: Rect::new(0.0, 0.0, 0.0, 0.0),
             app: RECENTS_BUTTON_APP.to_string(),
+            window: None,
+            pinned: false,
+        });
+        entries.push(DockEntry {
+            rect: Rect::new(0.0, 0.0, 0.0, 0.0),
+            app: SCREENSHOT_BUTTON_APP.to_string(),
             window: None,
             pinned: false,
         });
@@ -2642,6 +2652,7 @@ impl BacakState {
         if d.source_app == APPS_BUTTON_APP
             || d.source_app == SETTINGS_BUTTON_APP
             || d.source_app == RECENTS_BUTTON_APP
+            || d.source_app == SCREENSHOT_BUTTON_APP
         {
             return true;
         }
@@ -7843,6 +7854,15 @@ impl BacakState {
                 entry.rect.y + entry.rect.h / 2.0,
             ) {
                 self.toggle_overview(out);
+            }
+            return;
+        }
+        if entry.app == SCREENSHOT_BUTTON_APP {
+            if let Some(out) = self.wm.output_at(
+                entry.rect.x + entry.rect.w / 2.0,
+                entry.rect.y + entry.rect.h / 2.0,
+            ) {
+                self.open_shot_dialog(out);
             }
             return;
         }

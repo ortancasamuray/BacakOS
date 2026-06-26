@@ -993,6 +993,7 @@ pub(crate) fn render_dock(
                 None if e.app == crate::state::APPS_BUTTON_APP => "Uygulamalar".to_string(),
                 None if e.app == crate::state::RECENTS_BUTTON_APP => "Genel Bakış".to_string(),
                 None if e.app == crate::state::SETTINGS_BUTTON_APP => "Ayarlar".to_string(),
+                None if e.app == crate::state::SCREENSHOT_BUTTON_APP => "Ekran Görüntüsü".to_string(),
                 // A pinned shortcut: show its `.desktop` Name (Turkish if the
                 // file has `Name[tr]=`), falling back to the raw app id.
                 None => crate::icons::resolve_app_name(&e.app).unwrap_or_else(|| e.app.clone()),
@@ -1067,6 +1068,8 @@ pub(crate) fn render_dock(
             push_settings_glyph(tile, fade, output_scale, off_x, off_y, out);
         } else if entry.app == crate::state::RECENTS_BUTTON_APP {
             push_recents_glyph(tile, fade, output_scale, off_x, off_y, out);
+        } else if entry.app == crate::state::SCREENSHOT_BUTTON_APP {
+            push_screenshot_glyph(tile, fade, output_scale, off_x, off_y, out);
         } else if let Some(el) = app_icon_element(
             state, renderer, &entry.app, tile, fade, output_scale, off_x, off_y,
         ) {
@@ -1359,6 +1362,51 @@ fn push_recents_glyph(
     out.push(solid_element(
         Rect::new(cx - w / 2.0 + off, cy - h / 2.0 - off, w, h),
         dim,
+        output_scale,
+        off_x,
+        off_y,
+    ));
+}
+
+/// Screenshot button glyph: a stylised camera body with a lens circle
+/// approximated as a small square, matching the solid-rect drawing style
+/// used by the other sentinel button glyphs.
+fn push_screenshot_glyph(
+    tile: Rect,
+    fade: f32,
+    output_scale: i32,
+    off_x: i32,
+    off_y: i32,
+    out: &mut Vec<BacakElements>,
+) {
+    let color = Color32F::new(0.85, 0.9, 0.95, 0.9 * fade);
+    let cx = tile.x + tile.w / 2.0;
+    let cy = tile.y + tile.h / 2.0;
+    // Camera body.
+    let bw = tile.w * 0.62;
+    let bh = tile.h * 0.42;
+    out.push(solid_element(
+        Rect::new(cx - bw / 2.0, cy - bh / 2.0 + tile.h * 0.04, bw, bh),
+        color,
+        output_scale,
+        off_x,
+        off_y,
+    ));
+    // Viewfinder bump (top centre of body).
+    let vw = bw * 0.32;
+    let vh = tile.h * 0.12;
+    out.push(solid_element(
+        Rect::new(cx - vw / 2.0, cy - bh / 2.0 - vh * 0.6 + tile.h * 0.04, vw, vh),
+        color,
+        output_scale,
+        off_x,
+        off_y,
+    ));
+    // Lens — dark cutout represented as a smaller dim square.
+    let lr = tile.w * 0.13;
+    out.push(solid_element(
+        Rect::new(cx - lr, cy - lr + tile.h * 0.04, lr * 2.0, lr * 2.0),
+        Color32F::new(0.08, 0.12, 0.18, 0.9 * fade),
         output_scale,
         off_x,
         off_y,
