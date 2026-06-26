@@ -5189,7 +5189,9 @@ fn app_icon_element(
             );
             crate::state::IconCacheEntry { buffer, w, h }
         });
-        cache.insert(app.to_string(), resolved);
+        if let Some(entry) = resolved {
+            cache.insert(app.to_string(), Some(entry));
+        }
     }
     let entry = cache.get(app)?.as_ref()?;
 
