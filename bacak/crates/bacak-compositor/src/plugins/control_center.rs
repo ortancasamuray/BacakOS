@@ -336,6 +336,7 @@ pub struct AudioPanel {
 pub struct CcSnapshot {
     pub wifi_on: bool,
     pub bt_on: bool,
+    pub eth_connected: bool,
     pub volume: f32,
     pub muted: bool,
     pub mic_volume: f32,

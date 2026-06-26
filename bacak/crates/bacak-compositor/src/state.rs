@@ -4731,9 +4731,11 @@ impl BacakState {
         std::thread::spawn(move || {
             let (volume, muted) = crate::controls::volume();
             let (mic_volume, _) = crate::controls::mic_volume();
+            let eth_connected = crate::controls::ethernet_link_up();
             let _ = tx.send(CcSnapshot {
                 wifi_on: crate::controls::wifi_enabled(),
                 bt_on: crate::controls::bt_enabled(),
+                eth_connected,
                 volume,
                 muted,
                 mic_volume,
@@ -4755,9 +4757,11 @@ impl BacakState {
             "Kapalı".to_string()
         };
         let bt_sub_text = if snap.bt_on { "Açık" } else { "Kapalı" };
+        let eth_sub_text = if snap.eth_connected { "Bağlı" } else { "Bağlı değil" };
         let text = self.text.as_ref();
         let wifi_sub = cc_rasterize(text, &wifi_sub_text, 12.0, SUB, 150);
         let bt_sub = cc_rasterize(text, bt_sub_text, 12.0, SUB, 150);
+        let eth_sub = cc_rasterize(text, eth_sub_text, 12.0, SUB, 150);
         let clock = cc_rasterize(text, &snap.clock, 14.0, LABEL, 348);
         if let Some(cc) = self.control_center.as_mut() {
             cc.wifi_on = snap.wifi_on;
@@ -4771,6 +4775,8 @@ impl BacakState {
                     t.sub = wifi_sub.clone();
                 } else if matches!(t.action, CcAction::BtToggle) {
                     t.sub = bt_sub.clone();
+                } else if matches!(t.action, CcAction::EthernetSettings) {
+                    t.sub = eth_sub.clone();
                 }
             }
         }
