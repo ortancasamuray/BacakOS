@@ -54,27 +54,95 @@ fn capture(cmd: &str, args: &[&str]) -> Option<String> {
     Some(s.trim().to_string())
 }
 
-// ----- Wi-Fi (NetworkManager) -----------------------------------------
+// ----- Wi-Fi (wpa_supplicant / sysfs) ----------------------------------
+//
+// nmcli is not required. Status is read from sysfs; scanning and connecting
+// go through wpa_cli when the control socket exists at /run/wpa_supplicant/<dev>.
 
+const WPA_CTRL: &str = "/run/wpa_supplicant";
+
+/// Find the first wireless device from sysfs (has a `wireless/` subdirectory).
+fn wifi_device_sysfs() -> Option<String> {
+    let entries = std::fs::read_dir("/sys/class/net").ok()?;
+    for entry in entries.flatten() {
+        let dev = entry.file_name().to_string_lossy().to_string();
+        if std::path::Path::new(&format!("/sys/class/net/{dev}/wireless")).exists() {
+            return Some(dev);
+        }
+    }
+    None
+}
+
+/// True when the Wi-Fi interface has IFF_UP set.
 pub fn wifi_enabled() -> bool {
-    capture("nmcli", &["radio", "wifi"])
-        .map(|s| s.eq_ignore_ascii_case("enabled"))
-        .unwrap_or(false)
+    if let Some(dev) = wifi_device_sysfs() {
+        let path = format!("/sys/class/net/{dev}/flags");
+        if let Ok(s) = std::fs::read_to_string(&path) {
+            if let Ok(f) = u64::from_str_radix(s.trim().trim_start_matches("0x"), 16) {
+                return f & 0x1 != 0; // IFF_UP
+            }
+        }
+    }
+    false
 }
 
+/// Bring the Wi-Fi radio up (ip link + wpa_supplicant) or down.
 pub fn set_wifi(on: bool) {
-    run_ok("nmcli", &["radio", "wifi", if on { "on" } else { "off" }]);
+    let Some(dev) = wifi_device_sysfs() else { return };
+    if on {
+        run_ok("ip", &["link", "set", &dev, "up"]);
+        // Start wpa_supplicant daemon for this interface if not already running.
+        let socket = format!("{WPA_CTRL}/{dev}");
+        if !std::path::Path::new(&socket).exists() {
+            let conf = "/tmp/bacak-wpa.conf";
+            if !std::path::Path::new(conf).exists() {
+                let _ = std::fs::write(
+                    conf,
+                    "ctrl_interface=/run/wpa_supplicant\nctrl_interface_group=0\nupdate_config=1\n",
+                );
+            }
+            run_ok(
+                "wpa_supplicant",
+                &["-B", "-i", &dev, "-c", conf, "-P", &format!("/tmp/wpa_{dev}.pid")],
+            );
+        }
+    } else {
+        // Kill the wpa_supplicant instance we started for this interface.
+        let pid_file = format!("/tmp/wpa_{dev}.pid");
+        if let Ok(s) = std::fs::read_to_string(&pid_file) {
+            if let Ok(pid) = s.trim().parse::<u32>() {
+                run_ok("kill", &[&pid.to_string()]);
+            }
+        }
+        run_ok("ip", &["link", "set", &dev, "down"]);
+    }
 }
 
-/// SSID of the currently-active Wi-Fi connection, if any.
+/// True when the wpa_supplicant control socket for the Wi-Fi device exists.
+fn wpa_socket_exists(dev: &str) -> bool {
+    std::path::Path::new(&format!("{WPA_CTRL}/{dev}")).exists()
+}
+
+/// Run a wpa_cli command and capture its output. Returns None when the socket
+/// is unavailable (wpa_supplicant not managing the interface yet).
+fn wpa_cli(dev: &str, args: &[&str]) -> Option<String> {
+    if !wpa_socket_exists(dev) {
+        return None;
+    }
+    let mut full: Vec<&str> = vec!["-i", dev, "-p", WPA_CTRL];
+    full.extend_from_slice(args);
+    capture("wpa_cli", &full)
+}
+
+/// SSID of the currently-associated Wi-Fi network, if any.
 pub fn wifi_ssid() -> Option<String> {
-    let out = capture("nmcli", &["-t", "-f", "ACTIVE,SSID", "dev", "wifi"])?;
+    let dev = wifi_device_sysfs()?;
+    let out = wpa_cli(&dev, &["status"])?;
     for line in out.lines() {
-        // `-t` output is colon-separated: "yes:MyNetwork".
-        if let Some(rest) = line.strip_prefix("yes:") {
-            let ssid = rest.trim();
-            if !ssid.is_empty() {
-                return Some(ssid.to_string());
+        if let Some(v) = line.strip_prefix("ssid=") {
+            let s = v.trim();
+            if !s.is_empty() {
+                return Some(s.to_string());
             }
         }
     }
@@ -145,86 +213,93 @@ fn parse_wifi_list(out: &str) -> Vec<WifiNet> {
     nets
 }
 
-/// Read NM's *cached* scan instantly (no rescan). While connected the cache
-/// reports the associated AP's real signal but 0 for the others until a real
-/// scan refreshes them — fine as a first paint, then re-read after a rescan.
+/// Parse `wpa_cli scan_results` output (tab-separated, first line is header).
+/// Format: BSSID\tFREQ\tSIGNAL(dBm)\tFLAGS\tSSID
+fn parse_wpa_scan(out: &str, active_ssid: Option<&str>) -> Vec<WifiNet> {
+    let mut seen = std::collections::HashSet::new();
+    let mut nets = Vec::new();
+    for line in out.lines() {
+        if line.starts_with("bssid") { continue; } // header
+        let parts: Vec<&str> = line.splitn(5, '\t').collect();
+        if parts.len() < 5 { continue; }
+        let signal_dbm: i32 = parts[2].trim().parse().unwrap_or(-100);
+        // Convert dBm to 0–100 quality: 2*(dBm+100) clamped.
+        let signal = ((2 * (signal_dbm + 100)).clamp(0, 100)) as u8;
+        let flags = parts[3].trim();
+        let secured = flags.contains("WPA") || flags.contains("WEP");
+        let ssid = parts[4].trim().to_string();
+        if ssid.is_empty() || !seen.insert(ssid.clone()) { continue; }
+        let active = active_ssid.map(|a| a == ssid).unwrap_or(false);
+        nets.push(WifiNet { ssid, signal, secured, active });
+    }
+    nets.sort_by(|a, b| b.active.cmp(&a.active).then(b.signal.cmp(&a.signal)));
+    nets
+}
+
+/// Return wpa_supplicant's cached scan results instantly.
 pub fn wifi_scan_cached() -> Vec<WifiNet> {
-    capture("nmcli", &["-t", "-f", "IN-USE,SIGNAL,SECURITY,SSID", "dev", "wifi", "list"])
-        .map(|out| parse_wifi_list(&out))
+    let Some(dev) = wifi_device_sysfs() else { return Vec::new() };
+    let active = wifi_ssid();
+    wpa_cli(&dev, &["scan_results"])
+        .map(|out| parse_wpa_scan(&out, active.as_deref()))
         .unwrap_or_default()
 }
 
-/// Ask NM to start a fresh scan (results arrive asynchronously — poll
-/// [`wifi_scan_cached`] for a few seconds afterwards). Best-effort: a rate-limit
-/// error is harmless. Authorized in the compositor's active polkit session
-/// (`wifi.scan` allow_active=yes).
+/// Ask wpa_supplicant to start a background scan. Best-effort.
 pub fn wifi_rescan_trigger() {
-    let _ = run_ok("nmcli", &["dev", "wifi", "rescan"]);
+    if let Some(dev) = wifi_device_sysfs() {
+        let _ = wpa_cli(&dev, &["scan"]);
+    }
 }
 
-/// Connect to a Wi-Fi network by SSID. `password` is `None` for an open network
-/// or one with a saved profile. Blocking (can take several seconds) — run on a
-/// background thread. Success is read from nmcli's stdout ("…successfully
-/// activated…"); failures print only to stderr, so an empty/other stdout means
-/// failure. (We parse stdout rather than the exit status because `SIGCHLD =
-/// SIG_IGN` makes the status unreadable — see the note at the top of the file.)
+/// Connect to a Wi-Fi network using wpa_cli. Blocking — run on a background thread.
 pub fn wifi_connect(ssid: &str, password: Option<&str>) -> (bool, String) {
-    let has_pw = password.map(|p| !p.is_empty()).unwrap_or(false);
-    // With a fresh password, drop any stale/partial saved profile for this SSID
-    // first so nmcli rebuilds a complete one. Re-activating a half-written
-    // profile is what yields "802-11-wireless-security.key-mgmt: property is
-    // missing". `capture` blocks until delete finishes, so ordering is safe.
-    if has_pw {
-        let _ = capture("nmcli", &["connection", "delete", "id", ssid]);
-    }
-    let mut args: Vec<&str> = vec!["device", "wifi", "connect", ssid];
-    if let Some(p) = password {
-        if !p.is_empty() {
-            args.push("password");
-            args.push(p);
-        }
-    }
-    // Pin the C locale so the success line is the stable English "successfully
-    // activated". Read stdout *and* stderr to EOF (blocks until the connect
-    // settles); a failure prints the reason to stderr, which we surface to the
-    // UI. Exit status is unreadable under SIGCHLD=SIG_IGN. nmcli's output is
-    // tiny, so reading the two pipes in turn can't deadlock.
-    let mut child = match Command::new("nmcli")
-        .args(&args)
-        .env("LC_ALL", "C")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
-        Ok(c) => c,
-        Err(_) => return (false, "nmcli çalıştırılamadı".to_string()),
+    let Some(dev) = wifi_device_sysfs() else {
+        return (false, "Wi-Fi arayüzü bulunamadı".to_string());
     };
-    let mut out = String::new();
-    let mut err = String::new();
-    if let Some(mut s) = child.stdout.take() {
-        let _ = s.read_to_string(&mut out);
+    if !wpa_socket_exists(&dev) {
+        return (false, "wpa_supplicant bağlantı soketi yok — Wi-Fi etkinleştirin".to_string());
     }
-    if let Some(mut s) = child.stderr.take() {
-        let _ = s.read_to_string(&mut err);
+
+    // Add a new network slot and get its ID.
+    let id_out = match wpa_cli(&dev, &["add_network"]) {
+        Some(s) => s,
+        None => return (false, "wpa_cli hatası".to_string()),
+    };
+    let net_id = id_out.trim();
+    if net_id.parse::<u32>().is_err() {
+        return (false, format!("Ağ eklenemedi: {net_id}"));
     }
-    // Ground truth, locale-independent: did we actually end up on this SSID?
-    // (The stdout string is a fast-path; the live check is authoritative and
-    // survives a localized nmcli that doesn't honour LC_ALL for every message.)
-    let ok = out.to_lowercase().contains("successfully activated")
-        || wifi_ssid().as_deref() == Some(ssid);
-    let msg = if ok {
-        format!("Bağlandı: {ssid}")
+
+    // SSID must be double-quoted in wpa_cli set_network.
+    let ssid_arg = format!("\"{}\"", ssid.replace('"', "\\\""));
+    let _ = wpa_cli(&dev, &["set_network", net_id, "ssid", &ssid_arg]);
+
+    if let Some(pw) = password.filter(|p| !p.is_empty()) {
+        let psk_arg = format!("\"{}\"", pw.replace('"', "\\\""));
+        let _ = wpa_cli(&dev, &["set_network", net_id, "psk", &psk_arg]);
     } else {
-        // Strip nmcli's "Error: " prefix for a cleaner line.
-        let e = err.trim().trim_start_matches("Error:").trim();
-        if e.is_empty() {
-            "Bağlanılamadı".to_string()
-        } else {
-            e.to_string()
+        let _ = wpa_cli(&dev, &["set_network", net_id, "key_mgmt", "NONE"]);
+    }
+
+    let _ = wpa_cli(&dev, &["select_network", net_id]);
+    let _ = wpa_cli(&dev, &["save_config"]);
+
+    // Poll for COMPLETED state (up to ~10 s).
+    for _ in 0..20 {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        if let Some(out) = wpa_cli(&dev, &["status"]) {
+            if out.contains("wpa_state=COMPLETED") {
+                // Request DHCP for the new connection.
+                run_ok("dhcpcd", &["-n", &dev]);
+                return (true, format!("Bağlandı: {ssid}"));
+            }
         }
-    };
-    (ok, msg)
+    }
+
+    // Clean up the failed network slot.
+    let _ = wpa_cli(&dev, &["remove_network", net_id]);
+    (false, "Bağlanılamadı".to_string())
 }
 
 // ----- Wi-Fi connection details (the active network) -------------------
@@ -383,9 +458,57 @@ pub fn ethernet_set_link(on: bool) {
     }
 }
 
-/// Details of the active Wi-Fi connection. Blocking — **off the render thread**.
+/// Details of the active Wi-Fi connection via wpa_cli + sysfs.
 pub fn wifi_details() -> Option<WifiDetails> {
-    details_for_device(&net_device("wifi")?)
+    let dev = wifi_device_sysfs()?;
+    let mac = std::fs::read_to_string(format!("/sys/class/net/{dev}/address"))
+        .map(|s| s.trim().to_uppercase())
+        .unwrap_or_default();
+
+    let out = wpa_cli(&dev, &["status"])?;
+    let mut ssid = String::new();
+    let mut connected = false;
+    for line in out.lines() {
+        if let Some(v) = line.strip_prefix("ssid=") { ssid = v.trim().to_string(); }
+        if line.trim() == "wpa_state=COMPLETED" { connected = true; }
+    }
+
+    let mut ipv4 = String::new();
+    let mut ipv6 = String::new();
+    if let Some(a) = capture("ip", &["addr", "show", &dev]) {
+        for line in a.lines() {
+            let t = line.trim();
+            if t.starts_with("inet ") && ipv4.is_empty() {
+                if let Some(addr) = t.split_whitespace().nth(1) { ipv4 = addr.to_string(); }
+            } else if t.starts_with("inet6 ") && ipv6.is_empty() {
+                if let Some(addr) = t.split_whitespace().nth(1) { ipv6 = addr.to_string(); }
+            }
+        }
+    }
+
+    let mut gateway = String::new();
+    if let Some(r) = capture("ip", &["route", "show", "default", "dev", &dev]) {
+        for line in r.lines() {
+            let mut p = line.split_whitespace();
+            if p.next() == Some("default") && p.next() == Some("via") {
+                if let Some(gw) = p.next() { gateway = gw.to_string(); }
+            }
+        }
+    }
+
+    Some(WifiDetails {
+        device: dev,
+        mac,
+        conn: ssid,
+        autoconnect: true,
+        dhcp: true,
+        ipv4,
+        ipv6,
+        gateway,
+        dns: String::new(),
+        connected,
+        managed: true,
+    })
 }
 
 /// Details of the ethernet interface using sysfs + `ip addr show`.
@@ -471,54 +594,26 @@ pub fn net_details(eth: bool) -> Option<WifiDetails> {
     }
 }
 
-/// Toggle the connection's auto-reconnect. Fire-and-forget.
-pub fn wifi_set_autoconnect(conn: &str, on: bool) {
-    let v = if on { "yes" } else { "no" };
-    let _ = capture("nmcli", &["connection", "modify", conn, "connection.autoconnect", v]);
-}
+/// Toggle auto-reconnect for a saved wpa_supplicant network (no-op without nmcli).
+pub fn wifi_set_autoconnect(_conn: &str, _on: bool) {}
 
-/// Switch the connection to DHCP and reactivate it. Returns success.
-pub fn wifi_set_dhcp(conn: &str) -> bool {
-    let _ = capture(
-        "nmcli",
-        &[
-            "connection", "modify", conn, "ipv4.method", "auto", "ipv4.addresses", "",
-            "ipv4.gateway", "", "ipv4.dns", "",
-        ],
-    );
-    wifi_reactivate(conn)
-}
-
-/// Switch the connection to a static IPv4 config and reactivate it.
-pub fn wifi_set_static(conn: &str, ip_prefix: &str, gateway: &str, dns: &str) -> bool {
-    let _ = capture(
-        "nmcli",
-        &[
-            "connection", "modify", conn, "ipv4.method", "manual", "ipv4.addresses", ip_prefix,
-            "ipv4.gateway", gateway, "ipv4.dns", dns,
-        ],
-    );
-    wifi_reactivate(conn)
-}
-
-/// Re-apply a connection's (just-changed) config; blocks until it settles.
-fn wifi_reactivate(conn: &str) -> bool {
-    let mut child = match Command::new("nmcli")
-        .args(["connection", "up", conn])
-        .env("LC_ALL", "C")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-    {
-        Ok(c) => c,
-        Err(_) => return false,
-    };
-    let mut out = String::new();
-    if let Some(mut s) = child.stdout.take() {
-        let _ = s.read_to_string(&mut out);
+/// Switch to DHCP: runs dhcpcd. Returns true if dhcpcd spawned.
+pub fn wifi_set_dhcp(_conn: &str) -> bool {
+    if let Some(dev) = wifi_device_sysfs() {
+        run_ok("dhcpcd", &["-n", &dev])
+    } else {
+        false
     }
-    out.to_lowercase().contains("successfully activated")
+}
+
+/// Switch to static IP via `ip addr` + `ip route`. Returns true if commands spawned.
+pub fn wifi_set_static(_conn: &str, ip_prefix: &str, gateway: &str, _dns: &str) -> bool {
+    let Some(dev) = wifi_device_sysfs() else { return false };
+    run_ok("ip", &["addr", "add", ip_prefix, "dev", &dev]);
+    if !gateway.is_empty() {
+        run_ok("ip", &["route", "replace", "default", "via", gateway, "dev", &dev]);
+    }
+    true
 }
 
 // ----- Bluetooth -------------------------------------------------------

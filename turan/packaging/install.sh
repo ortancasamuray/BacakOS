@@ -41,16 +41,16 @@ confirm() {  # confirm "question"   (auto-yes with $YES)
 # --- resolve the .deb ------------------------------------------------------
 resolve_deb() {
     if [ -n "${BDM_DEB:-}" ]; then echo "$BDM_DEB"; return; fi
-    local d
-    d="$(ls -t "$REPO"/target/debian/bacak-display-manager_*_amd64.deb 2>/dev/null | head -n1 || true)"
-    if [ -z "$d" ] && command -v cargo >/dev/null; then
-        log "no .deb found; building one…" >&2
+    # Always build from source when cargo is available to avoid stale packages.
+    if command -v cargo >/dev/null; then
+        log "building bacak-display-manager from source…" >&2
         ( cd "$REPO"
           cargo build --release -p bacak-display-manager --features system-pam
           cargo build --release -p bacak-greeter --features gui --bin bacak-greeter
           cargo deb --no-build -p bacak-display-manager ) >&2
-        d="$(ls -t "$REPO"/target/debian/bacak-display-manager_*_amd64.deb | head -n1)"
     fi
+    local d
+    d="$(ls -t "$REPO"/target/debian/bacak-display-manager_*_amd64.deb 2>/dev/null | head -n1 || true)"
     echo "$d"
 }
 
@@ -58,14 +58,13 @@ resolve_deb() {
 resolve_compositor() {
     if [ -n "${BDM_COMPOSITOR:-}" ] && [ -x "${BDM_COMPOSITOR}" ]; then echo "$BDM_COMPOSITOR"; return; fi
     local src; src="${BDM_COMPOSITOR_SRC:-$REPO/../bacak}"
-    if [ -x "$src/target/release/bacak-compositor" ]; then
-        echo "$src/target/release/bacak-compositor"; return
-    fi
+    # Always build from source when cargo is available to avoid stale binaries.
     if [ -f "$src/Cargo.toml" ] && command -v cargo >/dev/null; then
-        log "building real bacak-compositor from $src…" >&2
+        log "building bacak-compositor from source…" >&2
         ( cd "$src" && cargo build --release -p bacak-compositor --features udev ) >&2 || true
-        [ -x "$src/target/release/bacak-compositor" ] && echo "$src/target/release/bacak-compositor"
+        [ -x "$src/target/release/bacak-compositor" ] && echo "$src/target/release/bacak-compositor"; return
     fi
+    [ -x "$src/target/release/bacak-compositor" ] && echo "$src/target/release/bacak-compositor"
 }
 
 current_dm() {  # echoes the active DM unit base name, or empty
