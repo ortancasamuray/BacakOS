@@ -78,6 +78,7 @@ install_bdm() {
     ( cd "$TURAN_SRC"
       cargo build --release -p bacak-display-manager --features system-pam
       cargo build --release -p bacak-greeter --features gui --bin bacak-greeter
+      cargo build --release -p bacak-session-launcher
       cargo deb --no-build -p bacak-display-manager )
     local deb; deb="$(ls -t "$TURAN_SRC"/target/debian/bacak-display-manager_*_amd64.deb | head -n1)"
     [ -f "$deb" ] || die "deb paketi oluşturulamadı"
