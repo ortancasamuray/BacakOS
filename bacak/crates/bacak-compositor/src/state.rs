@@ -9318,7 +9318,7 @@ impl BacakState {
         // Open OSK for auth entry
         let out = ds.output;
         let field_rect = ds.auth_field;
-        drop(ds);
+        let _ = ds;
         if !self.osk.is_visible() {
             self.osk.bind(self.wm.clone(), out);
             let field = FocusedField {
@@ -9521,7 +9521,7 @@ impl BacakState {
                             ds.mode = DsMode::HostnameEntry { original: ds.text_buf.clone() };
                             ds.entry_field_label = ds_rasterize(&self.text, "Bilgisayar Adı", 13.0, [170, 178, 196], 300);
                             ds.status = None;
-                            drop(ds);
+                            let _ = ds;
                             // Open OSK for entry
                             self.ds_open_entry_osk(out);
                         }
@@ -9554,7 +9554,7 @@ impl BacakState {
                             ds.mode = DsMode::PwChange { phase: 0, new_pw: String::new() };
                             ds.entry_field_label = ds_rasterize(&self.text, "Yeni Parola", 13.0, [170, 178, 196], 300);
                             ds.status = None;
-                            drop(ds);
+                            let _ = ds;
                             self.ds_open_entry_osk(out);
                         }
                     }
@@ -9650,7 +9650,7 @@ impl BacakState {
                 DsMode::PwChange { .. } => InputMode::Password,
                 _ => InputMode::Text,
             };
-            drop(ds);
+            let _ = ds;
             self.osk.bind(self.wm.clone(), out);
             let field = FocusedField {
                 rect: OskRect { x: field_rect.x, y: field_rect.y, w: field_rect.w, h: field_rect.h },
