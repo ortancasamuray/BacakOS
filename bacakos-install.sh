@@ -83,6 +83,26 @@ install_bdm() {
     local deb; deb="$(ls -t "$TURAN_SRC"/target/debian/bacak-display-manager_*_amd64.deb | head -n1)"
     [ -f "$deb" ] || die "deb paketi oluşturulamadı"
     apt-get install -y "$deb" weston dbus || { dpkg -i "$deb" || true; apt-get -f install -y; }
+
+    # Compositor'ı başlatıp oturum ortamını ayarlayan sarmalayıcı betik.
+    cat > /usr/bin/bacak-session << 'EOF'
+#!/bin/sh
+export GTK_IM_MODULE=wayland QT_IM_MODULE=wayland XMODIFIERS=@im=none
+exec /usr/bin/bacak-compositor "$@"
+EOF
+    chmod 0755 /usr/bin/bacak-session
+
+    # Display manager oturum girişi — SDDM/GDM/greetd bu dosyayı listeler.
+    mkdir -p /usr/share/wayland-sessions
+    cat > /usr/share/wayland-sessions/bacak.desktop << 'EOF'
+[Desktop Entry]
+Name=Bacak Desktop
+Comment=The Bacak Wayland desktop session
+Exec=bacak-session
+Type=Application
+DesktopNames=Bacak
+EOF
+
     ok "bacak-display-manager kuruldu ($deb)"
 }
 
