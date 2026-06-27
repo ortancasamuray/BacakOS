@@ -6,6 +6,8 @@
 #   sudo bash bacakos-install.sh compositor # sadece compositor
 #   sudo bash bacakos-install.sh altay      # sadece altay
 #   sudo bash bacakos-install.sh bdm        # sadece display manager
+#   sudo bash bacakos-install.sh enable     # BDM'i etkin display manager yap
+#   sudo bash bacakos-install.sh revert     # Önceki display manager'a geri dön
 #
 # Her çalıştırmada kaynak koddan yeniden derleme yapılır; eski binary/paket kullanılmaz.
 set -euo pipefail
@@ -107,6 +109,49 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
+enable_bdm() {
+    log "=== bacak-display-manager etkinleştiriliyor ==="
+    command -v bacak-display-manager >/dev/null || die "BDM kurulu değil — önce çalıştırın: sudo $0 bdm"
+    [ -x /usr/bin/bacak-compositor ]  || die "bacak-compositor bulunamadı — önce çalıştırın: sudo $0 compositor"
+
+    # Mevcut display manager'ı kaydet (geri dönüş için).
+    local state_dir="/var/lib/bacak-display-manager"
+    mkdir -p "$state_dir"
+    local prev
+    prev="$(basename "$(readlink -f /etc/systemd/system/display-manager.service 2>/dev/null)" .service 2>/dev/null || true)"
+    if [ -n "$prev" ] && [ "$prev" != "bacak-display-manager" ]; then
+        echo "$prev" > "$state_dir/previous-dm"
+        log "Önceki display manager kaydedildi: $prev"
+    fi
+
+    systemctl disable "$prev.service" 2>/dev/null || true
+    systemctl enable bacak-display-manager.service
+    systemctl daemon-reload
+    ok "bacak-display-manager etkinleştirildi (reboot sonrası otomatik başlar)"
+
+    log "Hemen başlatmak için: sudo systemctl start bacak-display-manager"
+    log "Geri dönmek için:     sudo $0 revert"
+}
+
+# ---------------------------------------------------------------------------
+revert_bdm() {
+    log "=== Önceki display manager'a dönülüyor ==="
+    local state_dir="/var/lib/bacak-display-manager"
+    local prev; prev="$(cat "$state_dir/previous-dm" 2>/dev/null || true)"
+    [ -n "$prev" ] || die "Önceki display manager kaydı bulunamadı ($state_dir/previous-dm)"
+
+    systemctl stop bacak-display-manager.service 2>/dev/null || true
+    systemctl disable bacak-display-manager.service 2>/dev/null || true
+    systemctl enable "$prev.service" 2>/dev/null || true
+    rm -f /etc/systemd/system/display-manager.service
+    local frag; frag="$(systemctl show "$prev.service" -p FragmentPath --value 2>/dev/null || true)"
+    [ -f "$frag" ] && ln -sf "$frag" /etc/systemd/system/display-manager.service || true
+    systemctl daemon-reload
+    systemctl start "$prev.service" 2>/dev/null || true
+    ok "Geri dönüldü: $prev"
+}
+
+# ---------------------------------------------------------------------------
 need_root "$@"
 
 TARGET="${1:-all}"
@@ -114,6 +159,8 @@ case "$TARGET" in
     compositor) install_compositor ;;
     altay)      install_altay ;;
     bdm)        install_bdm ;;
+    enable)     enable_bdm ;;
+    revert)     revert_bdm ;;
     all)
         install_compositor
         install_altay
@@ -121,7 +168,7 @@ case "$TARGET" in
         log ""
         ok "=== Tüm bileşenler kuruldu ==="
         log "Display manager'ı etkinleştirmek için:"
-        log "  sudo $TURAN_SRC/packaging/install.sh enable"
+        log "  sudo bash $0 enable"
         ;;
-    *) die "Bilinmeyen hedef: $TARGET (compositor | altay | bdm | all)" ;;
+    *) die "Bilinmeyen hedef: $TARGET (compositor | altay | bdm | enable | revert | all)" ;;
 esac
