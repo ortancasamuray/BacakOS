@@ -161,58 +161,6 @@ pub struct WifiNet {
     pub active: bool,
 }
 
-/// Split one `nmcli -t` (terse) line into its fields. nmcli escapes a literal
-/// `:` inside a value as `\:` and a `\` as `\\`; we unescape while splitting on
-/// the unescaped `:` separators.
-fn split_terse(line: &str) -> Vec<String> {
-    let mut fields = Vec::new();
-    let mut cur = String::new();
-    let mut chars = line.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '\\' => {
-                if let Some(&n) = chars.peek() {
-                    cur.push(n);
-                    chars.next();
-                } else {
-                    cur.push('\\');
-                }
-            }
-            ':' => fields.push(std::mem::take(&mut cur)),
-            _ => cur.push(c),
-        }
-    }
-    fields.push(cur);
-    fields
-}
-
-/// Parse `nmcli -t -f IN-USE,SIGNAL,SECURITY,SSID dev wifi list` output into the
-/// strongest-first, SSID-deduped network list.
-fn parse_wifi_list(out: &str) -> Vec<WifiNet> {
-    let mut seen = std::collections::HashSet::new();
-    let mut nets = Vec::new();
-    for line in out.lines() {
-        let f = split_terse(line);
-        if f.len() < 4 {
-            continue;
-        }
-        let active = f[0].trim() == "*";
-        let signal: u8 = f[1].trim().parse().unwrap_or(0);
-        let sec = f[2].trim();
-        let secured = !sec.is_empty() && sec != "--";
-        // SSID is the last field; it may itself have contained ':' (already
-        // unescaped+split, so re-join any tail fields).
-        let ssid = f[3..].join(":");
-        let ssid = ssid.trim().to_string();
-        if ssid.is_empty() || !seen.insert(ssid.clone()) {
-            continue;
-        }
-        nets.push(WifiNet { ssid, signal, secured, active });
-    }
-    nets.sort_by(|a, b| b.active.cmp(&a.active).then(b.signal.cmp(&a.signal)));
-    nets
-}
-
 /// Parse `wpa_cli scan_results` output (tab-separated, first line is header).
 /// Format: BSSID\tFREQ\tSIGNAL(dBm)\tFLAGS\tSSID
 fn parse_wpa_scan(out: &str, active_ssid: Option<&str>) -> Vec<WifiNet> {
@@ -361,94 +309,6 @@ pub fn ethernet_link_up() -> bool {
         }
     }
     false
-}
-
-/// The Wi-Fi device name (e.g. "wlp2s0"), skipping the p2p pseudo-device.
-/// First device of `dev_type` ("wifi" / "ethernet"), skipping p2p pseudo-devices.
-fn net_device(dev_type: &str) -> Option<String> {
-    let out = capture("nmcli", &["-t", "-f", "DEVICE,TYPE", "device"])?;
-    for line in out.lines() {
-        if let Some((dev, ty)) = line.split_once(':') {
-            if ty == dev_type && !dev.contains("p2p") {
-                return Some(dev.to_string());
-            }
-        }
-    }
-    None
-}
-
-/// nmcli terse mode escapes `:` as `\:` and `\` as `\\` in values.
-/// Unescape after splitting on the first raw `:` (the key never contains `:`).
-fn nmcli_unescape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '\\' {
-            match chars.peek() {
-                Some(':') => { out.push(':'); chars.next(); }
-                Some('\\') => { out.push('\\'); chars.next(); }
-                _ => out.push(c),
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
-
-/// Read the active connection's details for a device.
-/// Returns `None` if the device cannot be found in nmcli output.
-fn details_for_device(dev: &str) -> Option<WifiDetails> {
-    let show = capture(
-        "nmcli",
-        &[
-            "-t",
-            "-f",
-            "GENERAL.HWADDR,GENERAL.CONNECTION,GENERAL.STATE,GENERAL.NM-MANAGED,IP4.ADDRESS,IP6.ADDRESS,IP4.GATEWAY,IP4.DNS",
-            "device",
-            "show",
-            dev,
-        ],
-    )?;
-    let mut d = WifiDetails { device: dev.to_string(), ..Default::default() };
-    for line in show.lines() {
-        let Some((k, v)) = line.split_once(':') else { continue };
-        let v = nmcli_unescape(v);
-        match k {
-            "GENERAL.HWADDR" => d.mac = v,
-            "GENERAL.CONNECTION" => d.conn = v,
-            // "100 (connected)" → connected; "10 (unmanaged)"/"20"/"30" → not.
-            "GENERAL.STATE" => d.connected = v.starts_with("100"),
-            "GENERAL.NM-MANAGED" => d.managed = v == "yes",
-            _ if k.starts_with("IP4.ADDRESS") && d.ipv4.is_empty() => d.ipv4 = v,
-            _ if k.starts_with("IP6.ADDRESS") && d.ipv6.is_empty() => d.ipv6 = v,
-            // Active gateway/DNS (sensible prefills for the static form).
-            "IP4.GATEWAY" => d.gateway = v,
-            _ if k.starts_with("IP4.DNS") && d.dns.is_empty() => d.dns = v,
-            _ => {}
-        }
-    }
-    if d.mac.is_empty() {
-        return None; // not a real device
-    }
-    // Connection-level props only exist when NM has an active profile.
-    if !d.conn.is_empty() {
-        let props = capture(
-            "nmcli",
-            &["-t", "-f", "connection.autoconnect,ipv4.method", "connection", "show", &d.conn],
-        )
-        .unwrap_or_default();
-        for line in props.lines() {
-            let Some((k, v)) = line.split_once(':') else { continue };
-            let v = nmcli_unescape(v);
-            match k {
-                "connection.autoconnect" => d.autoconnect = v == "yes",
-                "ipv4.method" => d.dhcp = v == "auto",
-                _ => {}
-            }
-        }
-    }
-    Some(d)
 }
 
 /// Bring the Ethernet link up or down via `ip link set`.
@@ -847,15 +707,3 @@ pub fn datetime() -> String {
     capture("date", &["+%H:%M  ·  %A, %d %B"]).unwrap_or_default()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn split_terse_unescapes_colons() {
-        // nmcli pads the IN-USE column with a space; `wifi_scan` trims it.
-        assert_eq!(split_terse(" :100:WPA2:Samm_IoT"), [" ", "100", "WPA2", "Samm_IoT"]);
-        // An SSID containing a literal ':' is escaped by nmcli as '\:'.
-        assert_eq!(split_terse("*:80:WPA2:My\\:Net"), ["*", "80", "WPA2", "My:Net"]);
-    }
-}
