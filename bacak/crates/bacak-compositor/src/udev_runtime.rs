@@ -295,7 +295,30 @@ pub fn run() -> Result<()> {
     //     pick a (format, modifier) we can't import → silent per-frame import
     //     failure → black (LibreOffice/Skia toolbar + document area).
     // `egl_context` is consumed by `GlesRenderer::new`, so clone both now.
-    let renderer_formats = egl_context.dmabuf_render_formats().clone();
+    //
+    // VirtualBox (vboxvideo/vmwgfx) and VMware SVGA drivers reject tiled GBM
+    // modifiers on the primary DRM plane — the atomic commit succeeds but the
+    // hardware scans out black pixels. Detect the vendor via DMI and restrict
+    // the DrmCompositor's swapchain to DRM_FORMAT_MOD_LINEAR so the framebuffer
+    // is always a simple raster that every virtual GPU driver can display.
+    let virtual_gpu = std::fs::read_to_string("/sys/class/dmi/id/sys_vendor")
+        .map(|v| {
+            let v = v.trim().to_ascii_lowercase();
+            v.contains("innotek") || v.contains("vmware") || v.contains("virtualbox")
+        })
+        .unwrap_or(false);
+    let renderer_formats: smithay::backend::allocator::format::FormatSet = if virtual_gpu {
+        warn!("virtual GPU detected (VirtualBox/VMware) — restricting framebuffer modifiers to DRM_FORMAT_MOD_LINEAR");
+        use smithay::backend::allocator::Modifier;
+        egl_context
+            .dmabuf_render_formats()
+            .iter()
+            .filter(|f| f.modifier == Modifier::Linear)
+            .copied()
+            .collect()
+    } else {
+        egl_context.dmabuf_render_formats().clone()
+    };
     // Drop Intel render-compression (CCS) modifiers from what we advertise.
     // EGL reports them as texture-importable so `import_dmabuf` *succeeds*, but
     // our GLES sampler reads the compressed buffer as BLACK (the aux CCS plane's
