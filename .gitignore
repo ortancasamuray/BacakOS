@@ -23,3 +23,12 @@
 # OS files
 .DS_Store
 Thumbs.db
+
+# VM runtime artifacts (rebuilt by smoke-test.sh — do not commit stale binaries)
+turan/vmrun/bacak-compositor
+turan/vmrun/headless_login
+turan/vmrun/seed.iso
+turan/vmrun/overlay.qcow2
+turan/vmrun/diag.log
+turan/vmrun/host.log
+turan/vmrun/serial.log
