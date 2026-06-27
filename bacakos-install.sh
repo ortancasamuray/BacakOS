@@ -21,7 +21,24 @@ ok()   { printf '%s[bacakos] %s%s\n' "$c_grn" "$*" "$c_rst"; }
 die()  { printf '%s[bacakos] HATA: %s%s\n' "$c_red" "$*" "$c_rst" >&2; exit 1; }
 
 need_root() { [ "$(id -u)" -eq 0 ] || die "root olarak çalıştırın: sudo $0 $*"; }
-need_cargo() { command -v cargo >/dev/null || die "cargo (Rust toolchain) kurulu değil"; }
+
+# sudo altında ~/.cargo/bin PATH'te olmayabilir; SUDO_USER'ın ortamını ara.
+_setup_cargo_path() {
+    command -v cargo >/dev/null && return 0
+    local cargo_home
+    # rustup varsayılan konumu
+    for dir in "$HOME/.cargo/bin" "/home/$SUDO_USER/.cargo/bin" "/root/.cargo/bin"; do
+        if [ -x "$dir/cargo" ]; then
+            export PATH="$dir:$PATH"
+            return 0
+        fi
+    done
+    return 1
+}
+
+need_cargo() {
+    _setup_cargo_path || die "cargo (Rust toolchain) kurulu değil — önce rustup ile kurun: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+}
 
 # ---------------------------------------------------------------------------
 install_compositor() {
