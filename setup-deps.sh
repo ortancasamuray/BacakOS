@@ -61,8 +61,11 @@ else
     ok "Rust kuruldu: $($CARGO_BIN/cargo --version)"
 fi
 
+# Önceki root çalışmaları .cargo altına root sahipli dosya bırakmış olabilir; düzelt.
+chown -R "$REAL_USER:" "$REAL_HOME/.cargo" 2>/dev/null || true
+
 # cargo-deb — Debian paketi oluşturmak için
-if ! "$CARGO_BIN/cargo" deb --version >/dev/null 2>&1; then
+if ! sudo -u "$REAL_USER" "$CARGO_BIN/cargo" deb --version >/dev/null 2>&1; then
     log "cargo-deb kuruluyor…"
     sudo -u "$REAL_USER" "$CARGO_BIN/cargo" install cargo-deb
     ok "cargo-deb kuruldu"
