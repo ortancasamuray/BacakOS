@@ -308,14 +308,26 @@ pub fn run() -> Result<()> {
         })
         .unwrap_or(false);
     let renderer_formats: smithay::backend::allocator::format::FormatSet = if virtual_gpu {
-        warn!("virtual GPU detected (VirtualBox/VMware) — restricting framebuffer modifiers to DRM_FORMAT_MOD_LINEAR");
         use smithay::backend::allocator::Modifier;
-        egl_context
+        let linear: smithay::backend::allocator::format::FormatSet = egl_context
             .dmabuf_render_formats()
             .iter()
             .filter(|f| f.modifier == Modifier::Linear)
             .copied()
-            .collect()
+            .collect();
+        let count = linear.iter().count();
+        if count == 0 {
+            // llvmpipe on this driver version doesn't advertise LINEAR render
+            // formats — fall back to the full set and accept the black-frame risk.
+            warn!("virtual GPU detected but no LINEAR render formats available — using full format set");
+            egl_context.dmabuf_render_formats().clone()
+        } else {
+            warn!(
+                count,
+                "virtual GPU detected (VirtualBox/VMware) — restricting framebuffer modifiers to DRM_FORMAT_MOD_LINEAR"
+            );
+            linear
+        }
     } else {
         egl_context.dmabuf_render_formats().clone()
     };
