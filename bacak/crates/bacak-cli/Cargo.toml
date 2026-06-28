@@ -20,3 +20,15 @@ clap        = { workspace = true }
 serde       = { workspace = true }
 serde_json  = { workspace = true }
 anyhow      = { workspace = true }
+
+[package.metadata.deb]
+maintainer = "Bacak Desktop Project <packages@example.org>"
+copyright  = "2026, Bacak Desktop Project"
+section    = "admin"
+priority   = "optional"
+extended-description = "Service management CLI for the Bacak OS desktop environment."
+depends = "$auto"
+assets = [
+    ["../../target/release/bacak", "usr/bin/bacak", "755"],
+    ["../../packaging/changelog.Debian.gz", "usr/share/doc/bacak/changelog.Debian.gz", "644"],
+]

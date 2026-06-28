@@ -127,10 +127,4 @@ assets = [
     ["../../packaging/changelog.Debian.gz", "usr/share/doc/bacak-compositor/changelog.Debian.gz", "644"],
     # Wayland session entry: makes the Bacak session visible in any display manager.
     ["../../packaging/bacak.desktop", "usr/share/wayland-sessions/bacak.desktop", "644"],
-    # systemd service unit — enabled at install time via systemd-units below.
-    ["../../packaging/bacak-display-manager.service", "usr/lib/systemd/system/bacak-display-manager.service", "644"],
 ]
-
-[package.metadata.deb.systemd-units]
-enable = true
-start  = false
