@@ -21,7 +21,7 @@ apt-get update -qq
 # ---------------------------------------------------------------------------
 # Sistem paketleri
 # ---------------------------------------------------------------------------
-log "Sistem paketleri kuruluyor…"
+log "Derleme bağımlılıkları kuruluyor…"
 apt-get install -y \
     git curl \
     build-essential pkg-config clang \
@@ -42,7 +42,47 @@ apt-get install -y \
     \
     weston dbus
 
-ok "Sistem paketleri kuruldu"
+ok "Derleme bağımlılıkları kuruldu"
+
+# ---------------------------------------------------------------------------
+# Çalışma zamanı bağımlılıkları
+# ---------------------------------------------------------------------------
+log "Çalışma zamanı bağımlılıkları kuruluyor…"
+
+# Ses: compositor wpctl + pactl ile PipeWire'ı kontrol eder.
+# bacak-session başlarken pipewire/wireplumber user servislerini başlatır.
+apt-get install -y \
+    pipewire pipewire-pulse pipewire-audio \
+    wireplumber
+
+# Wi-Fi: wpa_cli üzerinden bağlantı, dhcpcd ile IP alımı.
+# NetworkManager wpa_supplicant'ı kendi içinde yönettiğinden
+# /run/wpa_supplicant/<dev> soketini açmaz; standalone kurulum gerekir.
+apt-get install -y \
+    wpasupplicant \
+    dhcpcd \
+    iproute2
+
+# NetworkManager varsa wpa_supplicant'ı bırakması için yönetimden çıkar.
+if command -v nmcli >/dev/null 2>&1; then
+    log "NetworkManager bulundu — Wi-Fi yönetimi wpa_supplicant'a devrediliyor"
+    NM_CONF=/etc/NetworkManager/conf.d/99-bacak-wifi.conf
+    if [ ! -f "$NM_CONF" ]; then
+        mkdir -p /etc/NetworkManager/conf.d
+        cat > "$NM_CONF" << 'EOF'
+# BacakOS: Wi-Fi'ı wpa_supplicant/wpa_cli üzerinden yönetir.
+[keyfile]
+unmanaged-devices=type:wifi
+EOF
+        systemctl reload NetworkManager 2>/dev/null || true
+        log "NetworkManager Wi-Fi yönetiminden çıkarıldı ($NM_CONF)"
+    fi
+fi
+
+# Bluetooth: bluetoothctl üzerinden eşleme ve bağlantı.
+apt-get install -y bluez
+
+ok "Çalışma zamanı bağımlılıkları kuruldu"
 
 # ---------------------------------------------------------------------------
 # Rust / cargo
