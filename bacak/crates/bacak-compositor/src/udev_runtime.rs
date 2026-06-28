@@ -308,26 +308,20 @@ pub fn run() -> Result<()> {
         })
         .unwrap_or(false);
     let renderer_formats: smithay::backend::allocator::format::FormatSet = if virtual_gpu {
-        use smithay::backend::allocator::Modifier;
-        let linear: smithay::backend::allocator::format::FormatSet = egl_context
-            .dmabuf_render_formats()
-            .iter()
-            .filter(|f| f.modifier == Modifier::Linear)
-            .copied()
-            .collect();
-        let count = linear.iter().count();
-        if count == 0 {
-            // llvmpipe on this driver version doesn't advertise LINEAR render
-            // formats — fall back to the full set and accept the black-frame risk.
-            warn!("virtual GPU detected but no LINEAR render formats available — using full format set");
-            egl_context.dmabuf_render_formats().clone()
-        } else {
-            warn!(
-                count,
-                "virtual GPU detected (VirtualBox/VMware) — restricting framebuffer modifiers to DRM_FORMAT_MOD_LINEAR"
-            );
-            linear
-        }
+        // vmwgfx/vboxvideo advertise tiled modifiers as scanout-capable but
+        // display them as solid black. Build a renderer_formats set with only
+        // DRM_FORMAT_MOD_LINEAR entries so DrmCompositor allocates plain raster
+        // GBM buffers. Mesa EGL can import and render into LINEAR GBM buffers
+        // as EGLImage FBOs even when they're absent from dmabuf_render_formats().
+        use smithay::backend::allocator::{Format, Modifier};
+        let linear_set: smithay::backend::allocator::format::FormatSet = [
+            Format { code: DrmFourcc::Argb8888, modifier: Modifier::Linear },
+            Format { code: DrmFourcc::Xrgb8888, modifier: Modifier::Linear },
+        ]
+        .into_iter()
+        .collect();
+        warn!("virtual GPU detected (VirtualBox/VMware) — using hardcoded LINEAR renderer formats to fix black primary plane");
+        linear_set
     } else {
         egl_context.dmabuf_render_formats().clone()
     };
