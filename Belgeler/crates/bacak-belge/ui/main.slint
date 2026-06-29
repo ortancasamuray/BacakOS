@@ -1,0 +1,226 @@
+import { Button, HorizontalBox, VerticalBox, ScrollView } from "std-widgets.slint";
+
+export component AppWindow inherits Window {
+    title: "Bacak Belge Görüntüleyici";
+    min-width: 520px;
+    min-height: 600px;
+
+    // "pdf" | "epub" | "image" | "loading" | "error"
+    in property <string>  mode: "loading";
+    in property <string>  filename: "";
+    in property <string>  status: "";
+
+    // PDF & image shared
+    in property <image>   content-image;
+    in property <float>   zoom: 1.0;
+
+    // Pinch gesture — visual multiplier during gesture, resets to 1.0 after
+    in-out property <float> pinch-scale: 1.0;
+    private property <float> zoom-at-start: 1.0;
+
+    // PDF specific
+    in property <int>     page-num: 1;
+    in property <int>     page-count: 0;
+
+    // EPUB specific
+    in property <string>  chapter-title: "";
+    in property <string>  body-text: "";
+    in property <int>     font-size: 16;
+    in property <bool>    dark-mode: false;
+    in property <bool>    has-prev: false;
+    in property <bool>    has-next: false;
+
+    callback prev-action();   // PDF: prev page  / EPUB: prev chapter / image: prev file
+    callback next-action();   // PDF: next page  / EPUB: next chapter / image: next file
+    callback zoom-in();
+    callback zoom-out();
+    callback fit();
+    callback font-larger();
+    callback font-smaller();
+    callback toggle-dark();
+    // Called when a pinch gesture ends; argument = zoom-at-start * cumulative-scale
+    callback pinch-ended(float);
+
+    property <color> epub-bg:  dark-mode ? #1a1a2e : #f5f0e8;
+    property <color> epub-fg:  dark-mode ? #e8e0d0 : #2c2416;
+    property <color> epub-bar: dark-mode ? #16213e : #e0dbd0;
+
+    background: mode == "epub" ? epub-bg : (mode == "image" ? #111111 : #404040);
+
+    VerticalBox {
+        padding: 0px;
+        spacing: 0px;
+
+        // ── Toolbar ────────────────────────────────────────────────────────
+        Rectangle {
+            height: 48px;
+            background: mode == "epub" ? epub-bar : #1e1e2e;
+
+            HorizontalBox {
+                padding: 8px;
+                spacing: 4px;
+                alignment: center;
+
+                // Prev / Next (all modes)
+                Button {
+                    text: "◀";
+                    width: 36px;
+                    enabled: has-prev;
+                    clicked => { prev-action(); }
+                }
+                Button {
+                    text: "▶";
+                    width: 36px;
+                    enabled: has-next;
+                    clicked => { next-action(); }
+                }
+
+                Rectangle { width: 6px; }
+
+                // PDF page indicator
+                if mode == "pdf": Text {
+                    text: page-num + " / " + page-count;
+                    color: #cccccc;
+                    font-size: 13px;
+                    vertical-alignment: center;
+                    min-width: 68px;
+                    horizontal-alignment: center;
+                }
+
+                // Zoom (PDF & image)
+                if mode == "pdf" || mode == "image": Button { text: "−"; width: 36px; clicked => { zoom-out(); } }
+                if mode == "pdf": Text {
+                    text: Math.round(zoom * 100) + "%";
+                    color: #aaaaaa;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                    min-width: 44px;
+                    horizontal-alignment: center;
+                }
+                if mode == "pdf" || mode == "image": Button { text: "+"; width: 36px; clicked => { zoom-in(); } }
+                if mode == "pdf" || mode == "image": Button { text: "⊞"; width: 36px; clicked => { fit(); } }
+
+                // Font size (EPUB)
+                if mode == "epub": Button { text: "A−"; width: 40px; clicked => { font-smaller(); } }
+                if mode == "epub": Button { text: "A+"; width: 40px; clicked => { font-larger(); } }
+                if mode == "epub": Button { text: "☀";  width: 36px; clicked => { toggle-dark(); } }
+
+                Rectangle { horizontal-stretch: 1; }
+
+                // Centre label
+                if mode == "epub": Text {
+                    text: chapter-title;
+                    color: epub-fg;
+                    font-size: 13px;
+                    overflow: elide;
+                    max-width: 280px;
+                    vertical-alignment: center;
+                }
+                if mode != "epub": Text {
+                    text: filename;
+                    color: #aaaaaa;
+                    font-size: 12px;
+                    overflow: elide;
+                    max-width: 280px;
+                    vertical-alignment: center;
+                }
+
+                Rectangle { horizontal-stretch: 1; }
+
+                // Status / info (right side)
+                Text {
+                    text: status;
+                    color: #777777;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // EPUB: book title bar
+        if mode == "epub": Rectangle {
+            height: 30px;
+            background: epub-bar;
+            Text {
+                text: filename;
+                color: epub-fg;
+                font-size: 13px;
+                font-weight: 700;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        // ── Content area ───────────────────────────────────────────────────
+
+        // PDF / image — shared pixel canvas
+        if mode == "pdf" || mode == "image": Rectangle {
+            vertical-stretch: 1;
+            background: mode == "image" ? #111111 : #505050;
+            clip: true;
+
+            ScaleRotateGestureHandler {
+                started => {
+                    root.zoom-at-start = root.zoom;
+                    root.pinch-scale = 1.0;
+                }
+                updated => { root.pinch-scale = self.scale; }
+                ended => {
+                    root.pinch-ended(root.zoom-at-start * root.pinch-scale);
+                    root.pinch-scale = 1.0;
+                }
+                cancelled => { root.pinch-scale = 1.0; }
+
+                if content-image.width > 0: Rectangle {
+                    background: mode == "pdf" ? #ffffff : transparent;
+                    width:  content-image.width  * 1px * zoom * pinch-scale;
+                    height: content-image.height * 1px * zoom * pinch-scale;
+                    x: max(0px, (parent.width  - self.width)  / 2);
+                    y: max(8px,  (parent.height - self.height) / 2);
+                    Image {
+                        source: content-image;
+                        width:  parent.width;
+                        height: parent.height;
+                        image-fit: fill;
+                    }
+                }
+                if content-image.width == 0: Text {
+                    text: "Yükleniyor…";
+                    color: #888888;
+                    font-size: 16px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // EPUB — scrollable text
+        if mode == "epub": ScrollView {
+            vertical-stretch: 1;
+            Rectangle {
+                background: epub-bg;
+                Text {
+                    text: body-text;
+                    color: epub-fg;
+                    font-size: root.font-size * 1px;
+                    wrap: word-wrap;
+                    width: parent.width - 80px;
+                    x: 40px;
+                    y: 24px;
+                }
+            }
+        }
+
+        // Loading / error placeholder
+        if mode == "loading" || mode == "error": Rectangle {
+            vertical-stretch: 1;
+            Text {
+                text: mode == "error" ? status : "Yükleniyor…";
+                color: mode == "error" ? #dd4444 : #888888;
+                font-size: 16px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+    }
+}

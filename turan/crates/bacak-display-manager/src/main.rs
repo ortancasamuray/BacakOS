@@ -70,9 +70,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     loop {
         let mut server = ipc::GreeterServer::bind(&config)?;
         let started = std::time::Instant::now();
-        let mut greeter = launch::spawn_greeter(&config)?;
+        let (mut greeter, greeter_uid) = launch::spawn_greeter(&config)?;
         let outcome = server.serve(&config, &mut greeter)?;
-        launch::reap(greeter);
+        // reap() kills the compositor and calls `loginctl terminate-user` to
+        // formally close the PAM/logind greeter session.  Without this the
+        // logind session stays registered (pam_close_session is never called
+        // because the compositor was SIGKILL'd), which holds the DRM master and
+        // blocks the next session compositor from acquiring it.
+        launch::reap(greeter, greeter_uid);
 
         match outcome {
             ipc::Outcome::StartSession { user, session, env } => {

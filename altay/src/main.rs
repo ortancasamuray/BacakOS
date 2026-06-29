@@ -1261,9 +1261,17 @@ fn open_entry_real(ui: &MainWindow, state: &Rc<RefCell<AppState>>, idx: usize) {
             None => return,
         }
     };
+    // Check for an explicit MIME default *before* archive sniffing.
+    // Some archive-like containers (EPUB = ZIP, APK, …) have dedicated apps;
+    // the user's choice must win over the built-in archive browser.
+    let has_mime_default = !is_dir
+        && exo::mime_type(&path)
+            .and_then(|m| exo::default_app(&m))
+            .is_some();
+
     if is_dir {
         navigate(ui, state, &path.to_string_lossy());
-    } else if archive::Format::detect(&path).is_some() {
+    } else if !has_mime_default && archive::Format::detect(&path).is_some() {
         open_archive_view(ui, state, &path);
     } else {
         // Launch in the associated/default application (exo-utils opener,

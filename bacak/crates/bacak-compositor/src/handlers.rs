@@ -763,12 +763,16 @@ impl SeatHandler for BacakState {
         // alt+tab cycle is in progress, so cycle steps don't pollute it.
         if let Some(surface) = focused {
             if let Some(id) = self.window_for(surface) {
-                let _ = self.wm.focus(id);
-                self.focus_history.promote(id);
-                // Raising a window must not bury its transient/modal dialogs —
-                // pull any child dialogs back above it so a "Save changes?"
-                // prompt stays reachable (else the app can't be closed).
-                self.raise_child_dialogs(id);
+                // In FocusFollowsPointer mode the motion handler sets
+                // `suppress_focus_raise` so that pointer drift over an older
+                // window doesn't bury a newly-opened app (e.g. bacak-belge
+                // opened from Altay). Skip z-order raise and MRU promotion;
+                // clipboard/text-input/foreign-toplevel updates still happen.
+                if !self.suppress_focus_raise {
+                    let _ = self.wm.focus(id);
+                    self.focus_history.promote(id);
+                    self.raise_child_dialogs(id);
+                }
             }
         }
 

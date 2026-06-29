@@ -721,6 +721,12 @@ pub struct BacakState {
     /// active policy is read by the pointer event handler in `runtime.rs`.
     pub focus_policy: FocusPolicy,
 
+    /// When true, `focus_changed` updates keyboard focus metadata (clipboard,
+    /// text-input, foreign-toplevel) but skips the z-order raise (`wm.focus`)
+    /// and MRU promotion. Set by FocusFollowsPointer motion handlers so that
+    /// moving the pointer over an older window doesn't bury a newly-opened app.
+    pub suppress_focus_raise: bool,
+
     /// Stateful aggregator that fuses per-slot libinput touch events into
     /// higher-level [`crate::input::Gesture`] decisions.
     pub touch_aggregator: TouchAggregator,
@@ -798,6 +804,10 @@ pub struct BacakState {
     /// Loaded, sanitised compositor tunables (blur radius, shadow
     /// ramp, dock slot). Read by the render path.
     pub config: crate::config::CompositorConfig,
+    /// True when the compositor was launched in greeter mode (`--greeter` arg
+    /// or `BACAK_STARTUP` pointing at bacak-greeter). Plugins that belong only
+    /// in a user session (dock, overview, etc.) check this flag.
+    pub is_greeter: bool,
 
     /// Debounced session persistence: last time we wrote
     /// `session.json`, and the JSON we wrote (so a periodic save is
@@ -1394,6 +1404,7 @@ impl BacakState {
             pointer_position: (0.0, 0.0),
             cursor_status: CursorImageStatus::default_named(),
             focus_policy: FocusPolicy::default(),
+            suppress_focus_raise: false,
             touch_aggregator: TouchAggregator::new(),
             touch_arbiter: TouchArbiter::new(),
             two_finger: TwoFingerRecognizer::new(),
@@ -1408,6 +1419,10 @@ impl BacakState {
             focus_history: FocusHistory::new(),
             switcher_fade: None,
             blur_enabled: config.blur_enabled(),
+            is_greeter: std::env::args().any(|a| a == "--greeter")
+                || std::env::var("BACAK_STARTUP")
+                    .map(|v| v.contains("greeter"))
+                    .unwrap_or(false),
             config,
             last_session_save: now,
             last_session_json: String::new(),

@@ -1,0 +1,32 @@
+[package]
+name        = "bacak-resim"
+description = "Bacak OS image viewer — supports JPEG, PNG, GIF, WebP, BMP, TIFF, ICO, QOI, HDR, PNM"
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+authors.workspace    = true
+
+[[bin]]
+name = "bacak-resim"
+path = "src/main.rs"
+
+[dependencies]
+slint   = { workspace = true }
+image   = { workspace = true }
+anyhow  = { workspace = true }
+
+[build-dependencies]
+slint-build = { workspace = true }
+
+[package.metadata.deb]
+maintainer = "Bacak Desktop Project <packages@example.org>"
+copyright  = "2026, Bacak Desktop Project"
+section    = "graphics"
+priority   = "optional"
+extended-description = "Bacak OS image viewer with support for JPEG, PNG, GIF, WebP, BMP, TIFF, ICO, QOI, HDR and PNM formats."
+depends    = "$auto, libwayland-client0, libwayland-cursor0, libwayland-egl1, libxkbcommon0, libegl1, libgl1"
+assets = [
+    ["../../target/release/bacak-resim", "usr/bin/", "755"],
+    ["../../desktop/bacak-resim.desktop", "usr/share/applications/", "644"],
+    ["../../icons/hicolor/scalable/apps/image-viewer.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
+]

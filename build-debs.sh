@@ -98,6 +98,21 @@ log "=== altay derleniyor ==="
 )
 
 # ---------------------------------------------------------------------------
+# Belgeler: birleşik belge ve resim görüntüleyici
+# ---------------------------------------------------------------------------
+log "=== bacak-belge derleniyor ==="
+BELGELER_SRC="$HERE/Belgeler"
+(
+    cd "$BELGELER_SRC"
+
+    log "bacak-belge derleniyor…"
+    cargo build --release -p bacak-belge
+
+    log "bacak-belge deb oluşturuluyor"
+    cargo deb --no-build -p bacak-belge -o "$DIST"
+)
+
+# ---------------------------------------------------------------------------
 echo ""
 ok "=== Tüm paketler hazır: $DIST ==="
 ls -lh "$DIST"/*.deb

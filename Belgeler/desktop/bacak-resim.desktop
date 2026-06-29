@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Bacak Resim Gösterici
+Name[tr]=Bacak Resim Gösterici
+GenericName=Resim Görüntüleyici
+GenericName[tr]=Resim Görüntüleyici
+Comment=Resimleri görüntüleyin — JPEG, PNG, GIF, WebP, BMP, TIFF ve daha fazlası
+Comment[tr]=Resimleri görüntüleyin — JPEG, PNG, GIF, WebP, BMP, TIFF ve daha fazlası
+Exec=bacak-resim %f
+Icon=image-viewer
+MimeType=image/jpeg;image/png;image/gif;image/webp;image/bmp;image/tiff;image/x-tiff;image/ico;image/x-ico;image/x-icon;image/vnd.microsoft.icon;image/x-portable-bitmap;image/x-portable-graymap;image/x-portable-pixmap;image/x-portable-anymap;image/x-qoi;image/vnd.radiance;image/x-rgb;
+Categories=Graphics;Viewer;
+StartupNotify=true

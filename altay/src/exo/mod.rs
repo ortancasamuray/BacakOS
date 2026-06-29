@@ -292,11 +292,44 @@ pub fn mime_type(path: &Path) -> Option<String> {
 }
 
 /// The default application id for a MIME type, via `xdg-mime query default`.
+/// Falls back to built-in mappings when xdg-mime is unavailable or returns nothing.
 pub fn default_app(mime: &str) -> Option<String> {
     use std::process::Command;
-    let out = Command::new("xdg-mime").args(["query", "default", mime]).output().ok()?;
-    let id = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    (out.status.success() && !id.is_empty()).then_some(id)
+    if let Ok(out) = Command::new("xdg-mime").args(["query", "default", mime]).output() {
+        if out.status.success() {
+            let id = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !id.is_empty() {
+                return Some(id);
+            }
+        }
+    }
+    builtin_default_app(mime).map(|s| s.to_string())
+}
+
+/// Hardcoded defaults for known types — used when xdg-mime is unavailable or
+/// the user has no mimeapps.list entry.
+fn builtin_default_app(mime: &str) -> Option<&'static str> {
+    match mime {
+        "application/pdf"
+        | "application/epub+zip"
+        | "image/jpeg"
+        | "image/png"
+        | "image/gif"
+        | "image/webp"
+        | "image/bmp"
+        | "image/tiff"
+        | "image/x-tiff"
+        | "image/svg+xml"
+        | "image/x-icon"
+        | "image/vnd.microsoft.icon"
+        | "image/x-qoi"
+        | "image/vnd.radiance"
+        | "image/x-portable-bitmap"
+        | "image/x-portable-graymap"
+        | "image/x-portable-pixmap"
+        | "image/x-portable-anymap" => Some("bacak-belge.desktop"),
+        _ => None,
+    }
 }
 
 /// Applications that can open `path`, with the default (if any) listed first.
@@ -430,11 +463,18 @@ fn mime_from_extension(path: &Path) -> Option<String> {
         "txt" | "log" | "md" => "text/plain",
         "html" | "htm" => "text/html",
         "pdf" => "application/pdf",
+        "epub" => "application/epub+zip",
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
         "gif" => "image/gif",
         "svg" => "image/svg+xml",
         "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "tiff" | "tif" => "image/tiff",
+        "ico" => "image/x-icon",
+        "qoi" => "image/x-qoi",
+        "hdr" => "image/vnd.radiance",
+        "pbm" | "pgm" | "ppm" | "pnm" => "image/x-portable-pixmap",
         "mp3" => "audio/mpeg",
         "flac" => "audio/flac",
         "ogg" => "audio/ogg",
