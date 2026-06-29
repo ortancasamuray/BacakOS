@@ -9,25 +9,31 @@ slint::include_modules!();
 // ── Annotation / drawing ───────────────────────────────────────────────────
 
 struct AnnotationState {
-    base_buf:    Vec<u8>,   // rendered completed strokes (RGBA)
-    composite:   Vec<u8>,   // base_buf + current stroke in progress
-    last_pt:     Option<(f32, f32)>,
-    pen_color:   [u8; 4],
-    pen_radius:  f32,
-    canvas_w:    u32,
-    canvas_h:    u32,
+    base_buf:     Vec<u8>,  // completed strokes (RGBA)
+    composite:    Vec<u8>,  // base_buf + current stroke preview
+    stroke_buf:   Vec<u8>,  // current marker stroke at full opacity
+    last_pt:      Option<(f32, f32)>,
+    pen_color:    [u8; 4],  // RGB + alpha (220 pen / 255 marker)
+    pen_radius:   f32,
+    is_marker:    bool,
+    marker_alpha: u8,       // layer opacity for marker strokes
+    canvas_w:     u32,
+    canvas_h:     u32,
 }
 
 impl AnnotationState {
     fn new() -> Self {
         Self {
-            base_buf:   Vec::new(),
-            composite:  Vec::new(),
-            last_pt:    None,
-            pen_color:  [255, 68, 68, 220],
-            pen_radius: 3.5,
-            canvas_w:   0,
-            canvas_h:   0,
+            base_buf:     Vec::new(),
+            composite:    Vec::new(),
+            stroke_buf:   Vec::new(),
+            last_pt:      None,
+            pen_color:    [255, 68, 68, 220],
+            pen_radius:   3.5,
+            is_marker:    false,
+            marker_alpha: 110,
+            canvas_w:     0,
+            canvas_h:     0,
         }
     }
 
@@ -38,6 +44,7 @@ impl AnnotationState {
             self.canvas_h = h;
             self.base_buf.resize(need, 0);
             self.composite.resize(need, 0);
+            self.stroke_buf.resize(need, 0);
         }
     }
 
@@ -79,6 +86,19 @@ fn stamp_circle(buf: &mut [u8], w: u32, h: u32, cx: f32, cy: f32, r: f32, color:
     }
 }
 
+/// Composite a full-opacity stroke layer onto dst at reduced opacity (for marker tool).
+/// Prevents alpha accumulation within a single stroke — uniform transparency across the whole path.
+fn blend_layer(dst: &mut [u8], src: &[u8], alpha: u8) {
+    let npix = dst.len() / 4;
+    for i in 0..npix {
+        let si = i * 4;
+        let src_a = src[si + 3];
+        if src_a == 0 { continue; }
+        let eff_a = (src_a as u32 * alpha as u32 / 255) as u8;
+        alpha_blend(dst, si, [src[si], src[si + 1], src[si + 2], eff_a], 1.0);
+    }
+}
+
 fn draw_segment(buf: &mut [u8], w: u32, h: u32, p0: (f32, f32), p1: (f32, f32), r: f32, color: [u8; 4]) {
     let dx = p1.0 - p0.0;
     let dy = p1.1 - p0.1;
@@ -91,10 +111,21 @@ fn draw_segment(buf: &mut [u8], w: u32, h: u32, p0: (f32, f32), p1: (f32, f32), 
 }
 
 fn bind_annotations(ui: &AppWindow, annot: Rc<RefCell<AnnotationState>>) {
+    // set-tool: "pen" or "marker"; clicking the active tool toggles draw-mode off
     let ui_h = ui.as_weak();
-    ui.on_toggle_draw(move || {
-        if let Some(ui) = ui_h.upgrade() {
-            ui.set_draw_mode(!ui.get_draw_mode());
+    let a1 = annot.clone();
+    ui.on_set_tool(move |tool| {
+        let Some(ui) = ui_h.upgrade() else { return };
+        let same = ui.get_draw_mode() && ui.get_active_tool().as_str() == tool.as_str();
+        if same {
+            ui.set_draw_mode(false);
+        } else {
+            ui.set_active_tool(tool.clone());
+            ui.set_draw_mode(true);
+            let mut st = a1.borrow_mut();
+            st.is_marker = tool.as_str() == "marker";
+            st.pen_radius = if st.is_marker { 12.0 } else { 3.5 };
+            st.pen_color[3] = if st.is_marker { 255 } else { 220 };
         }
     });
 
@@ -102,7 +133,8 @@ fn bind_annotations(ui: &AppWindow, annot: Rc<RefCell<AnnotationState>>) {
     let a2 = annot.clone();
     ui.on_pick_color(move |color| {
         let mut st = a2.borrow_mut();
-        st.pen_color = [color.red(), color.green(), color.blue(), 220];
+        let alpha = if st.is_marker { 255 } else { 220 };
+        st.pen_color = [color.red(), color.green(), color.blue(), alpha];
         if let Some(ui) = ui_h.upgrade() {
             ui.set_pen_color(color);
         }
@@ -117,11 +149,23 @@ fn bind_annotations(ui: &AppWindow, annot: Rc<RefCell<AnnotationState>>) {
         if w == 0 || h == 0 { return; }
         let mut st = a3.borrow_mut();
         st.ensure_sized(w, h);
-        let base = st.base_buf.clone();
-        st.composite.copy_from_slice(&base);
-        let r = st.pen_radius;
-        let c = st.pen_color;
-        stamp_circle(&mut st.composite, w, h, x, y, r, c);
+        if st.is_marker {
+            st.stroke_buf.fill(0);
+            let c = st.pen_color;
+            let r = st.pen_radius;
+            stamp_circle(&mut st.stroke_buf, w, h, x, y, r, c);
+            let base = st.base_buf.clone();
+            st.composite.copy_from_slice(&base);
+            let ma = st.marker_alpha;
+            let sb = st.stroke_buf.clone();
+            blend_layer(&mut st.composite, &sb, ma);
+        } else {
+            let base = st.base_buf.clone();
+            st.composite.copy_from_slice(&base);
+            let r = st.pen_radius;
+            let c = st.pen_color;
+            stamp_circle(&mut st.composite, w, h, x, y, r, c);
+        }
         st.last_pt = Some((x, y));
         drop(st);
         let img = a3.borrow().to_image();
@@ -143,7 +187,16 @@ fn bind_annotations(ui: &AppWindow, annot: Rc<RefCell<AnnotationState>>) {
             let mut st = a4.borrow_mut();
             let r = st.pen_radius;
             let c = st.pen_color;
-            draw_segment(&mut st.composite, w, h, prev, (x, y), r, c);
+            if st.is_marker {
+                draw_segment(&mut st.stroke_buf, w, h, prev, (x, y), r, c);
+                let base = st.base_buf.clone();
+                st.composite.copy_from_slice(&base);
+                let ma = st.marker_alpha;
+                let sb = st.stroke_buf.clone();
+                blend_layer(&mut st.composite, &sb, ma);
+            } else {
+                draw_segment(&mut st.composite, w, h, prev, (x, y), r, c);
+            }
             st.last_pt = Some((x, y));
         }
         let img = a4.borrow().to_image();
@@ -153,8 +206,18 @@ fn bind_annotations(ui: &AppWindow, annot: Rc<RefCell<AnnotationState>>) {
     let a5 = annot.clone();
     ui.on_draw_end(move || {
         let mut st = a5.borrow_mut();
-        let comp = st.composite.clone();
-        st.base_buf.copy_from_slice(&comp);
+        if st.is_marker {
+            // Commit the marker stroke onto base at reduced opacity
+            let ma = st.marker_alpha;
+            let sb = st.stroke_buf.clone();
+            blend_layer(&mut st.base_buf, &sb, ma);
+            st.stroke_buf.fill(0);
+            let base = st.base_buf.clone();
+            st.composite.copy_from_slice(&base);
+        } else {
+            let comp = st.composite.clone();
+            st.base_buf.copy_from_slice(&comp);
+        }
         st.last_pt = None;
     });
 
@@ -164,6 +227,7 @@ fn bind_annotations(ui: &AppWindow, annot: Rc<RefCell<AnnotationState>>) {
         let mut st = a6.borrow_mut();
         st.base_buf.fill(0);
         st.composite.fill(0);
+        st.stroke_buf.fill(0);
         st.last_pt = None;
         if let Some(ui) = ui_h.upgrade() {
             ui.set_annotation_layer(Image::default());
@@ -172,7 +236,7 @@ fn bind_annotations(ui: &AppWindow, annot: Rc<RefCell<AnnotationState>>) {
 }
 
 fn bind_annotations_noop(ui: &AppWindow) {
-    ui.on_toggle_draw(|| {});
+    ui.on_set_tool(|_| {});
     ui.on_pick_color(|_| {});
     ui.on_draw_start(|_, _| {});
     ui.on_draw_move(|_, _| {});
