@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <!-- document body -->
+  <rect x="8" y="4" width="38" height="50" rx="4" fill="#e8e8e8"/>
+  <!-- folded corner -->
+  <path d="M38 4 L46 12 L38 12 Z" fill="#c0c0c0"/>
+  <rect x="38" y="4" width="8" height="8" rx="0" fill="#c8c8c8"/>
+  <!-- red PDF badge -->
+  <rect x="6" y="36" width="36" height="16" rx="3" fill="#cc2222"/>
+  <!-- PDF text -->
+  <text x="24" y="49" font-family="sans-serif" font-weight="bold" font-size="11" fill="white" text-anchor="middle">PDF</text>
+</svg>

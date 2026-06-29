@@ -1,0 +1,101 @@
+import { Button, HorizontalBox, VerticalBox } from "std-widgets.slint";
+
+export component AppWindow inherits Window {
+    title: "Bacak PDF Okuyucu";
+    min-width: 480px;
+    min-height: 640px;
+    background: #404040;
+
+    in property <image>  page-image;
+    in property <string> filename: "";
+    in property <int>    page-num: 1;
+    in property <int>    page-count: 0;
+    in property <float>  zoom: 1.0;
+    in property <bool>   loading: false;
+
+    callback prev-page();
+    callback next-page();
+    callback zoom-in();
+    callback zoom-out();
+    callback fit-width();
+    callback goto-page(int);
+
+    VerticalBox {
+        padding: 0px;
+        spacing: 0px;
+
+        // Toolbar
+        Rectangle {
+            height: 48px;
+            background: #1e1e2e;
+
+            HorizontalBox {
+                padding: 8px;
+                spacing: 6px;
+                alignment: center;
+
+                Button { text: "◀"; width: 36px; clicked => { prev-page(); } }
+                Text {
+                    text: page-num + " / " + page-count;
+                    color: #cccccc;
+                    font-size: 13px;
+                    vertical-alignment: center;
+                    min-width: 70px;
+                    horizontal-alignment: center;
+                }
+                Button { text: "▶"; width: 36px; clicked => { next-page(); } }
+                Rectangle { width: 8px; }
+                Button { text: "−";  width: 36px; clicked => { zoom-out(); } }
+                Text {
+                    text: Math.round(zoom * 100) + "%";
+                    color: #aaaaaa;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                    min-width: 46px;
+                    horizontal-alignment: center;
+                }
+                Button { text: "+";  width: 36px; clicked => { zoom-in(); } }
+                Button { text: "⊡";  width: 36px; clicked => { fit-width(); } }
+                Rectangle { horizontal-stretch: 1; }
+                Text {
+                    text: filename;
+                    color: #999999;
+                    font-size: 12px;
+                    overflow: elide;
+                    max-width: 260px;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // Page area
+        Rectangle {
+            vertical-stretch: 1;
+            background: #404040;
+            clip: true;
+
+            if !loading && page-image.width > 0: Rectangle {
+                background: #ffffff;
+                width:  page-image.width  * 1px * zoom;
+                height: page-image.height * 1px * zoom;
+                x: (parent.width  - self.width)  / 2;
+                y: max(8px, (parent.height - self.height) / 2);
+
+                Image {
+                    source: page-image;
+                    width:  parent.width;
+                    height: parent.height;
+                    image-fit: fill;
+                }
+            }
+
+            if loading: Text {
+                text: "Yükleniyor…";
+                color: #aaaaaa;
+                font-size: 16px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+    }
+}

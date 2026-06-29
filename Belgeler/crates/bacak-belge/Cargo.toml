@@ -1,0 +1,34 @@
+[package]
+name        = "bacak-belge"
+description = "Bacak OS belge ve resim görüntüleyici — PDF, EPUB, resim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "bacak-belge"
+path = "src/main.rs"
+
+[dependencies]
+slint  = { workspace = true }
+anyhow = { workspace = true }
+image  = { workspace = true }
+mupdf  = "0.4"
+epub   = "2"
+
+[build-dependencies]
+slint-build = { workspace = true }
+
+[package.metadata.deb]
+maintainer = "Bacak Desktop Project <packages@example.org>"
+copyright  = "2026, Bacak Desktop Project"
+section    = "utils"
+priority   = "optional"
+extended-description = "Bacak OS birleşik belge ve resim görüntüleyici. PDF (MuPDF), EPUB ve JPEG/PNG/GIF/WebP/BMP/TIFF/ICO/QOI formatlarını destekler."
+depends    = "$auto, libwayland-client0, libwayland-cursor0, libwayland-egl1, libxkbcommon0, libegl1, libgl1, libmupdf25.1"
+assets = [
+    ["../../target/release/bacak-belge", "usr/bin/", "755"],
+    ["../../desktop/bacak-belge.desktop", "usr/share/applications/", "644"],
+    ["../../icons/hicolor/scalable/apps/bacak-belge.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
+]

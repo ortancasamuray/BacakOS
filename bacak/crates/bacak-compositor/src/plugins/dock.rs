@@ -103,7 +103,7 @@ impl Plugin for DockPlugin {
     }
 
     fn enabled(&self, state: &BacakState) -> bool {
-        state.config.dock
+        !state.is_greeter && state.config.dock
     }
 
     fn on_pointer_press(&self, ctx: &mut PluginCtx, gx: f64, gy: f64) -> bool {

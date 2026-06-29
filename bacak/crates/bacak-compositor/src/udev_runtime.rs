@@ -206,6 +206,9 @@ struct LoopData {
     config_watch: Option<ConfigWatcher>,
     /// Calloop signal — used to break the main loop on fatal errors.
     signal: LoopSignal,
+    /// `$BACAK_STARTUP` client spawned once after the first event-loop tick,
+    /// when the Wayland socket is actively dispatching connections.
+    startup_spawned: bool,
 }
 
 impl LoopData {
@@ -403,9 +406,6 @@ pub fn run() -> Result<()> {
     // by our own launcher) see the socket. DISPLAY is exported later, once
     // XWayland is ready. See launcher::export_to_session.
     crate::launcher::export_to_session(&["WAYLAND_DISPLAY"]);
-    // Hand off to the session manager's startup client ($BACAK_STARTUP), e.g.
-    // the BDM greeter, now that the Wayland socket is live.
-    crate::launcher::spawn_startup();
 
     // ---- 9. libinput pump ----------------------------------------------
     let mut libinput =
@@ -533,6 +533,7 @@ pub fn run() -> Result<()> {
         blur_attempted: false,
         config_watch,
         signal,
+        startup_spawned: false,
     };
 
     register_sources(
@@ -612,6 +613,16 @@ pub fn run() -> Result<()> {
         drain_security_listeners(&event_loop.handle(), &mut loop_data);
         loop_data.display.dispatch_clients(&mut loop_data.state)?;
         loop_data.display.flush_clients()?;
+
+        // Spawn the session startup client ($BACAK_STARTUP, e.g. the BDM greeter)
+        // on the first loop iteration, after the display has dispatched at least one
+        // round of Wayland messages. Spawning before the event loop starts causes the
+        // greeter to connect before the compositor is ready to respond, leading to a
+        // winit handshake timeout and Exit Failure: 1.
+        if !loop_data.startup_spawned {
+            loop_data.startup_spawned = true;
+            crate::launcher::spawn_startup();
+        }
 
         maybe_reload_config(&mut loop_data);
 
@@ -826,7 +837,7 @@ fn open_drm_with_retry(
             }) {
             Ok(acquired) => {
                 if attempt > 1 {
-                    info!(attempt, "acquired DRM master after transient contention");
+                    info!(attempt, "acquired DRM device after transient contention");
                 }
                 return Ok(acquired);
             }
@@ -835,7 +846,7 @@ fn open_drm_with_retry(
                     attempt,
                     max = ATTEMPTS,
                     error = %e,
-                    "DRM master unavailable (held by another process?); retrying"
+                    "DRM device unavailable; retrying"
                 );
                 // Identify the blocker once (not on every retry).
                 if attempt == 1 {
@@ -846,7 +857,7 @@ fn open_drm_with_retry(
             }
         }
     }
-    Err(last_err.context("DRM master still unavailable after retrying"))
+    Err(last_err.context("DRM device still unavailable after retrying"))
 }
 
 /// Wait until our libseat session is the active one on the seat (so we hold the
@@ -2523,7 +2534,9 @@ fn forward_libinput_event(
             data.pointer.frame(&mut data.state);
 
             if data.state.focus_policy == FocusPolicy::FocusFollowsPointer {
+                data.state.suppress_focus_raise = true;
                 data.keyboard.set_focus(&mut data.state, focus_target, serial);
+                data.state.suppress_focus_raise = false;
             }
             for t in data.targets.iter_mut() {
                 t.needs_redraw = true;
@@ -2583,7 +2596,9 @@ fn forward_libinput_event(
             data.pointer.frame(&mut data.state);
 
             if data.state.focus_policy == FocusPolicy::FocusFollowsPointer {
+                data.state.suppress_focus_raise = true;
                 data.keyboard.set_focus(&mut data.state, focus_target, serial);
+                data.state.suppress_focus_raise = false;
             }
             // Pointer movement isn't a per-output redraw signal — the
             // cursor lives on the cursor plane. We still wake every

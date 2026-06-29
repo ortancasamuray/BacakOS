@@ -17,6 +17,12 @@
 use std::io::Read;
 use std::process::{Command, Stdio};
 
+// Absolute paths for tools that live in /usr/sbin — the compositor's PATH
+// (/usr/local/bin:/usr/bin:/bin) does not include /usr/sbin.
+const IP:             &str = "/usr/sbin/ip";
+const WPA_CLI:        &str = "/usr/sbin/wpa_cli";
+const WPA_SUPPLICANT: &str = "/usr/sbin/wpa_supplicant";
+
 // IMPORTANT: the compositor installs `SIGCHLD = SIG_IGN` (see `launcher.rs`),
 // so the kernel auto-reaps children and any `wait()` on them fails with
 // `ECHILD`. That means `Command::status()`/`output()` — which `wait()`
@@ -90,7 +96,7 @@ pub fn wifi_enabled() -> bool {
 pub fn set_wifi(on: bool) {
     let Some(dev) = wifi_device_sysfs() else { return };
     if on {
-        run_ok("ip", &["link", "set", &dev, "up"]);
+        run_ok(IP, &["link", "set", &dev, "up"]);
         // Start wpa_supplicant daemon for this interface if not already running.
         let socket = format!("{WPA_CTRL}/{dev}");
         if !std::path::Path::new(&socket).exists() {
@@ -102,7 +108,7 @@ pub fn set_wifi(on: bool) {
                 );
             }
             run_ok(
-                "wpa_supplicant",
+                WPA_SUPPLICANT,
                 &["-B", "-i", &dev, "-c", conf, "-P", &format!("/tmp/wpa_{dev}.pid")],
             );
         }
@@ -114,7 +120,7 @@ pub fn set_wifi(on: bool) {
                 run_ok("kill", &[&pid.to_string()]);
             }
         }
-        run_ok("ip", &["link", "set", &dev, "down"]);
+        run_ok(IP, &["link", "set", &dev, "down"]);
     }
 }
 
@@ -131,7 +137,7 @@ fn wpa_cli(dev: &str, args: &[&str]) -> Option<String> {
     }
     let mut full: Vec<&str> = vec!["-i", dev, "-p", WPA_CTRL];
     full.extend_from_slice(args);
-    capture("wpa_cli", &full)
+    capture(WPA_CLI, &full)
 }
 
 /// SSID of the currently-associated Wi-Fi network, if any.
@@ -314,7 +320,7 @@ pub fn ethernet_link_up() -> bool {
 /// Bring the Ethernet link up or down via `ip link set`.
 pub fn ethernet_set_link(on: bool) {
     if let Some(dev) = eth_device_sysfs() {
-        run_ok("ip", &["link", "set", &dev, if on { "up" } else { "down" }]);
+        run_ok(IP, &["link", "set", &dev, if on { "up" } else { "down" }]);
     }
 }
 
@@ -335,7 +341,7 @@ pub fn wifi_details() -> Option<WifiDetails> {
 
     let mut ipv4 = String::new();
     let mut ipv6 = String::new();
-    if let Some(a) = capture("ip", &["addr", "show", &dev]) {
+    if let Some(a) = capture(IP, &["addr", "show", &dev]) {
         for line in a.lines() {
             let t = line.trim();
             if t.starts_with("inet ") && ipv4.is_empty() {
@@ -347,7 +353,7 @@ pub fn wifi_details() -> Option<WifiDetails> {
     }
 
     let mut gateway = String::new();
-    if let Some(r) = capture("ip", &["route", "show", "default", "dev", &dev]) {
+    if let Some(r) = capture(IP, &["route", "show", "default", "dev", &dev]) {
         for line in r.lines() {
             let mut p = line.split_whitespace();
             if p.next() == Some("default") && p.next() == Some("via") {
@@ -390,7 +396,7 @@ pub fn ethernet_details() -> Option<WifiDetails> {
 
     let mut ipv4 = String::new();
     let mut ipv6 = String::new();
-    if let Some(out) = capture("ip", &["addr", "show", &dev]) {
+    if let Some(out) = capture(IP, &["addr", "show", &dev]) {
         for line in out.lines() {
             let line = line.trim();
             if line.starts_with("inet ") && ipv4.is_empty() {
@@ -406,7 +412,7 @@ pub fn ethernet_details() -> Option<WifiDetails> {
     }
 
     let mut gateway = String::new();
-    if let Some(out) = capture("ip", &["route", "show", "default", "dev", &dev]) {
+    if let Some(out) = capture(IP, &["route", "show", "default", "dev", &dev]) {
         for line in out.lines() {
             let mut parts = line.split_whitespace();
             if parts.next() == Some("default") && parts.next() == Some("via") {
@@ -469,9 +475,9 @@ pub fn wifi_set_dhcp(_conn: &str) -> bool {
 /// Switch to static IP via `ip addr` + `ip route`. Returns true if commands spawned.
 pub fn wifi_set_static(_conn: &str, ip_prefix: &str, gateway: &str, _dns: &str) -> bool {
     let Some(dev) = wifi_device_sysfs() else { return false };
-    run_ok("ip", &["addr", "add", ip_prefix, "dev", &dev]);
+    run_ok(IP, &["addr", "add", ip_prefix, "dev", &dev]);
     if !gateway.is_empty() {
-        run_ok("ip", &["route", "replace", "default", "via", gateway, "dev", &dev]);
+        run_ok(IP, &["route", "replace", "default", "via", gateway, "dev", &dev]);
     }
     true
 }

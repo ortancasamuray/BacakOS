@@ -669,7 +669,11 @@ fn forward_input(
                 // set_focus is idempotent — Smithay dedupes leave/enter
                 // events when the target is unchanged, so calling it on
                 // every motion is cheap.
+                // suppress_focus_raise: pointer drift must not bury a
+                // newly-opened window (e.g. bacak-belge opened from Altay).
+                state.suppress_focus_raise = true;
                 keyboard.set_focus(state, focus_target, serial);
+                state.suppress_focus_raise = false;
             }
         }
 

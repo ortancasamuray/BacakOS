@@ -44,9 +44,11 @@ and SDDM. The greeter runs fully unprivileged; only the daemon core runs as root
 Touchscreen-friendly, multi-user, with PAM authentication and systemd/logind
 integration."""
 # dpkg-shlibdeps fills $auto from the linked libraries (libc, libpam, …).
-depends = "$auto, systemd, libpam-modules, dbus, adduser"
-# weston is the prototype compositor shipped as /usr/bin/bacak-compositor.
-recommends = "weston, dbus-user-session"
+# libpam-runtime: needed for PAM module chain (common-auth etc.) to resolve.
+# bacak-compositor: spawned for every greeter and user session.
+# dbus-user-session: required for per-user D-Bus session bus in compositor sessions.
+depends = "$auto, systemd, libpam-modules, libpam-runtime, dbus, dbus-user-session, adduser, bacak-compositor (>= 0.1.0)"
+recommends = "polkit | policykit-1"
 # Display managers coexist (only one is active via display-manager.service), so
 # we do NOT Conflict with gdm3/sddm/lightdm — that would force their removal on
 # install and could lock the user out. Selection is via `bacak-dm-setup enable`.
