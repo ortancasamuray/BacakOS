@@ -2805,10 +2805,10 @@ fn forward_libinput_event(
                 }
                 return;
             }
-            // Feed the aggregator first, then arbitrate: one free finger goes
-            // to the client (tap / drag); the second finger claims the whole
-            // sequence as a compositor gesture and cancels the client's touch,
-            // so a 3-finger swipe no longer rains touch points on the app.
+            // Feed the aggregator first, then arbitrate: one or two free fingers
+            // go to the client (tap / drag / pinch); the third finger claims the
+            // whole sequence as a compositor gesture (workspace swipe / overview)
+            // and cancels the client's touch so it sees no further events.
             data.state.touch_aggregator.down(slot, tx, ty, event.time() / 1000);
             // Feed the two-finger window-gesture recogniser every down so it has
             // both fingers' positions when the second lands (it acts only at
@@ -2938,10 +2938,10 @@ fn forward_libinput_event(
                 data.pointer.frame(&mut data.state);
                 return;
             }
-            // Gesture sequences bypass the client (see the down arbitration).
+            // Gesture sequences (3+ fingers) bypass the client (see the down arbitration).
             if data.state.touch_arbiter.is_gesture() {
-                // Two fingers move the window under the centroid; 3-/4-finger
-                // workspace/overview swipes are classified at touch-up instead.
+                // 3-/4-finger workspace/overview swipes are classified at touch-up.
+                // two_finger_motion feeds its recognizer for any secondary overlap.
                 if data.state.two_finger_motion(slot, tx, ty) {
                     for t in data.targets.iter_mut() {
                         t.needs_redraw = true;
