@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Bacak EPUB Okuyucu
+Name[tr]=Bacak EPUB Okuyucu
+GenericName=E-Kitap Okuyucu
+GenericName[tr]=E-Kitap Okuyucu
+Comment=EPUB e-kitaplarını okuyun
+Comment[tr]=EPUB e-kitaplarını okuyun
+Exec=bacak-epub %f
+Icon=application-epub
+MimeType=application/epub+zip;
+Categories=Office;Viewer;
+StartupNotify=true

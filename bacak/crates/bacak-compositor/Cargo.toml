@@ -116,7 +116,9 @@ udev/DRM/KMS native backend (production). Required by bacak-display-manager
 to host the greeter and user sessions."""
 # $auto resolves libgbm1, libseat1, libinput10, libdrm2, libxkbcommon0,
 # libudev1, libsystemd0, libgudev-1.0-0, libwacom9, libcap2, libevdev2 …
-depends = "$auto, xkb-data, fonts-dejavu-core | fonts-dejavu"
+# libegl1 + libgl1-mesa-dri are dlopen'd by Mesa at runtime (not in ldd).
+# xwayland is spawned by the compositor for X11 application support.
+depends = "$auto, xkb-data, fonts-dejavu-core | fonts-dejavu, libegl1, libgl1-mesa-dri, xwayland"
 recommends = "bacak-display-manager"
 # bacak (<= 0.1.0) shipped /usr/bin/bacak-compositor; this package takes it over.
 replaces = "bacak (<= 0.1.0)"

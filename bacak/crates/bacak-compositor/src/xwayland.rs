@@ -37,7 +37,7 @@ use smithay::wayland::selection::primary_selection::{
     request_primary_client_selection, set_primary_selection,
 };
 use smithay::wayland::selection::SelectionTarget;
-use smithay::xwayland::xwm::{Reorder, ResizeEdge, XwmId};
+use smithay::xwayland::xwm::{Reorder, ResizeEdge, WmWindowType, XwmId};
 use smithay::xwayland::{X11Surface, X11Wm, XwmHandler};
 
 use crate::state::BacakState;
@@ -265,7 +265,10 @@ impl BacakState {
         // another mapped window, record child→parent so it stays stacked above
         // it (see `raise_child_dialogs`) — otherwise an X11 app's "Save
         // changes?" prompt hides behind its window and the app can't be closed.
+        // Also catches dialogs that set _NET_WM_WINDOW_TYPE_DIALOG without
+        // WM_TRANSIENT_FOR (LibreOffice warning dialogs do this).
         // Mirrors the xdg_toplevel `set_parent` path in `new_toplevel`.
+        let is_dialog = matches!(surface.window_type(), Some(WmWindowType::Dialog));
         if let Some(parent_xid) = surface.is_transient_for() {
             if let Some(parent_id) = self
                 .x11_windows
@@ -273,7 +276,14 @@ impl BacakState {
                 .find_map(|(wid, s)| (s.window_id() == parent_xid).then_some(*wid))
             {
                 self.dialog_parent.insert(id, parent_id);
+                // Raise immediately so the dialog appears above its parent on map.
+                let _ = self.wm.raise(id);
+                self.raise_child_dialogs(parent_id);
             }
+        } else if is_dialog {
+            // No explicit parent: raise above all other windows so the dialog
+            // is reachable (LibreOffice startup warnings fall into this case).
+            let _ = self.wm.raise(id);
         }
         // X11 has no CSD concept: the WM decorates by default; a window opts
         // out via `_MOTIF_WM_HINTS` (borderless / draws-its-own). Note Smithay's

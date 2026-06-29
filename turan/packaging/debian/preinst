@@ -11,6 +11,14 @@ case "$1" in
                     --shell /usr/sbin/nologin \
                     bacak-greeter
         fi
+        # Grant DRM/GPU access so the greeter compositor can open render nodes
+        # and the kernel will honour SET_MASTER on the logind-granted fd.
+        if getent group video >/dev/null; then
+            adduser bacak-greeter video 2>/dev/null || true
+        fi
+        if getent group render >/dev/null; then
+            adduser bacak-greeter render 2>/dev/null || true
+        fi
         ;;
 esac
 

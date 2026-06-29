@@ -19,12 +19,33 @@ case "$1" in
                 /usr/bin/bacak-display-manager 60 || true
         fi
 
+        # Compositor seç: gerçek bacak-compositor yoksa weston sarmalayıcısını kullan.
+        WESTON_WRAPPER="/usr/share/bacak-display-manager/bacak-compositor-weston"
+        CONF="/etc/bacak-display-manager.conf"
+        if ! command -v bacak-compositor >/dev/null 2>&1; then
+            if [ -x "$WESTON_WRAPPER" ] && [ -f "$CONF" ]; then
+                sed -i "s|^compositor[[:space:]]*=.*|compositor   = \"$WESTON_WRAPPER\"|" "$CONF"
+                echo "BDM: bacak-compositor bulunamadı, weston sarmalayıcısı kullanılıyor." >&2
+            fi
+        else
+            if [ -f "$CONF" ]; then
+                sed -i "s|^compositor[[:space:]]*=.*|compositor   = \"/usr/bin/bacak-compositor\"|" "$CONF"
+            fi
+        fi
+
         if [ -d /run/systemd/system ]; then
             systemctl daemon-reload || true
-            # Do NOT auto-start: switching the active display manager is the
-            # admin's decision (it conflicts with any running DM). Enable with:
-            #   systemctl enable --now bacak-display-manager
-            echo "BDM installed. Enable it with: systemctl enable --now bacak-display-manager" >&2
+
+            # Mevcut aktif display manager'ı devre dışı bırak ve BDM'i etkinleştir.
+            PREV_DM_FILE="/var/lib/bacak-display-manager/previous-dm"
+            current_dm="$(basename "$(readlink -f /etc/systemd/system/display-manager.service 2>/dev/null)" .service 2>/dev/null || true)"
+            if [ -n "$current_dm" ] && [ "$current_dm" != "bacak-display-manager" ]; then
+                echo "$current_dm" > "$PREV_DM_FILE"
+                systemctl disable "$current_dm.service" 2>/dev/null || true
+            fi
+
+            systemctl enable bacak-display-manager.service 2>/dev/null || true
+            systemctl start bacak-display-manager.service 2>/dev/null || true
         fi
         ;;
 esac

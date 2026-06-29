@@ -152,7 +152,8 @@ fn child_drop_privileges(uid: u32, gid: u32) -> std::io::Result<()> {
 }
 
 /// Launch the unprivileged greeter on the compositor.
-pub fn spawn_greeter(config: &Config) -> Result<Child, Box<dyn std::error::Error>> {
+/// Returns `(child, greeter_uid)` so the caller can pass the uid to `reap`.
+pub fn spawn_greeter(config: &Config) -> Result<(Child, u32), Box<dyn std::error::Error>> {
     let (uid, gid) = seat::greeter_ids(config)?;
     let runtime_dir = seat::xdg_runtime_dir(uid);
     let _ = std::fs::create_dir_all(&runtime_dir);
@@ -180,10 +181,10 @@ pub fn spawn_greeter(config: &Config) -> Result<Child, Box<dyn std::error::Error
         .env("XDG_SESSION_TYPE", "wayland")
         .env("BDM_GREETER_SOCKET", &config.daemon.ipc_socket)
         .env("PATH", "/usr/local/bin:/usr/bin:/bin")
-        // Surface the compositor's own info logs in the journal (seat/GPU/
-        // startup) without the renderer's verbose GL spam. Harmless for
-        // compositors that ignore RUST_LOG.
-        .env("RUST_LOG", "bacak_compositor=info")
+        // Surface the compositor's own info logs plus smithay's DRM/seat
+        // warnings in the journal. Suppresses verbose GL spam from the
+        // renderer. Harmless for compositors that ignore RUST_LOG.
+        .env("RUST_LOG", "bacak_compositor=info,smithay::backend::drm=warn,smithay::backend::session=info")
         // Launch contract understood by both compositors: the real
         // `bacak-compositor` reads `$BACAK_STARTUP` and hosts it once its Wayland
         // socket is up; the weston prototype wrapper reads `--greeter`. Both
@@ -249,7 +250,7 @@ pub fn spawn_greeter(config: &Config) -> Result<Child, Box<dyn std::error::Error
     // so its PGID equals this PID. Record it so the signal handler and `reap`
     // can tear down the whole group, not just the compositor process.
     COMPOSITOR_PGID.store(child.id() as i32, Ordering::SeqCst);
-    Ok(child)
+    Ok((child, uid))
 }
 
 /// Tear down the greeter compositor and its entire session group — the greeter
@@ -257,7 +258,13 @@ pub fn spawn_greeter(config: &Config) -> Result<Child, Box<dyn std::error::Error
 /// DRM master. The compositor `setsid`s into its own group, so `killpg` here
 /// targets that group only, never the daemon's. `child.kill()` is a belt-and-
 /// braces guarantee on the compositor PID itself.
-pub fn reap(mut child: Child) {
+///
+/// After killing processes, `loginctl terminate-user` is called to formally
+/// close the greeter's PAM/logind session. Without this, pam_open_session
+/// stays open (pam_close_session is never called because the child was
+/// SIGKILL'd), logind keeps the seat taken and the next session compositor
+/// can't acquire DRM master.
+pub fn reap(mut child: Child, greeter_uid: u32) {
     let pgid = nix::unistd::Pid::from_raw(child.id() as i32);
     use nix::sys::signal::{killpg, Signal};
 
@@ -274,6 +281,15 @@ pub fn reap(mut child: Child) {
     let _ = child.kill();
     let _ = child.wait();
     COMPOSITOR_PGID.store(0, Ordering::SeqCst);
+
+    // Force-close the greeter's logind session so DRM master is released
+    // before the next compositor starts. pam_close_session is never called
+    // (the compositor was killed, not gracefully shut down), so logind keeps
+    // the session registered and holds DRM master on behalf of it.
+    let uid_str = greeter_uid.to_string();
+    let _ = std::process::Command::new("loginctl")
+        .args(["terminate-user", &uid_str])
+        .status();
 }
 
 /// Run a user session: drop to the user, set up the environment, exec the
