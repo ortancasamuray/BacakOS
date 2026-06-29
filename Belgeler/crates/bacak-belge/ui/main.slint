@@ -1,5 +1,20 @@
 import { Button, HorizontalBox, VerticalBox, ScrollView } from "std-widgets.slint";
 
+component ColorSwatch inherits Rectangle {
+    in property <color> swatch-color;
+    in property <bool>  selected: false;
+    callback picked(color);
+
+    width: 22px;
+    height: 22px;
+    background: swatch-color;
+    border-radius: 3px;
+    border-color: selected ? #ffffff : #55555588;
+    border-width: selected ? 2.5px : 1px;
+
+    TouchArea { clicked => { root.picked(root.swatch-color); } }
+}
+
 export component AppWindow inherits Window {
     title: "Bacak Belge Görüntüleyici";
     min-width: 520px;
@@ -30,16 +45,28 @@ export component AppWindow inherits Window {
     in property <bool>    has-prev: false;
     in property <bool>    has-next: false;
 
-    callback prev-action();   // PDF: prev page  / EPUB: prev chapter / image: prev file
-    callback next-action();   // PDF: next page  / EPUB: next chapter / image: next file
+    // Draw / annotation
+    in-out property <bool>  draw-mode: false;
+    in property <color>     pen-color: #ff4444;
+    in property <image>     annotation-layer;
+    out property <float>    canvas-w-px: 0;
+    out property <float>    canvas-h-px: 0;
+
+    callback prev-action();
+    callback next-action();
     callback zoom-in();
     callback zoom-out();
     callback fit();
     callback font-larger();
     callback font-smaller();
     callback toggle-dark();
-    // Called when a pinch gesture ends; argument = zoom-at-start * cumulative-scale
     callback pinch-ended(float);
+    callback toggle-draw();
+    callback draw-start(float, float);
+    callback draw-move(float, float);
+    callback draw-end();
+    callback clear-annotations();
+    callback pick-color(color);
 
     property <color> epub-bg:  dark-mode ? #1a1a2e : #f5f0e8;
     property <color> epub-fg:  dark-mode ? #e8e0d0 : #2c2416;
@@ -51,93 +78,7 @@ export component AppWindow inherits Window {
         padding: 0px;
         spacing: 0px;
 
-        // ── Toolbar ────────────────────────────────────────────────────────
-        Rectangle {
-            height: 48px;
-            background: mode == "epub" ? epub-bar : #1e1e2e;
-
-            HorizontalBox {
-                padding: 8px;
-                spacing: 4px;
-                alignment: center;
-
-                // Prev / Next (all modes)
-                Button {
-                    text: "◀";
-                    width: 36px;
-                    enabled: has-prev;
-                    clicked => { prev-action(); }
-                }
-                Button {
-                    text: "▶";
-                    width: 36px;
-                    enabled: has-next;
-                    clicked => { next-action(); }
-                }
-
-                Rectangle { width: 6px; }
-
-                // PDF page indicator
-                if mode == "pdf": Text {
-                    text: page-num + " / " + page-count;
-                    color: #cccccc;
-                    font-size: 13px;
-                    vertical-alignment: center;
-                    min-width: 68px;
-                    horizontal-alignment: center;
-                }
-
-                // Zoom (PDF & image)
-                if mode == "pdf" || mode == "image": Button { text: "−"; width: 36px; clicked => { zoom-out(); } }
-                if mode == "pdf": Text {
-                    text: Math.round(zoom * 100) + "%";
-                    color: #aaaaaa;
-                    font-size: 12px;
-                    vertical-alignment: center;
-                    min-width: 44px;
-                    horizontal-alignment: center;
-                }
-                if mode == "pdf" || mode == "image": Button { text: "+"; width: 36px; clicked => { zoom-in(); } }
-                if mode == "pdf" || mode == "image": Button { text: "⊞"; width: 36px; clicked => { fit(); } }
-
-                // Font size (EPUB)
-                if mode == "epub": Button { text: "A−"; width: 40px; clicked => { font-smaller(); } }
-                if mode == "epub": Button { text: "A+"; width: 40px; clicked => { font-larger(); } }
-                if mode == "epub": Button { text: "☀";  width: 36px; clicked => { toggle-dark(); } }
-
-                Rectangle { horizontal-stretch: 1; }
-
-                // Centre label
-                if mode == "epub": Text {
-                    text: chapter-title;
-                    color: epub-fg;
-                    font-size: 13px;
-                    overflow: elide;
-                    max-width: 280px;
-                    vertical-alignment: center;
-                }
-                if mode != "epub": Text {
-                    text: filename;
-                    color: #aaaaaa;
-                    font-size: 12px;
-                    overflow: elide;
-                    max-width: 280px;
-                    vertical-alignment: center;
-                }
-
-                Rectangle { horizontal-stretch: 1; }
-
-                // Status / info (right side)
-                Text {
-                    text: status;
-                    color: #777777;
-                    font-size: 11px;
-                    vertical-alignment: center;
-                }
-            }
-        }
-
-        // EPUB: book title bar
+        // EPUB: book title bar (stays at top)
         if mode == "epub": Rectangle {
             height: 30px;
             background: epub-bar;
@@ -159,16 +100,16 @@ export component AppWindow inherits Window {
             background: mode == "image" ? #111111 : #505050;
             clip: true;
 
+            init          => { root.canvas-w-px = self.width / 1px; root.canvas-h-px = self.height / 1px; }
+            changed width  => { root.canvas-w-px = self.width / 1px; }
+            changed height => { root.canvas-h-px = self.height / 1px; }
+
+            // Document image + pinch gesture
             ScaleRotateGestureHandler {
-                started => {
-                    root.zoom-at-start = root.zoom;
-                    root.pinch-scale = 1.0;
-                }
-                updated => { root.pinch-scale = self.scale; }
-                ended => {
-                    root.pinch-ended(root.zoom-at-start * root.pinch-scale);
-                    root.pinch-scale = 1.0;
-                }
+                enabled: !root.draw-mode;
+                started   => { root.zoom-at-start = root.zoom; root.pinch-scale = 1.0; }
+                updated   => { root.pinch-scale = self.scale; }
+                ended     => { root.pinch-ended(root.zoom-at-start * root.pinch-scale); root.pinch-scale = 1.0; }
                 cancelled => { root.pinch-scale = 1.0; }
 
                 if content-image.width > 0: Rectangle {
@@ -190,6 +131,29 @@ export component AppWindow inherits Window {
                     font-size: 16px;
                     horizontal-alignment: center;
                     vertical-alignment: center;
+                }
+            }
+
+            // Annotation overlay (drawn on top of document)
+            if annotation-layer.width > 0: Image {
+                width: parent.width;
+                height: parent.height;
+                source: annotation-layer;
+                image-fit: fill;
+            }
+
+            // Draw capture area — sits on top, intercepts pointer when draw-mode active
+            if draw-mode: TouchArea {
+                mouse-cursor: crosshair;
+                pointer-event(e) => {
+                    if e.kind == PointerEventKind.down {
+                        root.draw-start(self.mouse-x / 1px, self.mouse-y / 1px);
+                    } else if e.kind == PointerEventKind.up {
+                        root.draw-end();
+                    }
+                }
+                moved => {
+                    if self.pressed { root.draw-move(self.mouse-x / 1px, self.mouse-y / 1px); }
                 }
             }
         }
@@ -220,6 +184,121 @@ export component AppWindow inherits Window {
                 font-size: 16px;
                 horizontal-alignment: center;
                 vertical-alignment: center;
+            }
+        }
+
+        // ── Toolbar (bottom) ───────────────────────────────────────────────
+        Rectangle {
+            height: 48px;
+            background: mode == "epub" ? epub-bar : #1e1e2e;
+
+            HorizontalBox {
+                padding: 8px;
+                spacing: 4px;
+                alignment: center;
+
+                // Prev / Next (all modes)
+                Button { text: "◀"; width: 36px; enabled: has-prev;  clicked => { prev-action(); } }
+                Button { text: "▶"; width: 36px; enabled: has-next; clicked => { next-action(); } }
+
+                Rectangle { width: 4px; }
+
+                // PDF page indicator
+                if mode == "pdf": Text {
+                    text: page-num + " / " + page-count;
+                    color: #cccccc; font-size: 13px;
+                    vertical-alignment: center;
+                    min-width: 60px; horizontal-alignment: center;
+                }
+
+                // Zoom (PDF & image)
+                if mode == "pdf" || mode == "image": Button { text: "−"; width: 32px; clicked => { zoom-out(); } }
+                if mode == "pdf": Text {
+                    text: Math.round(zoom * 100) + "%";
+                    color: #aaaaaa; font-size: 12px;
+                    vertical-alignment: center; min-width: 40px; horizontal-alignment: center;
+                }
+                if mode == "pdf" || mode == "image": Button { text: "+"; width: 32px; clicked => { zoom-in(); } }
+                if mode == "pdf" || mode == "image": Button { text: "⊞"; width: 32px; clicked => { fit(); } }
+
+                // ── Draw / annotation controls (PDF & image only) ──────────
+                if mode == "pdf" || mode == "image": Rectangle { width: 4px; }
+
+                if mode == "pdf" || mode == "image": Rectangle {
+                    width: 32px; height: 32px;
+                    background: draw-mode ? #3a3a5a : transparent;
+                    border-radius: 4px;
+                    Text {
+                        text: "✏"; font-size: 18px;
+                        horizontal-alignment: center; vertical-alignment: center;
+                        color: draw-mode ? #aaaaff : #aaaaaa;
+                    }
+                    TouchArea { clicked => { toggle-draw(); } }
+                }
+
+                // Color swatches — visible only when draw-mode is active
+                if draw-mode && (mode == "pdf" || mode == "image"): Rectangle { width: 4px; }
+                if draw-mode && (mode == "pdf" || mode == "image"): ColorSwatch {
+                    swatch-color: #ff4444; selected: pen-color == #ff4444;
+                    picked(c) => { pick-color(c); }
+                }
+                if draw-mode && (mode == "pdf" || mode == "image"): ColorSwatch {
+                    swatch-color: #4488ff; selected: pen-color == #4488ff;
+                    picked(c) => { pick-color(c); }
+                }
+                if draw-mode && (mode == "pdf" || mode == "image"): ColorSwatch {
+                    swatch-color: #44cc44; selected: pen-color == #44cc44;
+                    picked(c) => { pick-color(c); }
+                }
+                if draw-mode && (mode == "pdf" || mode == "image"): ColorSwatch {
+                    swatch-color: #ffdd00; selected: pen-color == #ffdd00;
+                    picked(c) => { pick-color(c); }
+                }
+                if draw-mode && (mode == "pdf" || mode == "image"): ColorSwatch {
+                    swatch-color: #111111; selected: pen-color == #111111;
+                    picked(c) => { pick-color(c); }
+                }
+                if draw-mode && (mode == "pdf" || mode == "image"): ColorSwatch {
+                    swatch-color: #ffffff; selected: pen-color == #ffffff;
+                    picked(c) => { pick-color(c); }
+                }
+
+                // Clear annotations button
+                if draw-mode && (mode == "pdf" || mode == "image"): Rectangle { width: 4px; }
+                if draw-mode && (mode == "pdf" || mode == "image"): Rectangle {
+                    width: 32px; height: 32px; border-radius: 4px;
+                    Text {
+                        text: "🗑"; font-size: 16px;
+                        horizontal-alignment: center; vertical-alignment: center;
+                        color: #cc6666;
+                    }
+                    TouchArea { clicked => { clear-annotations(); } }
+                }
+
+                // Font size (EPUB)
+                if mode == "epub": Button { text: "A−"; width: 40px; clicked => { font-smaller(); } }
+                if mode == "epub": Button { text: "A+"; width: 40px; clicked => { font-larger(); } }
+                if mode == "epub": Button { text: "☀";  width: 36px; clicked => { toggle-dark(); } }
+
+                Rectangle { horizontal-stretch: 1; }
+
+                // Centre label
+                if mode == "epub": Text {
+                    text: chapter-title; color: epub-fg; font-size: 13px;
+                    overflow: elide; max-width: 200px; vertical-alignment: center;
+                }
+                if mode != "epub": Text {
+                    text: filename; color: #aaaaaa; font-size: 12px;
+                    overflow: elide; max-width: 200px; vertical-alignment: center;
+                }
+
+                Rectangle { horizontal-stretch: 1; }
+
+                // Status / info (right side)
+                Text {
+                    text: status; color: #777777; font-size: 11px;
+                    vertical-alignment: center;
+                }
             }
         }
     }
