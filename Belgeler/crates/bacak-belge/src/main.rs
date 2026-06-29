@@ -427,6 +427,8 @@ fn run_image(ui: AppWindow, path: PathBuf) -> Result<()> {
             ui.set_filename(name.into());
             ui.set_status(info.into());
             ui.set_zoom(z.get());
+            ui.set_pan_x(0.0);
+            ui.set_pan_y(0.0);
             ui.set_has_prev(i > 0);
             ui.set_has_next(i + 1 < sib.len());
             ui.set_mode("image".into());
@@ -458,7 +460,12 @@ fn run_image(ui: AppWindow, path: PathBuf) -> Result<()> {
         if let Some(ui) = ui_h.upgrade() { let v = (z.get() / 1.25).max(0.1); z.set(v); ui.set_zoom(v); }
     });
     let z = zoom.clone(); let ui_h = ui.as_weak();
-    ui.on_fit(move || { if let Some(ui) = ui_h.upgrade() { z.set(1.0); ui.set_zoom(1.0); } });
+    ui.on_fit(move || {
+        if let Some(ui) = ui_h.upgrade() {
+            z.set(1.0); ui.set_zoom(1.0);
+            ui.set_pan_x(0.0); ui.set_pan_y(0.0);
+        }
+    });
 
     let z = zoom.clone(); let ui_h = ui.as_weak();
     ui.on_pinch_ended(move |new_zoom| {
@@ -522,14 +529,18 @@ fn run_pdf(ui: AppWindow, path: PathBuf) -> Result<()> {
     let r = refresh.clone();
     slint::Timer::single_shot(std::time::Duration::ZERO, move || r());
 
-    let pi = pidx.clone(); let r = refresh.clone();
+    let pi = pidx.clone(); let r = refresh.clone(); let ui_h = ui.as_weak();
     ui.on_prev_action(move || {
-        let i = pi.get(); if i > 0 { pi.set(i - 1); r(); }
+        let i = pi.get(); if i > 0 { pi.set(i - 1); r();
+            if let Some(ui) = ui_h.upgrade() { ui.set_pan_x(0.0); ui.set_pan_y(0.0); }
+        }
     });
 
-    let pi = pidx.clone(); let pc = page_count; let r = refresh.clone();
+    let pi = pidx.clone(); let pc = page_count; let r = refresh.clone(); let ui_h = ui.as_weak();
     ui.on_next_action(move || {
-        let i = pi.get(); if i + 1 < pc { pi.set(i + 1); r(); }
+        let i = pi.get(); if i + 1 < pc { pi.set(i + 1); r();
+            if let Some(ui) = ui_h.upgrade() { ui.set_pan_x(0.0); ui.set_pan_y(0.0); }
+        }
     });
 
     let zi = zoom.clone(); let r = refresh.clone();
@@ -538,8 +549,11 @@ fn run_pdf(ui: AppWindow, path: PathBuf) -> Result<()> {
     let zi = zoom.clone(); let r = refresh.clone();
     ui.on_zoom_out(move || { zi.set((zi.get() / 1.25).max(0.2)); r(); });
 
-    let zi = zoom.clone(); let r = refresh.clone();
-    ui.on_fit(move || { zi.set(1.0); r(); });
+    let zi = zoom.clone(); let r = refresh.clone(); let ui_h = ui.as_weak();
+    ui.on_fit(move || {
+        zi.set(1.0); r();
+        if let Some(ui) = ui_h.upgrade() { ui.set_pan_x(0.0); ui.set_pan_y(0.0); }
+    });
 
     let zi = zoom.clone(); let r = refresh.clone();
     ui.on_pinch_ended(move |new_zoom| {
