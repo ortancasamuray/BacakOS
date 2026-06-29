@@ -851,16 +851,15 @@ impl TouchArbiter {
     }
 
     /// Decide routing for a free-touch *down*. `free_fingers` is the
-    /// aggregator's finger count *after* this down was recorded. A single finger
-    /// goes to the client (tap / drag / scroll); the **second** finger claims the
-    /// sequence as a compositor gesture — two fingers drive window move /
-    /// double-tap-fullscreen, three+ drive workspace / overview swipes. (This
-    /// deliberately overrides client two-finger pinch/scroll in favour of
-    /// touch-first window management; single-finger scroll still reaches apps.)
+    /// aggregator's finger count *after* this down was recorded.
+    /// One and two fingers go to the client so apps receive raw multi-touch
+    /// and can perform pinch-to-zoom / two-finger scroll.
+    /// A **third** finger claims the sequence as a compositor gesture (workspace
+    /// swipe / overview); 4+ fingers are also compositor-only.
     pub fn down(&mut self, free_fingers: u8) -> TouchRoute {
         if self.claimed {
             TouchRoute::Gesture
-        } else if free_fingers >= 2 {
+        } else if free_fingers >= 3 {
             self.claimed = true;
             TouchRoute::Claim
         } else {
@@ -1157,17 +1156,17 @@ mod tests {
     }
 
     #[test]
-    fn touch_arbiter_claims_on_second_finger() {
+    fn touch_arbiter_claims_on_third_finger() {
         let mut a = TouchArbiter::new();
-        // First finger → client (single-finger tap / drag / scroll).
+        // First and second fingers → client (tap / drag / pinch-to-zoom).
         assert_eq!(a.down(1), TouchRoute::Client);
         assert!(!a.is_gesture());
-        // Second finger → claim (cancel client) + gesture from here: two-finger
-        // window move / double-tap-fullscreen are compositor gestures.
-        assert_eq!(a.down(2), TouchRoute::Claim);
+        assert_eq!(a.down(2), TouchRoute::Client);
+        assert!(!a.is_gesture());
+        // Third finger → claim (workspace / overview compositor gesture).
+        assert_eq!(a.down(3), TouchRoute::Claim);
         assert!(a.is_gesture());
-        // Third / fourth fingers → already a gesture (workspace / overview).
-        assert_eq!(a.down(3), TouchRoute::Gesture);
+        // Fourth finger → already a gesture.
         assert_eq!(a.down(4), TouchRoute::Gesture);
         // Fingers lift one by one; claim holds until the last leaves.
         a.up(true);
