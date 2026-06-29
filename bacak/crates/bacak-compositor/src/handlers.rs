@@ -207,6 +207,19 @@ impl CompositorHandler for BacakState {
                     })
                     .unwrap_or((None, None))
             });
+            // When xdg_toplevel.set_app_id() was never called (e.g. Slint apps),
+            // fall back to reading the client binary name from /proc/<pid>/exe so
+            // the dock can match it against the pinned app_id (e.g. "bacak-belge").
+            let app = app.or_else(|| {
+                let pid = surface
+                    .client()
+                    .and_then(|c| c.get_credentials(&self.display_handle).ok())
+                    .map(|cr| cr.pid)?;
+                let exe = std::fs::read_link(format!("/proc/{pid}/exe")).ok()?;
+                exe.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|s| s.to_string())
+            });
             let meta_changed =
                 self.wm.set_meta(id, app.as_deref(), title.as_deref()).unwrap_or(false);
             // Keep the foreign-toplevel advertisement in sync so taskbars show
