@@ -45,6 +45,12 @@ export component AppWindow inherits Window {
     in property <bool>    has-prev: false;
     in property <bool>    has-next: false;
 
+    // Pan (single-finger drag)
+    in-out property <float>  pan-x: 0;
+    in-out property <float>  pan-y: 0;
+    private property <float> pan-start-x: 0;
+    private property <float> pan-start-y: 0;
+
     // Draw / annotation
     in-out property <bool>   draw-mode: false;
     in-out property <string> active-tool: "pen";   // "pen" | "marker"
@@ -117,8 +123,8 @@ export component AppWindow inherits Window {
                     background: mode == "pdf" ? #ffffff : transparent;
                     width:  content-image.width  * 1px * zoom * pinch-scale;
                     height: content-image.height * 1px * zoom * pinch-scale;
-                    x: max(0px, (parent.width  - self.width)  / 2);
-                    y: max(8px,  (parent.height - self.height) / 2);
+                    x: (parent.width  - self.width)  / 2 + root.pan-x * 1px;
+                    y: (parent.height - self.height) / 2 + root.pan-y * 1px;
                     Image {
                         source: content-image;
                         width:  parent.width;
@@ -132,6 +138,26 @@ export component AppWindow inherits Window {
                     font-size: 16px;
                     horizontal-alignment: center;
                     vertical-alignment: center;
+                }
+
+                // Single-finger pan — disabled while pinch gesture is active
+                if !root.draw-mode: TouchArea {
+                    enabled: !parent.active;
+                    mouse-cursor: move;
+                    pointer-event(e) => {
+                        if e.kind == PointerEventKind.down {
+                            root.pan-start-x = self.mouse-x / 1px;
+                            root.pan-start-y = self.mouse-y / 1px;
+                        }
+                    }
+                    moved => {
+                        if self.pressed {
+                            root.pan-x = root.pan-x + (self.mouse-x / 1px - root.pan-start-x);
+                            root.pan-y = root.pan-y + (self.mouse-y / 1px - root.pan-start-y);
+                            root.pan-start-x = self.mouse-x / 1px;
+                            root.pan-start-y = self.mouse-y / 1px;
+                        }
+                    }
                 }
             }
 
