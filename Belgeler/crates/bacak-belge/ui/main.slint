@@ -46,11 +46,12 @@ export component AppWindow inherits Window {
     in property <bool>    has-next: false;
 
     // Draw / annotation
-    in-out property <bool>  draw-mode: false;
-    in property <color>     pen-color: #ff4444;
-    in property <image>     annotation-layer;
-    out property <float>    canvas-w-px: 0;
-    out property <float>    canvas-h-px: 0;
+    in-out property <bool>   draw-mode: false;
+    in-out property <string> active-tool: "pen";   // "pen" | "marker"
+    in property <color>      pen-color: #ff4444;
+    in property <image>      annotation-layer;
+    out property <float>     canvas-w-px: 0;
+    out property <float>     canvas-h-px: 0;
 
     callback prev-action();
     callback next-action();
@@ -61,7 +62,7 @@ export component AppWindow inherits Window {
     callback font-smaller();
     callback toggle-dark();
     callback pinch-ended(float);
-    callback toggle-draw();
+    callback set-tool(string);
     callback draw-start(float, float);
     callback draw-move(float, float);
     callback draw-end();
@@ -224,16 +225,30 @@ export component AppWindow inherits Window {
                 // ── Draw / annotation controls (PDF & image only) ──────────
                 if mode == "pdf" || mode == "image": Rectangle { width: 4px; }
 
+                // Pen tool button
                 if mode == "pdf" || mode == "image": Rectangle {
                     width: 32px; height: 32px;
-                    background: draw-mode ? #3a3a5a : transparent;
+                    background: (draw-mode && active-tool == "pen") ? #3a3a5a : transparent;
                     border-radius: 4px;
                     Text {
                         text: "✏"; font-size: 18px;
                         horizontal-alignment: center; vertical-alignment: center;
-                        color: draw-mode ? #aaaaff : #aaaaaa;
+                        color: (draw-mode && active-tool == "pen") ? #aaaaff : #aaaaaa;
                     }
-                    TouchArea { clicked => { toggle-draw(); } }
+                    TouchArea { clicked => { set-tool("pen"); } }
+                }
+
+                // Marker tool button
+                if mode == "pdf" || mode == "image": Rectangle {
+                    width: 32px; height: 32px;
+                    background: (draw-mode && active-tool == "marker") ? #3a3a5a : transparent;
+                    border-radius: 4px;
+                    Text {
+                        text: "🖌"; font-size: 18px;
+                        horizontal-alignment: center; vertical-alignment: center;
+                        color: (draw-mode && active-tool == "marker") ? #aaaaff : #aaaaaa;
+                    }
+                    TouchArea { clicked => { set-tool("marker"); } }
                 }
 
                 // Color swatches — visible only when draw-mode is active
