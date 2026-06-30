@@ -43,6 +43,9 @@ pub mod controls;
 pub mod bluetooth;
 
 #[cfg(feature = "runtime")]
+pub mod bt_ipc;
+
+#[cfg(feature = "runtime")]
 pub mod state;
 
 #[cfg(feature = "runtime")]
