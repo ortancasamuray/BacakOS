@@ -13,9 +13,7 @@ path = "src/main.rs"
 [dependencies]
 slint        = { workspace = true }
 tokio        = { workspace = true }
-zbus         = { workspace = true }
 anyhow       = { workspace = true }
-futures-util = { workspace = true }
 
 [build-dependencies]
 slint-build = { workspace = true }
