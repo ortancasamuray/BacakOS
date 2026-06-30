@@ -209,12 +209,27 @@ async fn run_inner(
         bluetooth_dir: bt_dir.clone(),
     }).await?;
     {
-        // obexd D-Bus aktivasyonu — servis yoksa başlatmayı dene
+        // Compositor'un Python OBEX ajanı kayıtlıysa (obex-agent.py) önce onu kapat,
+        // ardından kendi ajanımızı kaydet. Böylece dosya transferlerinde UI dialog görünür.
         match zbus::Proxy::new(&ses_conn, "org.bluez.obex", "/org/bluez/obex", "org.bluez.obex.AgentManager1").await {
             Err(e) => eprintln!("[OBEX] AgentManager proxy hatası: {}", e),
-            Ok(mgr) => match mgr.call_method("RegisterAgent", &obex_agent_path).await {
-                Ok(_)  => eprintln!("[OBEX] Agent kaydedildi: {}", obex_agent_path.as_str()),
-                Err(e) => eprintln!("[OBEX] RegisterAgent başarısız: {} — obexd çalışıyor mu?", e),
+            Ok(mgr) => {
+                // Önce kayıt dene; "Agent already exists" alırsak Python ajanı öldür ve tekrar dene
+                match mgr.call_method("RegisterAgent", &obex_agent_path).await {
+                    Ok(_) => eprintln!("[OBEX] Agent kaydedildi: {}", obex_agent_path.as_str()),
+                    Err(e) if e.to_string().contains("already exists") || e.to_string().contains("AlreadyExists") => {
+                        eprintln!("[OBEX] Mevcut ajan (compositor Python) kapatılıyor...");
+                        let _ = tokio::process::Command::new("pkill")
+                            .args(["-f", "obex-agent.py"])
+                            .status().await;
+                        tokio::time::sleep(tokio::time::Duration::from_millis(400)).await;
+                        match mgr.call_method("RegisterAgent", &obex_agent_path).await {
+                            Ok(_) => eprintln!("[OBEX] Agent kaydedildi (Python sonrası): {}", obex_agent_path.as_str()),
+                            Err(e2) => eprintln!("[OBEX] RegisterAgent yine başarısız: {}", e2),
+                        }
+                    }
+                    Err(e) => eprintln!("[OBEX] RegisterAgent başarısız: {}", e),
+                }
             }
         }
     }
@@ -283,7 +298,9 @@ async fn run_inner(
                                 Ok(dev) => match dev.call_method("Pair", &()).await {
                                     Err(e) => { eprintln!("[BT] Pair() hatası: {}", e); let _ = etx.send(BtEvent::Toast(format!("Eşleşme hatası: {}", e))); }
                                     Ok(_) => {
-                                        eprintln!("[BT] Pair() OK → 700ms bekleniyor");
+                                        eprintln!("[BT] Pair() OK → trust + 700ms");
+                                        // Eşleşen cihaza güven ver (OBEX dosya transferi için zorunlu)
+                                        let _ = dev.set_property("Trusted", true).await;
                                         tokio::time::sleep(tokio::time::Duration::from_millis(700)).await;
                                         if let Ok(objects) = get_managed_objects(&conn2).await {
                                             let mut map = devices_from_objects(&objects);
