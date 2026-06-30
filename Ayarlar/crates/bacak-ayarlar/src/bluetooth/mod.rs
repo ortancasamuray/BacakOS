@@ -295,27 +295,39 @@ async fn run_inner(
                     }
                     BtCmd::Pair(address) => {
                         let objects = get_managed_objects(&sys_conn).await?;
-                        let path = find_device_path(&objects, &address);
-                        if let Some(p) = path {
-                            let dev = device_proxy(&sys_conn, &p).await?;
-                            match dev.call_method("Pair", &()).await {
-                                Ok(_) => {
-                                    // Eşleşme tamamlandı — cihaz bilgisini tazele
-                                    let fresh = get_managed_objects(&sys_conn).await?;
-                                    if let Some(ifaces) = fresh.get(&p) {
-                                        if let Some(props) = ifaces.get("org.bluez.Device1") {
-                                            if let Some(info) = parse_device(&p, props) {
-                                                let _ = event_tx.send(BtEvent::DeviceChanged(info));
+                        if let Some(p) = find_device_path(&objects, &address) {
+                            // Ayrı task: select! döngüsü serbest kalır,
+                            // pair_req_rx dalı agent onayını işleyebilir.
+                            let conn2 = sys_conn.clone();
+                            let etx  = event_tx.clone();
+                            tokio::spawn(async move {
+                                let dev = match device_proxy(&conn2, &p).await {
+                                    Ok(d) => d,
+                                    Err(e) => {
+                                        let _ = etx.send(BtEvent::Toast(format!("Eşleşme hatası: {}", e)));
+                                        return;
+                                    }
+                                };
+                                match dev.call_method("Pair", &()).await {
+                                    Ok(_) => {
+                                        // BlueZ Paired=true yazmadan önce kısa bekleme
+                                        tokio::time::sleep(tokio::time::Duration::from_millis(600)).await;
+                                        if let Ok(fresh) = get_managed_objects(&conn2).await {
+                                            if let Some(ifaces) = fresh.get(&p) {
+                                                if let Some(props) = ifaces.get("org.bluez.Device1") {
+                                                    if let Some(mut info) = parse_device(&p, props) {
+                                                        info.paired = true; // Pair() OK → kesinlikle eşleşti
+                                                        let _ = etx.send(BtEvent::DeviceChanged(info));
+                                                    }
+                                                }
                                             }
                                         }
                                     }
+                                    Err(e) => {
+                                        let _ = etx.send(BtEvent::Toast(format!("Eşleşme hatası: {}", e)));
+                                    }
                                 }
-                                Err(e) => {
-                                    let _ = event_tx.send(BtEvent::Toast(
-                                        format!("Eşleşme hatası: {}", e),
-                                    ));
-                                }
-                            }
+                            });
                         }
                     }
                     BtCmd::Connect(address) => {
