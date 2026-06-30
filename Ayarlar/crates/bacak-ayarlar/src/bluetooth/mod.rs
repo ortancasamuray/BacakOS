@@ -16,7 +16,6 @@ use zbus::{zvariant::OwnedObjectPath, Connection};
 
 #[derive(Debug, Clone)]
 pub struct DeviceInfo {
-    pub path: OwnedObjectPath,
     pub address: String,
     pub name: String,
     pub paired: bool,
@@ -25,7 +24,7 @@ pub struct DeviceInfo {
     pub icon: String,
 }
 
-// ─── UI ↔ BT komutları ────────────────────────────────────────────────────
+// ─── Komutlar / Eventler ──────────────────────────────────────────────────
 
 #[derive(Debug)]
 pub enum BtCmd {
@@ -45,31 +44,22 @@ pub enum BtCmd {
 pub enum BtEvent {
     Powered(bool),
     Scanning(bool),
-    DeviceAdded(DeviceInfo),
-    DeviceRemoved(String), // address
-    DeviceChanged(DeviceInfo),
+    // Tüm cihaz listesi — UI her seferinde bu listeyle modeli yeniden oluşturur
+    AllDevices(Vec<DeviceInfo>),
     PairingRequest { device_name: String, passkey: String },
     Toast(String),
     TransferProgress { file: String, progress: f32, status: String },
     IncomingFile { device: String, file_name: String },
 }
 
-// ─── BlueZ proxy'leri ────────────────────────────────────────────────────
+// ─── BlueZ yardımcıları ───────────────────────────────────────────────────
 
-async fn get_system_bus() -> Result<Connection> {
-    Ok(Connection::system().await?)
-}
+type ManagedObjects =
+    HashMap<OwnedObjectPath, HashMap<String, HashMap<String, zbus::zvariant::OwnedValue>>>;
 
-async fn get_session_bus() -> Result<Connection> {
-    Ok(Connection::session().await?)
-}
-
-// ObjectManager ile tüm nesneleri al
-async fn get_managed_objects(
-    conn: &Connection,
-) -> Result<HashMap<OwnedObjectPath, HashMap<String, HashMap<String, zbus::zvariant::OwnedValue>>>> {
-    let proxy = zbus::Proxy::new(conn, "org.bluez", "/", "org.freedesktop.DBus.ObjectManager")
-        .await?;
+async fn get_managed_objects(conn: &Connection) -> Result<ManagedObjects> {
+    let proxy =
+        zbus::Proxy::new(conn, "org.bluez", "/", "org.freedesktop.DBus.ObjectManager").await?;
     Ok(proxy.call_method("GetManagedObjects", &()).await?.body().deserialize()?)
 }
 
@@ -95,51 +85,46 @@ fn parse_device(
     path: &OwnedObjectPath,
     props: &HashMap<String, zbus::zvariant::OwnedValue>,
 ) -> Option<DeviceInfo> {
-    let address: String = props.get("Address").and_then(|v| String::try_from(v.clone()).ok())?;
-    let name: String = props
+    let address = props.get("Address").and_then(|v| String::try_from(v.clone()).ok())?;
+    let name = props
         .get("Alias")
         .and_then(|v| String::try_from(v.clone()).ok())
         .or_else(|| props.get("Name").and_then(|v| String::try_from(v.clone()).ok()))
         .unwrap_or_else(|| address.clone());
-    let paired = props
-        .get("Paired")
-        .and_then(|v| bool::try_from(v.clone()).ok())
-        .unwrap_or(false);
-    let connected = props
-        .get("Connected")
-        .and_then(|v| bool::try_from(v.clone()).ok())
-        .unwrap_or(false);
-    let rssi = props
-        .get("RSSI")
-        .and_then(|v| i16::try_from(v.clone()).ok())
-        .unwrap_or(0);
-    let icon = props
-        .get("Icon")
-        .and_then(|v| String::try_from(v.clone()).ok())
-        .unwrap_or_default();
-    let icon_str = if icon.contains("phone") {
-        "phone"
-    } else if icon.contains("headset") || icon.contains("audio") {
-        "headset"
-    } else if icon.contains("computer") {
-        "computer"
-    } else {
-        "unknown"
-    }
-    .to_string();
+    let paired = props.get("Paired").and_then(|v| bool::try_from(v.clone()).ok()).unwrap_or(false);
+    let connected = props.get("Connected").and_then(|v| bool::try_from(v.clone()).ok()).unwrap_or(false);
+    let rssi = props.get("RSSI").and_then(|v| i16::try_from(v.clone()).ok()).unwrap_or(0);
+    let icon_raw = props.get("Icon").and_then(|v| String::try_from(v.clone()).ok()).unwrap_or_default();
+    let icon = if icon_raw.contains("phone") { "phone" }
+               else if icon_raw.contains("headset") || icon_raw.contains("audio") { "headset" }
+               else if icon_raw.contains("computer") { "computer" }
+               else { "unknown" }.to_string();
 
-    Some(DeviceInfo {
-        path: path.clone(),
-        address,
-        name,
-        paired,
-        connected,
-        rssi,
-        icon: icon_str,
-    })
+    // Adaptör yolları dev_ içermez — sadece cihazları al
+    if !path.as_str().contains("/dev_") {
+        return None;
+    }
+
+    Some(DeviceInfo { address, name, paired, connected, rssi, icon })
 }
 
-// ─── Ana yönetim döngüsü ──────────────────────────────────────────────────
+fn devices_from_objects(objects: &ManagedObjects) -> HashMap<String, DeviceInfo> {
+    let mut map = HashMap::new();
+    for (path, ifaces) in objects {
+        if let Some(props) = ifaces.get("org.bluez.Device1") {
+            if let Some(dev) = parse_device(path, props) {
+                map.insert(dev.address.clone(), dev);
+            }
+        }
+    }
+    map
+}
+
+fn send_all(tx: &mpsc::UnboundedSender<BtEvent>, map: &HashMap<String, DeviceInfo>) {
+    let _ = tx.send(BtEvent::AllDevices(map.values().cloned().collect()));
+}
+
+// ─── Ana döngü ────────────────────────────────────────────────────────────
 
 pub async fn run(
     mut cmd_rx: mpsc::UnboundedReceiver<BtCmd>,
@@ -154,49 +139,32 @@ async fn run_inner(
     cmd_rx: &mut mpsc::UnboundedReceiver<BtCmd>,
     event_tx: &mpsc::UnboundedSender<BtEvent>,
 ) -> Result<()> {
-    let sys_conn = get_system_bus().await?;
-    let ses_conn = get_session_bus().await?;
+    let sys_conn = Connection::system().await?;
+    let ses_conn = Connection::session().await?;
 
-    // Adaptör bul
     let adp_path = adapter_path(&sys_conn).await?;
 
-    // Adaptör powered durumunu oku
+    // Adaptör powered durumu
     {
         let adp = adapter_proxy(&sys_conn, &adp_path).await?;
         let powered: bool = adp.get_property("Powered").await.unwrap_or(false);
         let _ = event_tx.send(BtEvent::Powered(powered));
     }
 
-    // Mevcut cihazları listele
-    {
+    // İlk cihaz listesi
+    let mut device_map = {
         let objects = get_managed_objects(&sys_conn).await?;
-        for (path, ifaces) in &objects {
-            if let Some(props) = ifaces.get("org.bluez.Device1") {
-                if let Some(dev) = parse_device(path, props) {
-                    let _ = event_tx.send(BtEvent::DeviceAdded(dev));
-                }
-            }
-        }
-    }
+        devices_from_objects(&objects)
+    };
+    send_all(event_tx, &device_map);
 
-    // Eşleşme agent kaydı
+    // Eşleşme agent
     let (pair_req_tx, mut pair_req_rx) = mpsc::unbounded_channel::<PairingRequest>();
-    let agent = BtAgent { request_tx: pair_req_tx };
     let agent_path = OwnedObjectPath::try_from("/org/bacak/ayarlar/BtAgent").unwrap();
-    sys_conn
-        .object_server()
-        .at(agent_path.clone(), agent)
-        .await?;
+    sys_conn.object_server().at(agent_path.clone(), BtAgent { request_tx: pair_req_tx }).await?;
     {
-        let mgr = zbus::Proxy::new(
-            &sys_conn,
-            "org.bluez",
-            "/org/bluez",
-            "org.bluez.AgentManager1",
-        )
-        .await?;
-        mgr.call_method("RegisterAgent", &(&agent_path, "DisplayYesNo"))
-            .await?;
+        let mgr = zbus::Proxy::new(&sys_conn, "org.bluez", "/org/bluez", "org.bluez.AgentManager1").await?;
+        mgr.call_method("RegisterAgent", &(&agent_path, "DisplayYesNo")).await?;
         mgr.call_method("RequestDefaultAgent", &agent_path).await?;
     }
 
@@ -204,218 +172,171 @@ async fn run_inner(
     let bt_dir = format!("{}/Bluetooth", std::env::var("HOME").unwrap_or_default());
     tokio::fs::create_dir_all(&bt_dir).await.ok();
     let (incoming_tx, mut incoming_rx) = mpsc::unbounded_channel::<IncomingRequest>();
-    let obex_agent = ObexAgent {
+    let obex_agent_path = OwnedObjectPath::try_from("/org/bacak/ayarlar/ObexAgent").unwrap();
+    ses_conn.object_server().at(obex_agent_path.clone(), ObexAgent {
         incoming_tx,
         bluetooth_dir: bt_dir.clone(),
-    };
-    let obex_agent_path = OwnedObjectPath::try_from("/org/bacak/ayarlar/ObexAgent").unwrap();
-    ses_conn
-        .object_server()
-        .at(obex_agent_path.clone(), obex_agent)
-        .await?;
+    }).await?;
     {
-        let obex_mgr = zbus::Proxy::new(
-            &ses_conn,
-            "org.bluez.obex",
-            "/org/bluez/obex",
-            "org.bluez.obex.AgentManager1",
-        )
-        .await;
-        if let Ok(mgr) = obex_mgr {
+        if let Ok(mgr) = zbus::Proxy::new(&ses_conn, "org.bluez.obex", "/org/bluez/obex", "org.bluez.obex.AgentManager1").await {
             let _ = mgr.call_method("RegisterAgent", &obex_agent_path).await;
         }
     }
 
-    // InterfacesAdded / InterfacesRemoved sinyalleri
-    let obj_mgr = zbus::Proxy::new(
-        &sys_conn,
-        "org.bluez",
-        "/",
-        "org.freedesktop.DBus.ObjectManager",
-    )
-    .await?;
-    let mut ifaces_added = obj_mgr.receive_signal("InterfacesAdded").await?;
+    // D-Bus sinyalleri
+    let obj_mgr = zbus::Proxy::new(&sys_conn, "org.bluez", "/", "org.freedesktop.DBus.ObjectManager").await?;
+    let mut ifaces_added   = obj_mgr.receive_signal("InterfacesAdded").await?;
     let mut ifaces_removed = obj_mgr.receive_signal("InterfacesRemoved").await?;
 
-    // PropertiesChanged
-    let adp_prop = adapter_proxy(&sys_conn, &adp_path).await?;
-    let mut adp_props_changed = adp_prop
+    let adp_proxy = adapter_proxy(&sys_conn, &adp_path).await?;
+    let mut adp_props = adp_proxy
         .receive_signal_with_args("PropertiesChanged", &[(0u8, "org.bluez.Adapter1")])
         .await?;
 
-    // Transfer progress kanalı
+    // Transfer progress
     let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<TransferUpdate>();
 
-    // Pairing onay bekleyen oneshot
-    let mut pending_pairing: Option<tokio::sync::oneshot::Sender<bool>> = None;
-    // Incoming dosya onay bekleyen
+    let mut pending_pairing:  Option<tokio::sync::oneshot::Sender<bool>> = None;
     let mut pending_incoming: Option<tokio::sync::oneshot::Sender<bool>> = None;
 
-    // Tarama sırasında cihaz adlarını güncellemek için 3sn interval
     let mut scanning = false;
     let mut refresh_tick = tokio::time::interval(tokio::time::Duration::from_secs(3));
     refresh_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
         tokio::select! {
-            // ── Periyodik cihaz adı/durum yenileme (tarama aktifken) ─
+            // ── Periyodik yenileme (tarama aktifken) ──────────────
             _ = refresh_tick.tick() => {
                 if scanning {
-                    let objects = get_managed_objects(&sys_conn).await?;
-                    for (p, ifaces) in &objects {
-                        if let Some(props) = ifaces.get("org.bluez.Device1") {
-                            if let Some(dev) = parse_device(p, props) {
-                                let _ = event_tx.send(BtEvent::DeviceChanged(dev));
-                            }
-                        }
+                    if let Ok(objects) = get_managed_objects(&sys_conn).await {
+                        device_map = devices_from_objects(&objects);
+                        send_all(event_tx, &device_map);
                     }
                 }
             }
 
-            // ── Kullanıcı komutları ──────────────────────────────────
-            Some(cmd) = cmd_rx.recv() => {
-                match cmd {
-                    BtCmd::SetPowered(on) => {
-                        let adp = adapter_proxy(&sys_conn, &adp_path).await?;
-                        let _ = adp.set_property("Powered", on).await;
-                        let _ = event_tx.send(BtEvent::Powered(on));
-                    }
-                    BtCmd::StartScan => {
-                        let adp = adapter_proxy(&sys_conn, &adp_path).await?;
-                        let _ = adp.set_property("Discoverable", true).await;
-                        let _ = adp.call_method("StartDiscovery", &()).await;
-                        scanning = true;
-                        let _ = event_tx.send(BtEvent::Scanning(true));
-                    }
-                    BtCmd::StopScan => {
-                        let adp = adapter_proxy(&sys_conn, &adp_path).await?;
-                        let _ = adp.call_method("StopDiscovery", &()).await;
-                        scanning = false;
-                        let _ = event_tx.send(BtEvent::Scanning(false));
-                    }
-                    BtCmd::Pair(address) => {
-                        let objects = get_managed_objects(&sys_conn).await?;
-                        if let Some(p) = find_device_path(&objects, &address) {
-                            // Ayrı task: select! döngüsü serbest kalır,
-                            // pair_req_rx dalı agent onayını işleyebilir.
-                            let conn2 = sys_conn.clone();
-                            let etx  = event_tx.clone();
-                            tokio::spawn(async move {
-                                let dev = match device_proxy(&conn2, &p).await {
-                                    Ok(d) => d,
-                                    Err(e) => {
-                                        let _ = etx.send(BtEvent::Toast(format!("Eşleşme hatası: {}", e)));
-                                        return;
-                                    }
-                                };
-                                match dev.call_method("Pair", &()).await {
-                                    Ok(_) => {
-                                        // BlueZ Paired=true yazmadan önce kısa bekleme
-                                        tokio::time::sleep(tokio::time::Duration::from_millis(600)).await;
-                                        if let Ok(fresh) = get_managed_objects(&conn2).await {
-                                            if let Some(ifaces) = fresh.get(&p) {
-                                                if let Some(props) = ifaces.get("org.bluez.Device1") {
-                                                    if let Some(mut info) = parse_device(&p, props) {
-                                                        info.paired = true; // Pair() OK → kesinlikle eşleşti
-                                                        let _ = etx.send(BtEvent::DeviceChanged(info));
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        let _ = etx.send(BtEvent::Toast(format!("Eşleşme hatası: {}", e)));
-                                    }
-                                }
-                            });
-                        }
-                    }
-                    BtCmd::Connect(address) => {
-                        let objects = get_managed_objects(&sys_conn).await?;
-                        if let Some(p) = find_device_path(&objects, &address) {
-                            let dev = device_proxy(&sys_conn, &p).await?;
-                            match dev.call_method("Connect", &()).await {
-                                Ok(_) => {
-                                    let fresh = get_managed_objects(&sys_conn).await?;
-                                    if let Some(ifaces) = fresh.get(&p) {
-                                        if let Some(props) = ifaces.get("org.bluez.Device1") {
-                                            if let Some(info) = parse_device(&p, props) {
-                                                let _ = event_tx.send(BtEvent::DeviceChanged(info));
-                                            }
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    let _ = event_tx.send(BtEvent::Toast(format!("Bağlantı hatası: {}", e)));
-                                }
-                            }
-                        }
-                    }
-                    BtCmd::Disconnect(address) => {
-                        let objects = get_managed_objects(&sys_conn).await?;
-                        if let Some(p) = find_device_path(&objects, &address) {
-                            let dev = device_proxy(&sys_conn, &p).await?;
-                            let _ = dev.call_method("Disconnect", &()).await;
-                            // Bağlantı durumunu güncelle
-                            let fresh = get_managed_objects(&sys_conn).await?;
-                            if let Some(ifaces) = fresh.get(&p) {
-                                if let Some(props) = ifaces.get("org.bluez.Device1") {
-                                    if let Some(info) = parse_device(&p, props) {
-                                        let _ = event_tx.send(BtEvent::DeviceChanged(info));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    BtCmd::Forget(address) => {
-                        let objects = get_managed_objects(&sys_conn).await?;
-                        if let Some(p) = find_device_path(&objects, &address) {
-                            let adp = adapter_proxy(&sys_conn, &adp_path).await?;
-                            let _ = adp.call_method("RemoveDevice", &p).await;
-                            let _ = event_tx.send(BtEvent::DeviceRemoved(address));
-                        }
-                    }
-                    BtCmd::SendFile { address, path } => {
-                        let conn = ses_conn.clone();
-                        let tx = progress_tx.clone();
-                        let ev_tx = event_tx.clone();
+            // ── Kullanıcı komutları ────────────────────────────────
+            Some(cmd) = cmd_rx.recv() => match cmd {
+                BtCmd::SetPowered(on) => {
+                    let adp = adapter_proxy(&sys_conn, &adp_path).await?;
+                    let _ = adp.set_property("Powered", on).await;
+                    let _ = event_tx.send(BtEvent::Powered(on));
+                }
+                BtCmd::StartScan => {
+                    let adp = adapter_proxy(&sys_conn, &adp_path).await?;
+                    let _ = adp.set_property("Discoverable", true).await;
+                    let _ = adp.call_method("StartDiscovery", &()).await;
+                    scanning = true;
+                    let _ = event_tx.send(BtEvent::Scanning(true));
+                }
+                BtCmd::StopScan => {
+                    let adp = adapter_proxy(&sys_conn, &adp_path).await?;
+                    let _ = adp.call_method("StopDiscovery", &()).await;
+                    scanning = false;
+                    let _ = event_tx.send(BtEvent::Scanning(false));
+                }
+                BtCmd::Pair(address) => {
+                    let path = device_map.get(&address).map(|_| {
+                        // BlueZ path'ini objects'tan bul
+                        OwnedObjectPath::try_from(format!(
+                            "/org/bluez/hci0/dev_{}",
+                            address.replace(':', "_")
+                        )).ok()
+                    }).flatten();
+
+                    if let Some(p) = path {
+                        // Ayrı task: select! döngüsü serbest kalır → pair_req_rx çalışabilir
+                        let conn2 = sys_conn.clone();
+                        let etx   = event_tx.clone();
                         tokio::spawn(async move {
-                            if let Err(e) = obex::send_file(&conn, &address, &path, tx).await {
-                                let _ = ev_tx.send(BtEvent::Toast(format!("Gönderme hatası: {}", e)));
+                            match device_proxy(&conn2, &p).await {
+                                Err(e) => { let _ = etx.send(BtEvent::Toast(format!("Hata: {}", e))); }
+                                Ok(dev) => match dev.call_method("Pair", &()).await {
+                                    Err(e) => { let _ = etx.send(BtEvent::Toast(format!("Eşleşme hatası: {}", e))); }
+                                    Ok(_) => {
+                                        tokio::time::sleep(tokio::time::Duration::from_millis(700)).await;
+                                        if let Ok(objects) = get_managed_objects(&conn2).await {
+                                            let mut map = devices_from_objects(&objects);
+                                            // Pair() OK → kesinlikle eşleşti
+                                            if let Some(d) = map.get_mut(&address) {
+                                                d.paired = true;
+                                            }
+                                            let _ = etx.send(BtEvent::AllDevices(map.values().cloned().collect()));
+                                        }
+                                    }
+                                }
                             }
                         });
                     }
-                    BtCmd::ConfirmPairing(accept) => {
-                        if let Some(tx) = pending_pairing.take() {
-                            let _ = tx.send(accept);
-                        }
+                }
+                BtCmd::Connect(address) => {
+                    if let Some(p) = bluez_path(&address) {
+                        let conn2 = sys_conn.clone();
+                        let etx   = event_tx.clone();
+                        tokio::spawn(async move {
+                            if let Ok(dev) = device_proxy(&conn2, &p).await {
+                                match dev.call_method("Connect", &()).await {
+                                    Ok(_) => {
+                                        tokio::time::sleep(tokio::time::Duration::from_millis(400)).await;
+                                        if let Ok(objects) = get_managed_objects(&conn2).await {
+                                            let _ = etx.send(BtEvent::AllDevices(
+                                                devices_from_objects(&objects).values().cloned().collect()
+                                            ));
+                                        }
+                                    }
+                                    Err(e) => { let _ = etx.send(BtEvent::Toast(format!("Bağlantı hatası: {}", e))); }
+                                }
+                            }
+                        });
                     }
-                    BtCmd::AcceptIncoming(accept) => {
-                        if let Some(tx) = pending_incoming.take() {
-                            let _ = tx.send(accept);
+                }
+                BtCmd::Disconnect(address) => {
+                    if let Some(p) = bluez_path(&address) {
+                        let _ = device_proxy(&sys_conn, &p).await?.call_method("Disconnect", &()).await;
+                        if let Ok(objects) = get_managed_objects(&sys_conn).await {
+                            device_map = devices_from_objects(&objects);
+                            send_all(event_tx, &device_map);
                         }
                     }
                 }
-            }
+                BtCmd::Forget(address) => {
+                    if let Some(p) = bluez_path(&address) {
+                        let adp = adapter_proxy(&sys_conn, &adp_path).await?;
+                        let _ = adp.call_method("RemoveDevice", &p).await;
+                        device_map.remove(&address);
+                        send_all(event_tx, &device_map);
+                    }
+                }
+                BtCmd::SendFile { address, path } => {
+                    let conn2 = ses_conn.clone();
+                    let tx    = progress_tx.clone();
+                    let etx   = event_tx.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = obex::send_file(&conn2, &address, &path, tx).await {
+                            let _ = etx.send(BtEvent::Toast(format!("Gönderme hatası: {}", e)));
+                        }
+                    });
+                }
+                BtCmd::ConfirmPairing(accept) => {
+                    if let Some(tx) = pending_pairing.take() { let _ = tx.send(accept); }
+                }
+                BtCmd::AcceptIncoming(accept) => {
+                    if let Some(tx) = pending_incoming.take() { let _ = tx.send(accept); }
+                }
+            },
 
-            // ── Eşleşme isteği (agent'tan) ────────────────────────
+            // ── Eşleşme isteği ────────────────────────────────────
             Some(req) = pair_req_rx.recv() => {
-                let device_name = {
-                    let objects = get_managed_objects(&sys_conn).await.unwrap_or_default();
-                    objects.get(&req.device_path)
-                        .and_then(|i| i.get("org.bluez.Device1"))
-                        .and_then(|p| p.get("Alias").or_else(|| p.get("Name")))
-                        .and_then(|v| String::try_from(v.clone()).ok())
-                        .unwrap_or_else(|| req.device_path.to_string())
-                };
+                let device_name = device_map
+                    .values()
+                    .find(|d| req.device_path.as_str().contains(&d.address.replace(':', "_")))
+                    .map(|d| d.name.clone())
+                    .unwrap_or_else(|| req.device_path.to_string());
                 pending_pairing = Some(req.response);
-                let _ = event_tx.send(BtEvent::PairingRequest {
-                    device_name,
-                    passkey: req.passkey,
-                });
+                let _ = event_tx.send(BtEvent::PairingRequest { device_name, passkey: req.passkey });
             }
 
-            // ── Gelen dosya isteği (obex agent'tan) ───────────────
+            // ── Gelen dosya isteği ─────────────────────────────────
             Some(req) = incoming_rx.recv() => {
                 pending_incoming = Some(req.response);
                 let _ = event_tx.send(BtEvent::IncomingFile {
@@ -428,16 +349,14 @@ async fn run_inner(
             Some(update) = progress_rx.recv() => {
                 let progress = if update.total > 0 {
                     update.transferred as f32 / update.total as f32
-                } else {
-                    if update.status == "complete" { 1.0 } else { 0.0 }
-                };
+                } else if update.status == "complete" { 1.0 } else { 0.0 };
                 let status_tr = match update.status.as_str() {
-                    "active"    => "Gönderiliyor".to_string(),
-                    "complete"  => "Tamamlandı".to_string(),
-                    "error"     => "Hata".to_string(),
-                    "suspended" => "Duraklatıldı".to_string(),
-                    other       => other.to_string(),
-                };
+                    "active"    => "Gönderiliyor",
+                    "complete"  => "Tamamlandı",
+                    "error"     => "Hata",
+                    "suspended" => "Duraklatıldı",
+                    other       => other,
+                }.to_string();
                 let _ = event_tx.send(BtEvent::TransferProgress {
                     file: update.file_name,
                     progress,
@@ -445,37 +364,39 @@ async fn run_inner(
                 });
             }
 
-            // ── InterfacesAdded sinyali ────────────────────────────
+            // ── InterfacesAdded ────────────────────────────────────
             Some(msg) = ifaces_added.next() => {
                 type IfaceMap = HashMap<String, HashMap<String, zbus::zvariant::OwnedValue>>;
                 let parse: zbus::Result<(OwnedObjectPath, IfaceMap)> = msg.body().deserialize();
                 if let Ok((dev_path, ifaces)) = parse {
                     if let Some(props) = ifaces.get("org.bluez.Device1") {
                         if let Some(dev) = parse_device(&dev_path, props) {
-                            let _ = event_tx.send(BtEvent::DeviceAdded(dev));
+                            device_map.insert(dev.address.clone(), dev);
+                            send_all(event_tx, &device_map);
                         }
                     }
                 }
             }
 
-            // ── InterfacesRemoved sinyali ──────────────────────────
+            // ── InterfacesRemoved ──────────────────────────────────
             Some(msg) = ifaces_removed.next() => {
                 let parse: zbus::Result<(OwnedObjectPath, Vec<String>)> = msg.body().deserialize();
-                if let Ok((dev_path, _ifaces)) = parse {
+                if let Ok((dev_path, _)) = parse {
                     let addr = dev_path.as_str().split('/').last()
                         .map(|s| s.trim_start_matches("dev_").replace('_', ":"))
                         .unwrap_or_default();
                     if !addr.is_empty() {
-                        let _ = event_tx.send(BtEvent::DeviceRemoved(addr));
+                        device_map.remove(&addr);
+                        send_all(event_tx, &device_map);
                     }
                 }
             }
 
             // ── Adaptör PropertiesChanged ──────────────────────────
-            Some(msg) = adp_props_changed.next() => {
+            Some(msg) = adp_props.next() => {
                 type PropMap = HashMap<String, zbus::zvariant::OwnedValue>;
                 let parse: zbus::Result<(String, PropMap, Vec<String>)> = msg.body().deserialize();
-                if let Ok((_iface, changed, _inv)) = parse {
+                if let Ok((_iface, changed, _)) = parse {
                     if let Some(v) = changed.get("Powered") {
                         if let Ok(on) = bool::try_from(v.clone()) {
                             let _ = event_tx.send(BtEvent::Powered(on));
@@ -493,14 +414,20 @@ async fn run_inner(
     }
 }
 
+fn bluez_path(address: &str) -> Option<OwnedObjectPath> {
+    OwnedObjectPath::try_from(format!(
+        "/org/bluez/hci0/dev_{}",
+        address.replace(':', "_")
+    )).ok()
+}
+
 fn find_device_path(
-    objects: &HashMap<OwnedObjectPath, HashMap<String, HashMap<String, zbus::zvariant::OwnedValue>>>,
+    objects: &ManagedObjects,
     address: &str,
 ) -> Option<OwnedObjectPath> {
     for (path, ifaces) in objects {
         if let Some(props) = ifaces.get("org.bluez.Device1") {
-            let addr = props
-                .get("Address")
+            let addr = props.get("Address")
                 .and_then(|v| String::try_from(v.clone()).ok())
                 .unwrap_or_default();
             if addr.eq_ignore_ascii_case(address) {
