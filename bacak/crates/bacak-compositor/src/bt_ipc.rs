@@ -28,6 +28,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 
+type Waker = Arc<Mutex<Option<calloop::LoopSignal>>>;
+
 pub enum IpcCmd {
     Power(bool),
     Scan(bool),
@@ -53,7 +55,16 @@ pub struct BtIpcServer {
     client_tx: Arc<Mutex<Option<Sender<String>>>>,
     /// Her yeni istemci bağlandığında artar (compositor'un "yeni bağlantı" fark etmesi için).
     pub generation: Arc<AtomicU64>,
+    /// Calloop event loop'unu uyandırmak için (IPC thread'den).
+    waker: Waker,
     _thread: std::thread::JoinHandle<()>,
+}
+
+impl BtIpcServer {
+    /// Calloop LoopSignal'i ver — IPC komutları gelince compositor uyanır.
+    pub fn set_waker(&self, signal: calloop::LoopSignal) {
+        *self.waker.lock().unwrap() = Some(signal);
+    }
 }
 
 impl BtIpcServer {
@@ -66,11 +77,12 @@ impl BtIpcServer {
                 tracing::error!("BT IPC soket bağlanamadı: {e}");
                 // Boş dummy döndür
                 let (cmd_tx, cmd_rx) = channel();
-                let _ = cmd_tx; // kanal açık kalsın
+                let _ = cmd_tx;
                 return BtIpcServer {
                     cmd_rx,
                     client_tx: Arc::new(Mutex::new(None)),
                     generation: Arc::new(AtomicU64::new(0)),
+                    waker: Arc::new(Mutex::new(None)),
                     _thread: std::thread::spawn(|| {}),
                 };
             }
@@ -81,6 +93,8 @@ impl BtIpcServer {
         let client_tx2 = client_tx.clone();
         let generation = Arc::new(AtomicU64::new(0));
         let gen2 = generation.clone();
+        let waker: Waker = Arc::new(Mutex::new(None));
+        let waker2 = waker.clone();
 
         let thread = std::thread::Builder::new()
             .name("bt-ipc".into())
@@ -90,25 +104,29 @@ impl BtIpcServer {
                     let (evt_tx, evt_rx) = channel::<String>();
                     *client_tx2.lock().unwrap() = Some(evt_tx);
                     gen2.fetch_add(1, Ordering::Relaxed);
+                    // Yeni istemci bağlandı → compositor'u uyandır
+                    if let Some(sig) = waker2.lock().unwrap().as_ref() { sig.wakeup(); }
 
-                    // Okuyucu: soket satırları → cmd_tx
+                    // Okuyucu: soket satırları → cmd_tx + compositor'u uyandır
                     let stream_r = match stream.try_clone() {
                         Ok(s) => s,
                         Err(_) => continue,
                     };
                     let cmd_tx2 = cmd_tx.clone();
+                    let waker3 = waker2.clone();
                     std::thread::Builder::new()
                         .name("bt-ipc-r".into())
                         .spawn(move || {
                             for line in BufReader::new(stream_r).lines().flatten() {
                                 if let Some(cmd) = parse_cmd(&line) {
                                     let _ = cmd_tx2.send(cmd);
+                                    if let Some(sig) = waker3.lock().unwrap().as_ref() { sig.wakeup(); }
                                 }
                             }
                         })
                         .ok();
 
-                    // Yazıcı: evt_rx → soket (istemci bağlantıyı kesene kadar bloklar)
+                    // Yazıcı: evt_rx → soket
                     let mut w = stream;
                     for json in evt_rx {
                         if writeln!(w, "{json}").is_err() {
@@ -120,7 +138,7 @@ impl BtIpcServer {
             })
             .expect("bt-ipc thread spawn");
 
-        BtIpcServer { cmd_rx, client_tx, generation, _thread: thread }
+        BtIpcServer { cmd_rx, client_tx, generation, waker, _thread: thread }
     }
 
     pub fn has_client(&self) -> bool {
