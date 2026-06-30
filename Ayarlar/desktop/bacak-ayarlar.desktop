@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Ayarlar
+Name[tr]=Ayarlar
+Comment=Bacak OS Sistem Ayarları
+Comment[tr]=Bluetooth, Ağ ve Sistem Ayarları
+Exec=bacak-ayarlar
+Icon=bacak-ayarlar
+Categories=Settings;System;
+Keywords=bluetooth;ayarlar;settings;wireless;kablosuz;
+StartupWMClass=bacak-ayarlar

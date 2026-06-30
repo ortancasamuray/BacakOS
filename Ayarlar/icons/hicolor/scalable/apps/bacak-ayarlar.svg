@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48">
+  <rect width="48" height="48" rx="10" fill="#161b22"/>
+  <!-- Bluetooth symbol -->
+  <path d="M24 8 L24 40 L33 31 L27 24 L33 17 Z" stroke="#4a9eff" stroke-width="2.5" fill="none" stroke-linejoin="round"/>
+  <path d="M24 8 L15 17 L21 24 L15 31" stroke="#4a9eff" stroke-width="2.5" fill="none" stroke-linejoin="round"/>
+</svg>
