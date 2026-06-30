@@ -16,6 +16,7 @@ use zbus::{zvariant::OwnedObjectPath, Connection};
 
 #[derive(Debug, Clone)]
 pub struct DeviceInfo {
+    pub path: OwnedObjectPath,  // BlueZ D-Bus yolu — hci0 sabit kodlamasını önler
     pub address: String,
     pub name: String,
     pub paired: bool,
@@ -105,7 +106,7 @@ fn parse_device(
         return None;
     }
 
-    Some(DeviceInfo { address, name, paired, connected, rssi, icon })
+    Some(DeviceInfo { path: path.clone(), address, name, paired, connected, rssi, icon })
 }
 
 fn devices_from_objects(objects: &ManagedObjects) -> HashMap<String, DeviceInfo> {
@@ -236,16 +237,8 @@ async fn run_inner(
                     let _ = event_tx.send(BtEvent::Scanning(false));
                 }
                 BtCmd::Pair(address) => {
-                    let path = device_map.get(&address).map(|_| {
-                        // BlueZ path'ini objects'tan bul
-                        OwnedObjectPath::try_from(format!(
-                            "/org/bluez/hci0/dev_{}",
-                            address.replace(':', "_")
-                        )).ok()
-                    }).flatten();
-
-                    if let Some(p) = path {
-                        // Ayrı task: select! döngüsü serbest kalır → pair_req_rx çalışabilir
+                    if let Some(dev_info) = device_map.get(&address).cloned() {
+                        let p     = dev_info.path.clone();
                         let conn2 = sys_conn.clone();
                         let etx   = event_tx.clone();
                         tokio::spawn(async move {
@@ -257,11 +250,12 @@ async fn run_inner(
                                         tokio::time::sleep(tokio::time::Duration::from_millis(700)).await;
                                         if let Ok(objects) = get_managed_objects(&conn2).await {
                                             let mut map = devices_from_objects(&objects);
-                                            // Pair() OK → kesinlikle eşleşti
                                             if let Some(d) = map.get_mut(&address) {
                                                 d.paired = true;
                                             }
-                                            let _ = etx.send(BtEvent::AllDevices(map.values().cloned().collect()));
+                                            let _ = etx.send(BtEvent::AllDevices(
+                                                map.values().cloned().collect(),
+                                            ));
                                         }
                                     }
                                 }
@@ -270,7 +264,8 @@ async fn run_inner(
                     }
                 }
                 BtCmd::Connect(address) => {
-                    if let Some(p) = bluez_path(&address) {
+                    if let Some(dev_info) = device_map.get(&address).cloned() {
+                        let p     = dev_info.path.clone();
                         let conn2 = sys_conn.clone();
                         let etx   = event_tx.clone();
                         tokio::spawn(async move {
@@ -280,7 +275,7 @@ async fn run_inner(
                                         tokio::time::sleep(tokio::time::Duration::from_millis(400)).await;
                                         if let Ok(objects) = get_managed_objects(&conn2).await {
                                             let _ = etx.send(BtEvent::AllDevices(
-                                                devices_from_objects(&objects).values().cloned().collect()
+                                                devices_from_objects(&objects).values().cloned().collect(),
                                             ));
                                         }
                                     }
@@ -291,8 +286,9 @@ async fn run_inner(
                     }
                 }
                 BtCmd::Disconnect(address) => {
-                    if let Some(p) = bluez_path(&address) {
-                        let _ = device_proxy(&sys_conn, &p).await?.call_method("Disconnect", &()).await;
+                    if let Some(dev_info) = device_map.get(&address).cloned() {
+                        let _ = device_proxy(&sys_conn, &dev_info.path).await?
+                            .call_method("Disconnect", &()).await;
                         if let Ok(objects) = get_managed_objects(&sys_conn).await {
                             device_map = devices_from_objects(&objects);
                             send_all(event_tx, &device_map);
@@ -300,9 +296,9 @@ async fn run_inner(
                     }
                 }
                 BtCmd::Forget(address) => {
-                    if let Some(p) = bluez_path(&address) {
+                    if let Some(dev_info) = device_map.get(&address).cloned() {
                         let adp = adapter_proxy(&sys_conn, &adp_path).await?;
-                        let _ = adp.call_method("RemoveDevice", &p).await;
+                        let _ = adp.call_method("RemoveDevice", &dev_info.path).await;
                         device_map.remove(&address);
                         send_all(event_tx, &device_map);
                     }
