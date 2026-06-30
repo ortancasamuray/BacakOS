@@ -251,8 +251,27 @@ async fn run_inner(
     // Incoming dosya onay bekleyen
     let mut pending_incoming: Option<tokio::sync::oneshot::Sender<bool>> = None;
 
+    // Tarama sırasında cihaz adlarını güncellemek için 3sn interval
+    let mut scanning = false;
+    let mut refresh_tick = tokio::time::interval(tokio::time::Duration::from_secs(3));
+    refresh_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
     loop {
         tokio::select! {
+            // ── Periyodik cihaz adı/durum yenileme (tarama aktifken) ─
+            _ = refresh_tick.tick() => {
+                if scanning {
+                    let objects = get_managed_objects(&sys_conn).await?;
+                    for (p, ifaces) in &objects {
+                        if let Some(props) = ifaces.get("org.bluez.Device1") {
+                            if let Some(dev) = parse_device(p, props) {
+                                let _ = event_tx.send(BtEvent::DeviceChanged(dev));
+                            }
+                        }
+                    }
+                }
+            }
+
             // ── Kullanıcı komutları ──────────────────────────────────
             Some(cmd) = cmd_rx.recv() => {
                 match cmd {
@@ -265,11 +284,13 @@ async fn run_inner(
                         let adp = adapter_proxy(&sys_conn, &adp_path).await?;
                         let _ = adp.set_property("Discoverable", true).await;
                         let _ = adp.call_method("StartDiscovery", &()).await;
+                        scanning = true;
                         let _ = event_tx.send(BtEvent::Scanning(true));
                     }
                     BtCmd::StopScan => {
                         let adp = adapter_proxy(&sys_conn, &adp_path).await?;
                         let _ = adp.call_method("StopDiscovery", &()).await;
+                        scanning = false;
                         let _ = event_tx.send(BtEvent::Scanning(false));
                     }
                     BtCmd::Pair(address) => {
@@ -277,18 +298,45 @@ async fn run_inner(
                         let path = find_device_path(&objects, &address);
                         if let Some(p) = path {
                             let dev = device_proxy(&sys_conn, &p).await?;
-                            let _ = dev.call_method("Pair", &()).await.map_err(|e| {
-                                let _ = event_tx.send(BtEvent::Toast(format!("Eşleşme hatası: {}", e)));
-                            });
+                            match dev.call_method("Pair", &()).await {
+                                Ok(_) => {
+                                    // Eşleşme tamamlandı — cihaz bilgisini tazele
+                                    let fresh = get_managed_objects(&sys_conn).await?;
+                                    if let Some(ifaces) = fresh.get(&p) {
+                                        if let Some(props) = ifaces.get("org.bluez.Device1") {
+                                            if let Some(info) = parse_device(&p, props) {
+                                                let _ = event_tx.send(BtEvent::DeviceChanged(info));
+                                            }
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    let _ = event_tx.send(BtEvent::Toast(
+                                        format!("Eşleşme hatası: {}", e),
+                                    ));
+                                }
+                            }
                         }
                     }
                     BtCmd::Connect(address) => {
                         let objects = get_managed_objects(&sys_conn).await?;
                         if let Some(p) = find_device_path(&objects, &address) {
                             let dev = device_proxy(&sys_conn, &p).await?;
-                            let _ = dev.call_method("Connect", &()).await.map_err(|e| {
-                                let _ = event_tx.send(BtEvent::Toast(format!("Bağlantı hatası: {}", e)));
-                            });
+                            match dev.call_method("Connect", &()).await {
+                                Ok(_) => {
+                                    let fresh = get_managed_objects(&sys_conn).await?;
+                                    if let Some(ifaces) = fresh.get(&p) {
+                                        if let Some(props) = ifaces.get("org.bluez.Device1") {
+                                            if let Some(info) = parse_device(&p, props) {
+                                                let _ = event_tx.send(BtEvent::DeviceChanged(info));
+                                            }
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    let _ = event_tx.send(BtEvent::Toast(format!("Bağlantı hatası: {}", e)));
+                                }
+                            }
                         }
                     }
                     BtCmd::Disconnect(address) => {
@@ -296,6 +344,15 @@ async fn run_inner(
                         if let Some(p) = find_device_path(&objects, &address) {
                             let dev = device_proxy(&sys_conn, &p).await?;
                             let _ = dev.call_method("Disconnect", &()).await;
+                            // Bağlantı durumunu güncelle
+                            let fresh = get_managed_objects(&sys_conn).await?;
+                            if let Some(ifaces) = fresh.get(&p) {
+                                if let Some(props) = ifaces.get("org.bluez.Device1") {
+                                    if let Some(info) = parse_device(&p, props) {
+                                        let _ = event_tx.send(BtEvent::DeviceChanged(info));
+                                    }
+                                }
+                            }
                         }
                     }
                     BtCmd::Forget(address) => {
@@ -413,8 +470,9 @@ async fn run_inner(
                         }
                     }
                     if let Some(v) = changed.get("Discovering") {
-                        if let Ok(scanning) = bool::try_from(v.clone()) {
-                            let _ = event_tx.send(BtEvent::Scanning(scanning));
+                        if let Ok(s) = bool::try_from(v.clone()) {
+                            scanning = s;
+                            let _ = event_tx.send(BtEvent::Scanning(s));
                         }
                     }
                 }
