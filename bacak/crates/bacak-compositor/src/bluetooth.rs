@@ -259,6 +259,99 @@ except Exception as e:
 GLib.MainLoop().run()
 "#;
 
+/// Python scripti: obexd D-Bus API'sı üzerinden dosya gönder.
+/// bluetooth-sendto veya başka araç GEREKTIRMEZ — obexd (bluez-obexd) yeterli.
+const OBEX_SENDER_PY: &str = r#"#!/usr/bin/env python3
+import os, sys, time, dbus, dbus.mainloop.glib
+from gi.repository import GLib
+
+HOME = os.path.expanduser("~")
+LOG = os.path.join(HOME, ".cache", "bacak", "obex-send.log")
+
+def log(m):
+    try:
+        with open(LOG, "a") as f: f.write("%.0f %s\n" % (time.time(), m))
+    except Exception: pass
+
+def main():
+    if len(sys.argv) < 3:
+        log("Kullanim: obex-send.py <mac> <dosya>"); sys.exit(1)
+    mac = sys.argv[1]
+    path = os.path.abspath(sys.argv[2])
+    if not os.path.exists(path):
+        log("Dosya bulunamadi: " + path); sys.exit(1)
+    dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+    bus = dbus.SessionBus()
+    loop = GLib.MainLoop()
+    try:
+        client = dbus.Interface(
+            bus.get_object("org.bluez.obex", "/org/bluez/obex"),
+            "org.bluez.obex.Client1")
+        log("Oturum aciliyor: " + mac)
+        session_path = client.CreateSession(mac, {"Target": dbus.String("opp")})
+        opp = dbus.Interface(
+            bus.get_object("org.bluez.obex", session_path),
+            "org.bluez.obex.ObjectPush1")
+        log("Dosya gonderiliyor: " + path)
+        transfer_path, _ = opp.SendFile(path)
+        iface = dbus.Interface(
+            bus.get_object("org.bluez.obex", transfer_path),
+            "org.freedesktop.DBus.Properties")
+        def check():
+            try:
+                status = str(iface.Get("org.bluez.obex.Transfer1", "Status"))
+                if status == "complete":
+                    log("Tamamlandi: " + path)
+                    try: client.RemoveSession(session_path)
+                    except: pass
+                    loop.quit(); return False
+                elif status == "error":
+                    log("Hata: transfer basarisiz")
+                    try: client.RemoveSession(session_path)
+                    except: pass
+                    loop.quit(); return False
+            except Exception as e:
+                log("Kontrol hatasi: " + str(e))
+                loop.quit(); return False
+            return True
+        GLib.timeout_add(500, check)
+        loop.run()
+    except dbus.exceptions.DBusException as e:
+        log("D-Bus hatasi: " + str(e)); sys.exit(1)
+
+if __name__ == "__main__":
+    main()
+"#;
+
+/// Dosyayı Bluetooth üzerinden gönder — obexd D-Bus OPP kullanır.
+/// Arka planda çalışır; compositor'u bloklamaz.
+pub fn send_file_obex(mac: &str, path: &str) {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+    let dir = std::path::PathBuf::from(&home).join(".cache/bacak");
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let script = dir.join("obex-send.py");
+    if std::fs::write(&script, OBEX_SENDER_PY).is_err() {
+        return;
+    }
+    let runtime = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/run/user/1000".into());
+    let user_bus = format!("unix:path={runtime}/bus");
+    let mac = mac.to_string();
+    let path = path.to_string();
+    std::thread::spawn(move || {
+        let _ = Command::new("python3")
+            .arg(&script)
+            .arg(&mac)
+            .arg(&path)
+            .env("DBUS_SESSION_BUS_ADDRESS", &user_bus)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+    });
+}
+
 /// Write the OBEX agent script and launch it (detached, fire-and-forget) so
 /// incoming Bluetooth file transfers are accepted into ~/Downloads. Idempotent:
 /// a second instance exits when it finds an agent already registered.
@@ -324,6 +417,49 @@ pub fn connected_macs() -> Vec<String> {
     bctl_capture(&["devices", "Connected"])
         .map(|o| parse_device_lines(&o).into_iter().map(|(m, _)| m).collect())
         .unwrap_or_default()
+}
+
+/// `bluetoothctl info <mac>` → (batarya 0-100, icon adı).
+/// Batarya yoksa `None`; icon yoksa boş string.
+pub fn device_info(mac: &str) -> (Option<u8>, String) {
+    let out = match bctl_capture(&["info", mac]) {
+        Some(s) => s,
+        None => return (None, String::new()),
+    };
+    let mut battery: Option<u8> = None;
+    let mut icon = String::new();
+    for line in out.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("Battery Percentage:") {
+            // "0x50 (80)" → 80
+            if let (Some(a), Some(b)) = (rest.find('('), rest.find(')')) {
+                battery = rest[a + 1..b].trim().parse::<u8>().ok();
+            }
+        } else if let Some(rest) = line.strip_prefix("Icon:") {
+            icon = rest.trim().to_string();
+        }
+    }
+    (battery, icon)
+}
+
+/// BlueZ icon adını Türkçe cihaz türüne çevir.
+pub fn icon_to_type(icon: &str) -> &'static str {
+    match icon {
+        "phone" => "Telefon",
+        "audio-headset" => "Kulaklık",
+        "audio-headphones" => "Kulaklık",
+        "audio-card" => "Ses Kartı",
+        "input-keyboard" => "Klavye",
+        "input-mouse" => "Fare",
+        "input-gaming" => "Oyun Kolu",
+        "input-tablet" => "Tablet",
+        "computer" => "Bilgisayar",
+        "printer" => "Yazıcı",
+        "camera-photo" => "Fotoğraf Makinesi",
+        "camera-video" => "Kamera",
+        "modem" => "Modem",
+        _ => "",
+    }
 }
 
 /// Handle to the persistent `bluetoothctl` coprocess.
