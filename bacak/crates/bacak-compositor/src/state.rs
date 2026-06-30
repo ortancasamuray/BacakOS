@@ -995,6 +995,12 @@ pub struct BacakState {
     /// freshly-scanned already-paired device show in the "paired" section instead
     /// of offering a (failing) re-pair.
     pub bt_paired: std::collections::HashSet<String>,
+    /// IPC soket sunucusu — bacak-ayarlar bağlanarak BT kontrol eder.
+    pub bt_ipc: crate::bt_ipc::BtIpcServer,
+    /// Kaç kez yeni IPC istemcisi bağlandı (state initialization için).
+    bt_ipc_gen: u64,
+    /// IPC istemcisi için cihaz listesi (bt_panel olmadan da tutulur).
+    bt_ipc_devices: Vec<BtDevice>,
     /// Receiver for the background Wi-Fi connect thread's result. `Some` only
     /// while a connect is in flight; drained in [`Self::tick_animations`].
     pub wifi_rx: Option<std::sync::mpsc::Receiver<WifiMsg>>,
@@ -1470,6 +1476,9 @@ impl BacakState {
             btctl: None,
             bt_last_pk: None,
             bt_paired: std::collections::HashSet::new(),
+            bt_ipc: crate::bt_ipc::BtIpcServer::start(),
+            bt_ipc_gen: 0,
+            bt_ipc_devices: Vec::new(),
             wifi_rx: None,
             desktop_settings: None,
             ds_rx: None,
@@ -6438,8 +6447,96 @@ impl BacakState {
     /// Drain pending `bluetoothctl` events into the panel. Returns whether
     /// anything changed (caller redraws). Called each tick while the panel is open.
     pub fn bt_poll(&mut self) -> bool {
-        if self.bt_panel.is_none() {
+        let ipc_active = self.bt_ipc.has_client();
+        if self.bt_panel.is_none() && !ipc_active {
             return false;
+        }
+        // Yeni IPC istemcisi bağlandıysa başlangıç durumunu gönder.
+        let cur_gen = self.bt_ipc.generation.load(std::sync::atomic::Ordering::Relaxed);
+        if cur_gen != self.bt_ipc_gen {
+            self.bt_ipc_gen = cur_gen;
+            if self.btctl.is_none() {
+                self.btctl = crate::bluetooth::BtCtl::start();
+            }
+            let devices = self.bt_known_devices();
+            self.bt_ipc_devices = devices.clone();
+            let powered = true; // BtCtl zaten açıkken powered varsayılır
+            let ipc_devs: Vec<_> = devices
+                .iter()
+                .map(|d| crate::bt_ipc::IpcDevice {
+                    mac: d.mac.clone(),
+                    name: d.name.clone(),
+                    paired: d.paired,
+                    connected: d.connected,
+                })
+                .collect();
+            self.bt_ipc.send_powered(powered);
+            self.bt_ipc.send_devices(&ipc_devs);
+        }
+        // IPC komutlarını işle.
+        while let Some(cmd) = self.bt_ipc.try_recv_cmd() {
+            use crate::bt_ipc::IpcCmd;
+            match cmd {
+                IpcCmd::Power(on) => {
+                    if let Some(bt) = self.btctl.as_ref() {
+                        bt.send(if on { "power on" } else { "power off" });
+                    }
+                    self.bt_ipc.send_powered(on);
+                }
+                IpcCmd::Scan(on) => {
+                    if let Some(bt) = self.btctl.as_ref() {
+                        if on {
+                            bt.send("pairable on");
+                            bt.send("discoverable on");
+                            bt.scan(true);
+                        } else {
+                            bt.scan(false);
+                        }
+                        self.bt_ipc.send_scanning(on);
+                    }
+                }
+                IpcCmd::Pair(mac) => {
+                    if let Some(bt) = self.btctl.as_ref() {
+                        bt.scan(false);
+                        bt.pair(&mac);
+                    }
+                }
+                IpcCmd::Connect(mac) => {
+                    if let Some(bt) = self.btctl.as_ref() {
+                        bt.connect(&mac);
+                    }
+                }
+                IpcCmd::Disconnect(mac) => {
+                    if let Some(bt) = self.btctl.as_ref() {
+                        bt.send(&format!("disconnect {mac}"));
+                    }
+                }
+                IpcCmd::Forget(mac) => {
+                    if let Some(bt) = self.btctl.as_ref() {
+                        bt.send(&format!("remove {mac}"));
+                    }
+                    self.bt_paired.remove(&mac);
+                    self.bt_ipc_devices.retain(|d| d.mac != mac);
+                    let devs: Vec<_> = self.bt_ipc_devices.iter().map(|d| crate::bt_ipc::IpcDevice {
+                        mac: d.mac.clone(), name: d.name.clone(),
+                        paired: d.paired, connected: d.connected,
+                    }).collect();
+                    self.bt_ipc.send_devices(&devs);
+                }
+                IpcCmd::Confirm(accept) => {
+                    if let Some(bt) = self.btctl.as_ref() {
+                        bt.agent_yes(accept);
+                    }
+                }
+                IpcCmd::GetState => {
+                    let devs: Vec<_> = self.bt_ipc_devices.iter().map(|d| crate::bt_ipc::IpcDevice {
+                        mac: d.mac.clone(), name: d.name.clone(),
+                        paired: d.paired, connected: d.connected,
+                    }).collect();
+                    self.bt_ipc.send_powered(true);
+                    self.bt_ipc.send_devices(&devs);
+                }
+            }
         }
         use crate::bluetooth::BtEvent;
 
@@ -6560,10 +6657,21 @@ impl BacakState {
             match ev {
                 BtEvent::Powered(on) => {
                     powered = on;
+                    self.bt_ipc.send_powered(on);
                     relayout = true;
                 }
-                BtEvent::Discovering(_) => {}
+                BtEvent::Discovering(on) => {
+                    self.bt_ipc.send_scanning(on);
+                }
                 BtEvent::Device { mac, name } => {
+                    // IPC cihaz listesini güncelle
+                    if let Some(d) = self.bt_ipc_devices.iter_mut().find(|d| d.mac == mac) {
+                        if !name.is_empty() && name != mac.replace(':', "-") {
+                            d.name = name.clone();
+                        }
+                    } else {
+                        self.bt_ipc_devices.push(BtDevice { mac: mac.clone(), name: name.clone(), paired: false, connected: false });
+                    }
                     if let Some(d) = devices.iter_mut().find(|d| d.mac == mac) {
                         // Don't overwrite a real name with the dashed-MAC fallback.
                         if !name.is_empty() && name != mac.replace(':', "-") {
@@ -6575,13 +6683,21 @@ impl BacakState {
                     relayout = true;
                 }
                 BtEvent::Connected { mac, connected } => {
+                    if let Some(d) = self.bt_ipc_devices.iter_mut().find(|d| d.mac == mac) {
+                        d.connected = connected;
+                    }
                     if let Some(d) = devices.iter_mut().find(|d| d.mac == mac) {
                         d.connected = connected;
                     }
-                    status = Some(if connected { "Bağlandı".into() } else { "Bağlantı kesildi".into() });
+                    let msg = if connected { "Bağlandı" } else { "Bağlantı kesildi" };
+                    self.bt_ipc.send_toast(msg);
+                    status = Some(msg.into());
                     relayout = true;
                 }
                 BtEvent::Paired { mac, paired } => {
+                    if let Some(d) = self.bt_ipc_devices.iter_mut().find(|d| d.mac == mac) {
+                        d.paired = paired;
+                    }
                     if let Some(d) = devices.iter_mut().find(|d| d.mac == mac) {
                         d.paired = paired;
                     }
@@ -6592,10 +6708,12 @@ impl BacakState {
                         }
                         paired_now = Some(mac);
                         status = Some("Eşleşti".into());
+                        self.bt_ipc.send_toast("Eşleşti");
                     }
                     relayout = true;
                 }
                 BtEvent::Removed { mac } => {
+                    self.bt_ipc_devices.retain(|d| d.mac != mac || self.bt_paired.contains(&d.mac));
                     // Keep bonded devices in the list — a phone/earbuds emits a
                     // [DEL] when it stops advertising after pairing, but it's
                     // still paired and must stay in the "Eşleşmiş" section.
@@ -6628,10 +6746,26 @@ impl BacakState {
         if let Some(mac) = paired_now {
             self.bt_paired.insert(mac);
             self.bt_refresh_devices();
+            // IPC istemcisine güncel cihaz listesini gönder
+            let known = self.bt_known_devices();
+            self.bt_ipc_devices = known.clone();
+            let ipc_devs: Vec<_> = known.iter().map(|d| crate::bt_ipc::IpcDevice {
+                mac: d.mac.clone(), name: d.name.clone(),
+                paired: d.paired, connected: d.connected,
+            }).collect();
+            self.bt_ipc.send_devices(&ipc_devs);
             if let Some(s) = status {
                 self.bt_set_status(&s);
             }
             return true;
+        }
+        if relayout && self.bt_ipc.has_client() {
+            // IPC istemcisine güncel cihaz listesini ilet.
+            let ipc_devs: Vec<_> = self.bt_ipc_devices.iter().map(|d| crate::bt_ipc::IpcDevice {
+                mac: d.mac.clone(), name: d.name.clone(),
+                paired: d.paired, connected: d.connected,
+            }).collect();
+            self.bt_ipc.send_devices(&ipc_devs);
         }
         if let Some(out) = self.bt_panel.as_ref().map(|p| p.output) {
             if relayout {
@@ -6649,15 +6783,19 @@ impl BacakState {
             }
         }
         if let Some(passkey) = confirm {
-            // Incoming pairing request → auto-confirm. (A modal accept dialog
-            // can't reliably receive its tap during the BlueZ exchange and would
-            // lock the whole UI; we're only discoverable while the panel is open,
-            // which the user deliberately opened to pair, so this is consented.)
-            if let Some(bt) = self.btctl.as_ref() {
-                bt.agent_yes(true);
+            // Incoming pairing request: IPC istemcisi varsa UI'a sor, yoksa otomatik onayla.
+            if self.bt_ipc.has_client() {
+                self.bt_ipc.send_pairing("", &passkey);
+                self.bt_last_pk = Some(passkey.clone());
+            } else {
+                // A modal accept dialog can't reliably receive its tap during the
+                // BlueZ exchange; auto-confirm when the compositor BT panel is open.
+                if let Some(bt) = self.btctl.as_ref() {
+                    bt.agent_yes(true);
+                }
+                self.bt_last_pk = Some(passkey.clone());
+                self.bt_set_status(&format!("Eşleşme isteği kabul edildi (kod {passkey})"));
             }
-            self.bt_last_pk = Some(passkey.clone());
-            self.bt_set_status(&format!("Eşleşme isteği kabul edildi (kod {passkey})"));
         } else if let Some(s) = status {
             self.bt_set_status(&s);
         }
@@ -8138,8 +8276,9 @@ impl BacakState {
             .map(|w| w.connecting.is_some() || w.scanning)
             .unwrap_or(false);
         let cc_pending = self.cc_rx.is_some();
-        // The Bluetooth panel polls its coprocess every tick while open.
-        let bt_open = self.bt_panel.is_some();
+        // The Bluetooth panel polls its coprocess every tick while open
+        // OR while a bacak-ayarlar IPC client is connected.
+        let bt_open = self.bt_panel.is_some() || self.bt_ipc.has_client();
         // Desktop settings background auth/action worker.
         let ds_pending = self.ds_rx.is_some();
         if self.animations.is_empty()
