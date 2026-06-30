@@ -125,6 +125,30 @@ fn send_all(tx: &mpsc::UnboundedSender<BtEvent>, map: &HashMap<String, DeviceInf
     let _ = tx.send(BtEvent::AllDevices(map.values().cloned().collect()));
 }
 
+// Her cihaz için PropertiesChanged dinleyici — Paired/Connected değişince main loop'u uyarır
+fn spawn_device_watcher(conn: Connection, path: OwnedObjectPath, tx: mpsc::UnboundedSender<()>) {
+    tokio::spawn(async move {
+        let Ok(proxy) = zbus::Proxy::new(
+            &conn,
+            "org.bluez",
+            path,
+            "org.freedesktop.DBus.Properties",
+        ).await else { return };
+
+        let Ok(mut stream) = proxy.receive_signal("PropertiesChanged").await else { return };
+
+        while let Some(msg) = stream.next().await {
+            type PropMap = HashMap<String, zbus::zvariant::OwnedValue>;
+            let parse: zbus::Result<(String, PropMap, Vec<String>)> = msg.body().deserialize();
+            if let Ok((_, changed, _)) = parse {
+                if changed.contains_key("Paired") || changed.contains_key("Connected") {
+                    if tx.send(()).is_err() { break; }
+                }
+            }
+        }
+    });
+}
+
 // ─── Ana döngü ────────────────────────────────────────────────────────────
 
 pub async fn run(
@@ -152,11 +176,17 @@ async fn run_inner(
         let _ = event_tx.send(BtEvent::Powered(powered));
     }
 
-    // İlk cihaz listesi
+    // Cihaz PropertiesChanged (Paired/Connected) bildirim kanalı
+    let (dev_change_tx, mut dev_change_rx) = mpsc::unbounded_channel::<()>();
+
+    // İlk cihaz listesi + mevcut cihazlar için watcher başlat
     let mut device_map = {
         let objects = get_managed_objects(&sys_conn).await?;
         devices_from_objects(&objects)
     };
+    for dev in device_map.values() {
+        spawn_device_watcher(sys_conn.clone(), dev.path.clone(), dev_change_tx.clone());
+    }
     send_all(event_tx, &device_map);
 
     // Eşleşme agent
@@ -367,6 +397,8 @@ async fn run_inner(
                 if let Ok((dev_path, ifaces)) = parse {
                     if let Some(props) = ifaces.get("org.bluez.Device1") {
                         if let Some(dev) = parse_device(&dev_path, props) {
+                            // Yeni cihaz için PropertiesChanged dinleyici başlat
+                            spawn_device_watcher(sys_conn.clone(), dev.path.clone(), dev_change_tx.clone());
                             device_map.insert(dev.address.clone(), dev);
                             send_all(event_tx, &device_map);
                         }
@@ -385,6 +417,14 @@ async fn run_inner(
                         device_map.remove(&addr);
                         send_all(event_tx, &device_map);
                     }
+                }
+            }
+
+            // ── Cihaz PropertiesChanged (Paired / Connected) ──────
+            Some(()) = dev_change_rx.recv() => {
+                if let Ok(objects) = get_managed_objects(&sys_conn).await {
+                    device_map = devices_from_objects(&objects);
+                    send_all(event_tx, &device_map);
                 }
             }
 
