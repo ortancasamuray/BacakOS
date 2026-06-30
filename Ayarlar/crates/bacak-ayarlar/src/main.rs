@@ -5,6 +5,9 @@ use tokio::sync::mpsc;
 
 slint::include_modules!();
 
+// slint::Model: as_any() ve VecModel::set_vec() için gerekli
+use slint::Model;
+
 fn device_to_slint(d: &DeviceInfo) -> BtDevice {
     BtDevice {
         address:   d.address.clone().into(),
@@ -29,6 +32,12 @@ fn main() -> anyhow::Result<()> {
     rt.spawn(async move {
         bluetooth::run(cmd_rx, event_tx).await;
     });
+
+    // İlk AllDevices geldiğinde model oluşturmak için:
+    // Slint for-döngüsünün in-place güncellemesi çalışsın diye
+    // başlangıçta boş VecModel set ediyoruz.
+    ui.set_paired_devices(slint::ModelRc::new(slint::VecModel::<BtDevice>::default()));
+    ui.set_nearby_devices(slint::ModelRc::new(slint::VecModel::<BtDevice>::default()));
 
     // BT event'lerini Slint event loop'una ilet
     let ui_weak = ui.as_weak();
@@ -82,6 +91,17 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+// Model in-place güncelle — referansı değiştirme, içeriği değiştir
+fn update_model(model_rc: slint::ModelRc<BtDevice>, new_items: Vec<BtDevice>) {
+    if let Some(vm) = model_rc.as_any().downcast_ref::<slint::VecModel<BtDevice>>() {
+        vm.set_vec(new_items);
+    } else {
+        // İlk çağrıda (veya beklenmedik tipte) buraya düşmez çünkü
+        // main() zaten VecModel set ediyor. Yedek olarak bırakıyoruz.
+        eprintln!("[HATA] downcast VecModel başarısız — bu oluşmamalı");
+    }
+}
+
 fn handle_bt_event(ui: &AppWindow, event: BtEvent) {
     match event {
         BtEvent::Powered(on) => ui.set_bt_powered(on),
@@ -89,15 +109,20 @@ fn handle_bt_event(ui: &AppWindow, event: BtEvent) {
         BtEvent::Scanning(s) => ui.set_bt_scanning(s),
 
         BtEvent::AllDevices(devices) => {
-            // Modelleri direkt yeniden oluştur — downcast yok
-            let paired: slint::VecModel<BtDevice> = slint::VecModel::default();
-            let nearby: slint::VecModel<BtDevice> = slint::VecModel::default();
-            for d in &devices {
-                if d.paired { paired.push(device_to_slint(d)); }
-                else        { nearby.push(device_to_slint(d)); }
-            }
-            ui.set_paired_devices(slint::ModelRc::new(paired));
-            ui.set_nearby_devices(slint::ModelRc::new(nearby));
+            let paired_vec: Vec<BtDevice> = devices.iter()
+                .filter(|d| d.paired)
+                .map(device_to_slint)
+                .collect();
+            let nearby_vec: Vec<BtDevice> = devices.iter()
+                .filter(|d| !d.paired)
+                .map(device_to_slint)
+                .collect();
+
+            eprintln!("[BT] AllDevices → eşleşmiş:{} yakın:{}", paired_vec.len(), nearby_vec.len());
+
+            // Referansı değiştirmeden içeriği güncelle (Slint for-loop için kritik)
+            update_model(ui.get_paired_devices(), paired_vec);
+            update_model(ui.get_nearby_devices(), nearby_vec);
         }
 
         BtEvent::PairingRequest { device_name, passkey } => {
@@ -120,6 +145,7 @@ fn handle_bt_event(ui: &AppWindow, event: BtEvent) {
         }
 
         BtEvent::Toast(msg) => {
+            eprintln!("[BT] Toast: {}", msg);
             ui.set_toast_text(msg.into());
             ui.set_toast_visible(true);
             let ui_weak = ui.as_weak();

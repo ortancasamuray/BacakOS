@@ -209,8 +209,13 @@ async fn run_inner(
         bluetooth_dir: bt_dir.clone(),
     }).await?;
     {
-        if let Ok(mgr) = zbus::Proxy::new(&ses_conn, "org.bluez.obex", "/org/bluez/obex", "org.bluez.obex.AgentManager1").await {
-            let _ = mgr.call_method("RegisterAgent", &obex_agent_path).await;
+        // obexd D-Bus aktivasyonu — servis yoksa başlatmayı dene
+        match zbus::Proxy::new(&ses_conn, "org.bluez.obex", "/org/bluez/obex", "org.bluez.obex.AgentManager1").await {
+            Err(e) => eprintln!("[OBEX] AgentManager proxy hatası: {}", e),
+            Ok(mgr) => match mgr.call_method("RegisterAgent", &obex_agent_path).await {
+                Ok(_)  => eprintln!("[OBEX] Agent kaydedildi: {}", obex_agent_path.as_str()),
+                Err(e) => eprintln!("[OBEX] RegisterAgent başarısız: {} — obexd çalışıyor mu?", e),
+            }
         }
     }
 
@@ -271,26 +276,35 @@ async fn run_inner(
                         let p     = dev_info.path.clone();
                         let conn2 = sys_conn.clone();
                         let etx   = event_tx.clone();
+                        eprintln!("[BT] Pair başlatıldı: {} ({})", dev_info.name, address);
                         tokio::spawn(async move {
                             match device_proxy(&conn2, &p).await {
-                                Err(e) => { let _ = etx.send(BtEvent::Toast(format!("Hata: {}", e))); }
+                                Err(e) => { eprintln!("[BT] device_proxy hatası: {}", e); let _ = etx.send(BtEvent::Toast(format!("Hata: {}", e))); }
                                 Ok(dev) => match dev.call_method("Pair", &()).await {
-                                    Err(e) => { let _ = etx.send(BtEvent::Toast(format!("Eşleşme hatası: {}", e))); }
+                                    Err(e) => { eprintln!("[BT] Pair() hatası: {}", e); let _ = etx.send(BtEvent::Toast(format!("Eşleşme hatası: {}", e))); }
                                     Ok(_) => {
+                                        eprintln!("[BT] Pair() OK → 700ms bekleniyor");
                                         tokio::time::sleep(tokio::time::Duration::from_millis(700)).await;
                                         if let Ok(objects) = get_managed_objects(&conn2).await {
                                             let mut map = devices_from_objects(&objects);
                                             if let Some(d) = map.get_mut(&address) {
                                                 d.paired = true;
+                                                eprintln!("[BT] {} paired=true set edildi (zorunlu)", address);
+                                            } else {
+                                                eprintln!("[BT] UYARI: {} map'te bulunamadı!", address);
                                             }
                                             let _ = etx.send(BtEvent::AllDevices(
                                                 map.values().cloned().collect(),
                                             ));
+                                        } else {
+                                            eprintln!("[BT] get_managed_objects başarısız!");
                                         }
                                     }
                                 }
                             }
                         });
+                    } else {
+                        eprintln!("[BT] UYARI: Pair({}) — device_map'te cihaz bulunamadı!", address);
                     }
                 }
                 BtCmd::Connect(address) => {
@@ -422,6 +436,7 @@ async fn run_inner(
 
             // ── Cihaz PropertiesChanged (Paired / Connected) ──────
             Some(()) = dev_change_rx.recv() => {
+                eprintln!("[BT] PropertiesChanged algılandı → liste yenileniyor");
                 if let Ok(objects) = get_managed_objects(&sys_conn).await {
                     device_map = devices_from_objects(&objects);
                     send_all(event_tx, &device_map);
