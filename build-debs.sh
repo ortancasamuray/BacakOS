@@ -113,6 +113,21 @@ BELGELER_SRC="$HERE/Belgeler"
 )
 
 # ---------------------------------------------------------------------------
+# Ayarlar: bluetooth ve sistem ayarları uygulaması
+# ---------------------------------------------------------------------------
+log "=== bacak-ayarlar derleniyor ==="
+AYARLAR_SRC="$HERE/Ayarlar"
+(
+    cd "$AYARLAR_SRC"
+
+    log "bacak-ayarlar derleniyor…"
+    cargo build --release -p bacak-ayarlar
+
+    log "bacak-ayarlar deb oluşturuluyor"
+    cargo deb --no-build -p bacak-ayarlar -o "$DIST"
+)
+
+# ---------------------------------------------------------------------------
 echo ""
 ok "=== Tüm paketler hazır: $DIST ==="
 ls -lh "$DIST"/*.deb
