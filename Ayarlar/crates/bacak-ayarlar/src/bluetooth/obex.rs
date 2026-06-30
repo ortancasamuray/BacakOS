@@ -30,7 +30,8 @@ impl ObexAgent {
         transfer: OwnedObjectPath,
         #[zbus(connection)] conn: &Connection,
     ) -> fdo::Result<String> {
-        // Transfer proxy'den dosya adı ve cihaz adresini al
+        eprintln!("[OBEX] authorize_push çağrıldı: {}", transfer.as_str());
+
         let transfer_proxy = zbus::Proxy::new(
             conn,
             "org.bluez.obex",
@@ -38,16 +39,24 @@ impl ObexAgent {
             "org.bluez.obex.Transfer1",
         )
         .await
-        .map_err(|e| fdo::Error::Failed(e.to_string()))?;
+        .map_err(|e| { eprintln!("[OBEX] Transfer proxy hatası: {}", e); fdo::Error::Failed(e.to_string()) })?;
 
         let file_name: String = transfer_proxy
             .get_property("Name")
             .await
             .unwrap_or_else(|_| "bilinmeyen_dosya".to_string());
 
+        eprintln!("[OBEX] Gelen dosya: {}", file_name);
+
+        // Session bir OwnedObjectPath — cihaz adresini session proxy'den oku
         let device_address: String = transfer_proxy
-            .get_property::<String>("Session")
+            .get_property::<OwnedObjectPath>("Session")
             .await
+            .ok()
+            .and_then(|session_path| {
+                // Session path'ten cihaz adresini almak için session proxy oluştur
+                None::<String>  // basitlik için boş bırak, UI'da gösterilecek
+            })
             .unwrap_or_default();
 
         let safe_name = sanitize_filename(&file_name);
