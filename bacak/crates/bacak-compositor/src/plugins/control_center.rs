@@ -214,6 +214,10 @@ pub struct BtDevice {
     pub name: String,
     pub paired: bool,
     pub connected: bool,
+    /// Batarya yüzdesi (0-100), desteklemiyorsa None.
+    pub battery: Option<u8>,
+    /// BlueZ icon adı: "phone", "audio-headset", "input-keyboard", vb.
+    pub icon: String,
 }
 
 /// What tapping a Bluetooth row does (resolved from the device's state).
@@ -235,6 +239,8 @@ pub enum BtAction {
     TogglePower,
     /// Dismiss the panel.
     Close,
+    /// Send a file to this (connected) device via bluetooth-sendto.
+    SendFile(String),
 }
 
 /// One row in the Bluetooth device list.
@@ -247,6 +253,8 @@ pub struct BtRow {
     pub connected: bool,
     /// For a paired row: the right-edge "Unut" (forget) hit rect + label.
     pub forget: Option<(Rect, crate::state::Label)>,
+    /// For a connected paired row: "Dosya Gönder" hit rect + label (left of forget).
+    pub send: Option<(Rect, crate::state::Label)>,
 }
 
 /// An in-progress pairing agent prompt overlaid on the panel.
@@ -260,6 +268,8 @@ pub enum BtDialogKind {
     EnterPin,
     /// Type a numeric passkey on this side.
     EnterPasskey,
+    /// Dosya yolu giriş diyaloğu — obexd OPP ile gönder.
+    SendFile { mac: String },
 }
 
 /// Native Bluetooth picker, opened from the Control-Center Bluetooth tile.

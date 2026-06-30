@@ -513,9 +513,6 @@ pub fn run() -> Result<()> {
         .map_err(|e| anyhow!("EventLoop::try_new failed: {e}"))?;
     let signal = event_loop.get_signal();
 
-    // IPC thread'e LoopSignal ver — BT komutları gelince compositor uyanır.
-    state.bt_ipc.set_waker(signal.clone());
-
     let config_watch = ConfigWatcher::start();
 
     let mut loop_data = LoopData {

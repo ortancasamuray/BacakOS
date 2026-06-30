@@ -2074,6 +2074,14 @@ pub(crate) fn render_bt_panel(
                 cc_blit_label(out, renderer, flbl, lx, ly, output_scale, off_x, off_y);
             }
         }
+        // "Gönder" button label on a connected paired row.
+        if let Some((sr, slbl)) = &row.send {
+            if let Some((_, w, h)) = slbl {
+                let lx = sr.x + (sr.w - *w as f32) / 2.0;
+                let ly = sr.y + (sr.h - *h as f32) / 2.0;
+                cc_blit_label(out, renderer, slbl, lx, ly, output_scale, off_x, off_y);
+            }
+        }
     }
 
     // --- pass 2: cards (headers get no card) ---
@@ -2083,9 +2091,12 @@ pub(crate) fn render_bt_panel(
         }
         let col = if row.connected { connected } else { row_col };
         cc_card(out, renderer, row.rect, col, 12.0, output_scale, off_x, off_y);
-        // The "Unut" sub-button gets a faint divider tint so it reads as tappable.
+        // "Unut" ve "Gönder" sub-butonları hafif arka plan tonu alır.
         if let Some((fr, _)) = &row.forget {
             cc_card(out, renderer, *fr, Color32F::new(0.0, 0.0, 0.0, 0.18), 12.0, output_scale, off_x, off_y);
+        }
+        if let Some((sr, _)) = &row.send {
+            cc_card(out, renderer, *sr, Color32F::new(0.0, 0.12, 0.25, 0.22), 12.0, output_scale, off_x, off_y);
         }
     }
     {
