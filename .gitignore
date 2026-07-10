@@ -19,6 +19,7 @@
 
 # Claude Code settings
 **/.claude/
+**/.claude-flow/
 
 # OS files
 .DS_Store
