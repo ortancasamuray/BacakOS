@@ -1,0 +1,27 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Anadolu Panteri <bilgi@anadolupanteri.org.tr>
+#
+# kur-baslat — kullanıcı tarafındaki başlatıcı. Menüden çalıştırılan budur.
+#
+# `kur` diskleri bölümlediği için root gerektirir. pkexec, güvenlik gereği
+# ortam değişkenlerinin neredeyse tamamını siler; bu da Wayland soketinin
+# adresini (WAYLAND_DISPLAY, XDG_RUNTIME_DIR) yok eder ve arayüz açılamaz.
+# Bu yüzden bu betik değişkenleri argüman olarak geçirir ve root tarafındaki
+# /usr/libexec/kur-root onları geri kurar.
+set -eu
+
+# Canlı ortamda oturum zaten root olabilir; o zaman pkexec'e gerek yok.
+if [ "$(id -u)" -eq 0 ]; then
+    exec /usr/bin/kur "$@"
+fi
+
+if ! command -v pkexec >/dev/null 2>&1; then
+    echo "kur: pkexec bulunamadı — 'sudo kur' olarak çalıştırın." >&2
+    exit 1
+fi
+
+exec pkexec /usr/libexec/kur-root \
+    "${WAYLAND_DISPLAY-}" \
+    "${XDG_RUNTIME_DIR-}" \
+    "${DISPLAY-}"
