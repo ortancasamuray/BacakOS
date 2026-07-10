@@ -113,19 +113,22 @@ BELGELER_SRC="$HERE/Belgeler"
 )
 
 # ---------------------------------------------------------------------------
-# Ayarlar: bluetooth ve sistem ayarları uygulaması
+# kur: sistem yükleyici
 # ---------------------------------------------------------------------------
-log "=== bacak-ayarlar derleniyor ==="
-AYARLAR_SRC="$HERE/Ayarlar"
+log "=== kur derleniyor ==="
+KUR_SRC="$HERE/kur"
 (
-    cd "$AYARLAR_SRC"
+    cd "$KUR_SRC"
 
-    log "bacak-ayarlar derleniyor…"
-    cargo build --release -p bacak-ayarlar
+    log "kur derleniyor…"
+    cargo build --release
 
-    log "bacak-ayarlar deb oluşturuluyor"
-    cargo deb --no-build -p bacak-ayarlar -o "$DIST"
+    log "kur deb oluşturuluyor"
+    cargo deb --no-build -o "$DIST"
 )
+
+# NOT: Ayarlar/ dizini kaldırıldı — BT/Wi-Fi/Ses/Ayarlar artık ayrı uygulama
+# değil, bacak-compositor içindedir. (bkz. project-tree.md)
 
 # ---------------------------------------------------------------------------
 echo ""

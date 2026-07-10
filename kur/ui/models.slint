@@ -1,0 +1,34 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Anadolu Panteri <bilgi@anadolupanteri.org.tr>
+//
+// Data structures mirrored into Rust by the Slint compiler. They live in their
+// own file because both `pages.slint` and `main.slint` need them, and an import
+// cycle would otherwise be unavoidable.
+
+export struct StepModel {
+    title: string,
+    glyph: string,
+    done: bool,
+}
+
+export struct DiskModel {
+    /// e.g. "/dev/nvme0n1"
+    path: string,
+    model: string,
+    size-text: string,
+    removable: bool,
+    /// True when the disk currently backs the running live system. Never wipe it.
+    is-live-medium: bool,
+}
+
+export struct PartitionModel {
+    path: string,
+    /// Pre-formatted by Rust: "/dev/sda1 — 512.0 MiB · vfat · «ESP»"
+    description: string,
+    /// Index into `MainWindow.partition-roles`: 0 = unused.
+    role-index: int,
+    format: bool,
+    /// False while the partition is unused or is the root, whose format box
+    /// would be a lie: root is always formatted.
+    format-enabled: bool,
+}

@@ -1,0 +1,30 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Anadolu Panteri <bilgi@anadolupanteri.org.tr>
+#
+# kur-root — root tarafındaki sarmalayıcı. pkexec bunu çağırır; polkit kuralı
+# (org.anadolupanteri.kur.policy) tam olarak bu yola bağlıdır.
+#
+# Doğrudan çalıştırmayın: /usr/bin/kur-baslat kullanın.
+#
+# Argümanlar, pkexec'in sildiği görüntü değişkenleri:
+#   $1 WAYLAND_DISPLAY   $2 XDG_RUNTIME_DIR   $3 DISPLAY
+#
+# root, kullanıcının /run/user/<uid> dizinindeki Wayland soketini dosya izinleri
+# ne olursa olsun açabilir; taşınması gereken tek şey soketin adresidir.
+set -eu
+
+if [ -n "${1-}" ]; then
+    WAYLAND_DISPLAY="$1"
+    export WAYLAND_DISPLAY
+fi
+if [ -n "${2-}" ]; then
+    XDG_RUNTIME_DIR="$2"
+    export XDG_RUNTIME_DIR
+fi
+if [ -n "${3-}" ]; then
+    DISPLAY="$3"
+    export DISPLAY
+fi
+
+exec /usr/bin/kur
