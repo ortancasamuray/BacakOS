@@ -201,6 +201,217 @@ pub fn is_uefi_boot() -> bool {
     std::path::Path::new("/sys/firmware/efi").exists()
 }
 
+/// A gap between (or around) existing partitions, big enough to be worth
+/// offering the user in manual mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FreeSpace {
+    pub start_bytes: u64,
+    pub size_bytes: u64,
+}
+
+impl FreeSpace {
+    pub fn size_text(&self) -> String {
+        format_bytes(self.size_bytes)
+    }
+}
+
+/// Gaps smaller than this are alignment slack, not usable free space.
+const MIN_FREE_REGION_BYTES: u64 = MIB;
+
+/// A disk's partition table as `sfdisk` sees it: exact sector offsets, which
+/// `lsblk` never reports. Only [`super::plan`]'s manual layout needs this — it
+/// is the one place that must know *where* a partition sits, to compute free
+/// space and to pick partition numbers for new ones.
+#[derive(Debug, Clone)]
+pub struct PartitionTable {
+    sector_bytes: u64,
+    first_usable_bytes: u64,
+    last_usable_bytes: u64,
+    partitions: Vec<TablePartition>,
+}
+
+#[derive(Debug, Clone)]
+struct TablePartition {
+    node: String,
+    number: u32,
+    start_bytes: u64,
+    size_bytes: u64,
+}
+
+#[derive(Deserialize)]
+struct SfdiskOutput {
+    partitiontable: Option<SfdiskTable>,
+}
+
+#[derive(Deserialize)]
+struct SfdiskTable {
+    #[serde(default = "default_sector")]
+    sectorsize: u64,
+    #[serde(default)]
+    firstlba: u64,
+    #[serde(default)]
+    lastlba: u64,
+    #[serde(default)]
+    partitions: Vec<SfdiskPartition>,
+}
+
+fn default_sector() -> u64 {
+    512
+}
+
+#[derive(Deserialize)]
+struct SfdiskPartition {
+    node: String,
+    start: u64,
+    size: u64,
+}
+
+impl PartitionTable {
+    /// Read `disk_path`'s live partition table via `sfdisk -J`.
+    ///
+    /// A disk with no partition table yet (a fresh drive) makes `sfdisk` exit
+    /// non-zero rather than emit empty JSON, so that case is treated as an
+    /// empty table spanning the whole disk instead of an error — it is the
+    /// normal starting point for manual partitioning, not a failure.
+    pub fn read(disk_path: &str, disk_size_bytes: u64) -> Result<Self> {
+        let empty = || Self::empty(disk_size_bytes);
+
+        let Ok(json) = cmd::capture("sfdisk", &["-J", disk_path]) else {
+            return Ok(empty());
+        };
+        Self::parse(&json, disk_size_bytes)
+    }
+
+    /// Split out from [`Self::read`] so it can be tested against a captured
+    /// `sfdisk -J` transcript instead of a real block device.
+    fn parse(json: &str, disk_size_bytes: u64) -> Result<Self> {
+        let parsed: SfdiskOutput = serde_json::from_str(json).context("sfdisk çıktısı ayrıştırılamadı")?;
+        let Some(table) = parsed.partitiontable else {
+            return Ok(Self::empty(disk_size_bytes));
+        };
+
+        let sector = table.sectorsize.max(1);
+        let partitions = table
+            .partitions
+            .into_iter()
+            .enumerate()
+            .map(|(i, p)| TablePartition {
+                node: p.node,
+                number: i as u32 + 1,
+                start_bytes: p.start * sector,
+                size_bytes: p.size * sector,
+            })
+            .collect();
+
+        Ok(Self {
+            sector_bytes: sector,
+            first_usable_bytes: table.firstlba * sector,
+            last_usable_bytes: (table.lastlba + 1).saturating_mul(sector).min(disk_size_bytes),
+            partitions,
+        })
+    }
+
+    /// A disk with no partition table at all: everything past a 1 MiB
+    /// alignment margin — the same margin `sfdisk` itself reserves for the
+    /// GPT header — counts as free.
+    pub(crate) fn empty(disk_size_bytes: u64) -> Self {
+        Self {
+            sector_bytes: 512,
+            first_usable_bytes: MIB,
+            last_usable_bytes: disk_size_bytes,
+            partitions: Vec::new(),
+        }
+    }
+
+    pub fn sector_bytes(&self) -> u64 {
+        self.sector_bytes
+    }
+
+    /// The partition number `sfdisk --delete`/`--append` would need for
+    /// `device`, i.e. its 1-based position in the table.
+    pub fn number_of(&self, device: &str) -> Option<u32> {
+        self.partitions.iter().find(|p| p.node == device).map(|p| p.number)
+    }
+
+    /// The lowest partition numbers not currently in use, one per requested
+    /// slot — the same numbers `sfdisk --append` would hand out on its own,
+    /// computed up front so a [`super::plan::Plan`] can predict device paths
+    /// for partitions it hasn't created yet. `freed` additionally releases
+    /// numbers belonging to partitions that will be deleted first, since a
+    /// deletion frees its number before any append runs.
+    pub fn next_free_numbers(&self, freed: &[u32], count: usize) -> Vec<u32> {
+        let mut used: std::collections::HashSet<u32> = self.partitions.iter().map(|p| p.number).collect();
+        for number in freed {
+            used.remove(number);
+        }
+        (1..).filter(|n| !used.contains(n)).take(count).collect()
+    }
+
+    /// Existing partitions in on-disk order — device, start and size — for
+    /// rendering the manual-partitioning bar, which needs real positions that
+    /// `lsblk` (the source for [`PartitionInfo`]) does not report.
+    pub fn ordered_partitions(&self) -> Vec<(&str, u64, u64)> {
+        let mut sorted: Vec<&TablePartition> = self.partitions.iter().collect();
+        sorted.sort_by_key(|p| p.start_bytes);
+        sorted.into_iter().map(|p| (p.node.as_str(), p.start_bytes, p.size_bytes)).collect()
+    }
+
+    /// Gaps of at least [`MIN_FREE_REGION_BYTES`] between, before or after the
+    /// existing partitions, in disk order.
+    pub fn free_space(&self) -> Vec<FreeSpace> {
+        let mut sorted: Vec<&TablePartition> = self.partitions.iter().collect();
+        sorted.sort_by_key(|p| p.start_bytes);
+
+        let mut regions = Vec::new();
+        let mut cursor = self.first_usable_bytes;
+        for part in sorted {
+            if part.start_bytes > cursor {
+                push_region(&mut regions, cursor, part.start_bytes - cursor);
+            }
+            cursor = cursor.max(part.start_bytes + part.size_bytes);
+        }
+        if self.last_usable_bytes > cursor {
+            push_region(&mut regions, cursor, self.last_usable_bytes - cursor);
+        }
+        regions
+    }
+}
+
+fn push_region(regions: &mut Vec<FreeSpace>, start_bytes: u64, size_bytes: u64) {
+    if size_bytes >= MIN_FREE_REGION_BYTES {
+        regions.push(FreeSpace { start_bytes, size_bytes });
+    }
+}
+
+#[cfg(test)]
+impl PartitionTable {
+    /// Build a table directly from `(device, start_bytes, size_bytes)`
+    /// triples, bypassing `sfdisk -J` JSON. Partition numbers are assigned in
+    /// the order given, 1-based — for [`super::plan`]'s tests, which need a
+    /// table with existing partitions at known numbers.
+    pub(crate) fn for_tests(
+        first_usable_bytes: u64,
+        last_usable_bytes: u64,
+        partitions: Vec<(&str, u64, u64)>,
+    ) -> Self {
+        Self {
+            sector_bytes: 512,
+            first_usable_bytes,
+            last_usable_bytes,
+            partitions: partitions
+                .into_iter()
+                .enumerate()
+                .map(|(i, (node, start_bytes, size_bytes))| TablePartition {
+                    node: node.to_string(),
+                    number: i as u32 + 1,
+                    start_bytes,
+                    size_bytes,
+                })
+                .collect(),
+        }
+    }
+}
+
 pub fn format_bytes(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
     let mut value = bytes as f64;
@@ -299,5 +510,86 @@ mod tests {
         let disks = parse_lsblk(json).unwrap();
         assert_eq!(disks[0].model, "Bilinmeyen aygıt");
         assert!(disks[0].is_installable());
+    }
+
+    /// Captured via `sfdisk -J` against a 500 MiB GPT image with a 100 MiB ESP
+    /// followed by a 48 MiB partition and free space to the end of the disk.
+    const SFDISK_FIXTURE: &str = r#"{
+       "partitiontable": {
+          "label": "gpt",
+          "device": "/dev/sda",
+          "unit": "sectors",
+          "firstlba": 2048,
+          "lastlba": 1023966,
+          "sectorsize": 512,
+          "partitions": [
+             {"node": "/dev/sda1", "start": 2048, "size": 204800, "type": "C12A7328-F81F-11D2-BA4B-00A0C93EC93B"},
+             {"node": "/dev/sda2", "start": 206848, "size": 100000, "type": "4F68BCE3-E8CD-4DB1-96E7-FBCAF984B709"}
+          ]
+       }
+    }"#;
+
+    #[test]
+    fn sfdisk_table_reports_partition_numbers() {
+        let table = PartitionTable::parse(SFDISK_FIXTURE, 524288000).unwrap();
+        assert_eq!(table.number_of("/dev/sda1"), Some(1));
+        assert_eq!(table.number_of("/dev/sda2"), Some(2));
+        assert_eq!(table.number_of("/dev/sda9"), None);
+    }
+
+    #[test]
+    fn sfdisk_table_finds_the_trailing_gap() {
+        let table = PartitionTable::parse(SFDISK_FIXTURE, 524288000).unwrap();
+        let free = table.free_space();
+        assert_eq!(free.len(), 1, "iki bölüm birbirine bitişik, sadece sondaki boşluk kalmalı");
+        let last_usable = (1023966 + 1) * 512; // firstlba/lastlba come from the fixture
+        assert_eq!(free[0].start_bytes, 206848 * 512 + 100000 * 512);
+        assert_eq!(free[0].size_bytes, last_usable - free[0].start_bytes);
+    }
+
+    #[test]
+    fn sfdisk_table_finds_a_gap_between_partitions() {
+        // Same fixture, but the second partition starts 50 MiB after the first
+        // ends, leaving a gap `free_space` must report.
+        let json = SFDISK_FIXTURE.replace("\"start\": 206848", "\"start\": 309248");
+        let table = PartitionTable::parse(&json, 524288000).unwrap();
+        let free = table.free_space();
+        assert_eq!(free.len(), 2, "aradaki boşluk ve sondaki boşluk");
+        assert_eq!(free[0].start_bytes, 204800 * 512 + 2048 * 512);
+        assert_eq!(free[0].size_bytes, (309248 - 206848) * 512);
+    }
+
+    #[test]
+    fn sfdisk_table_skips_slack_smaller_than_one_mib() {
+        // A 1000-sector gap (~512 KiB) after sda1 ends (at sector 206848) is
+        // alignment slack, not usable space.
+        let json = SFDISK_FIXTURE.replace("\"start\": 206848", "\"start\": 207848");
+        let last_usable_sector = 207848 + 100000;
+        let table = PartitionTable::parse(&json, last_usable_sector * 512).unwrap();
+        assert!(table.free_space().is_empty());
+    }
+
+    #[test]
+    fn missing_partition_table_is_treated_as_one_big_free_region() {
+        let table = PartitionTable::parse(r#"{"partitiontable": null}"#, 100 * GIB).unwrap();
+        let free = table.free_space();
+        assert_eq!(free.len(), 1);
+        assert_eq!(free[0].start_bytes, MIB);
+        assert_eq!(free[0].size_bytes, 100 * GIB - MIB);
+    }
+
+    #[test]
+    fn next_free_numbers_fills_gaps_before_extending() {
+        let table = PartitionTable::parse(SFDISK_FIXTURE, 524288000).unwrap();
+        // sda1 and sda2 exist; the next two free slots are 3 and 4.
+        assert_eq!(table.next_free_numbers(&[], 2), vec![3, 4]);
+    }
+
+    #[test]
+    fn next_free_numbers_reuses_a_freed_number() {
+        let table = PartitionTable::parse(SFDISK_FIXTURE, 524288000).unwrap();
+        // sda2 (number 2) is about to be deleted, so it should be handed back
+        // out before sda3.
+        assert_eq!(table.next_free_numbers(&[2], 2), vec![2, 3]);
     }
 }

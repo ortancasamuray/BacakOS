@@ -7,13 +7,16 @@
 //! state); this module owns what happens *inside* a page. Each `wire_*` function
 //! is called once at startup and installs that page's callbacks.
 
-use crate::backend::disk::{self, Disk};
+use crate::backend::disk::{self, Disk, PartitionTable};
 use crate::backend::locale;
 use crate::backend::plan::Plan;
 use crate::backend::timezone;
 use crate::backend::user::Account;
-use crate::wizard::RoleChoice;
-use crate::{refresh_can_advance, strings, with_state, AppState, MainWindow, PartitionModel};
+use crate::wizard::{RoleChoice, CREATE_ROLES};
+use crate::{
+    refresh_can_advance, strings, with_state, AppState, GapModel, MainWindow, PartitionModel,
+    PlannedCreateModel, SegmentModel,
+};
 
 use slint::{ComponentHandle, ModelRc, VecModel};
 
@@ -108,6 +111,9 @@ pub fn wire_disks(ui: &MainWindow) {
                 return;
             }
             state.selection.select_disk(index as usize, disk);
+            // Read once per selection, not on every keystroke: `build_plan`
+            // runs on every UI refresh and must never shell out itself.
+            state.table = PartitionTable::read(&disk.path, disk.size_bytes).ok();
         });
         refresh_disk_view(&ui);
     });
@@ -132,6 +138,30 @@ pub fn wire_disks(ui: &MainWindow) {
         with_state(|state| state.selection.set_format(index as usize, format));
         refresh_disk_view(&ui);
     });
+
+    let weak = ui.as_weak();
+    ui.on_partition_created(move |gap, role_index, size_text| {
+        let ui = weak.unwrap();
+        with_state(|state| {
+            let Some(&role) = CREATE_ROLES.get(role_index as usize) else { return };
+            // A blank or unparsable size just does nothing — the button is
+            // already disabled while the field is empty.
+            let Ok(gib) = size_text.parse::<f64>() else { return };
+            if gib <= 0.0 {
+                return;
+            }
+            let size_bytes = (gib * disk::GIB as f64) as u64;
+            state.selection.add_create(gap as usize, role, size_bytes);
+        });
+        refresh_disk_view(&ui);
+    });
+
+    let weak = ui.as_weak();
+    ui.on_partition_create_removed(move |index| {
+        let ui = weak.unwrap();
+        with_state(|state| state.selection.remove_create(index as usize));
+        refresh_disk_view(&ui);
+    });
 }
 
 /// Re-render the disk page from `Selection`, including the live plan error.
@@ -148,11 +178,53 @@ pub fn refresh_disk_view(ui: &MainWindow) {
                 description: row.partition.describe().into(),
                 role_index: row.role.index(),
                 format: row.format,
-                // Root always gets a fresh filesystem; the box would be a lie.
-                format_enabled: row.role != RoleChoice::Unused && row.role != RoleChoice::Root,
+                // Root always gets a fresh filesystem and a deleted partition
+                // is never formatted; the box would be a lie either way.
+                format_enabled: !matches!(row.role, RoleChoice::Unused | RoleChoice::Root | RoleChoice::Delete),
             })
             .collect();
         ui.set_partitions(ModelRc::new(VecModel::from(rows)));
+
+        let disk = state.selection.disk.and_then(|i| state.disks.get(i));
+        let free = state.table.as_ref().map(|t| t.free_space()).unwrap_or_default();
+
+        // Manual mode renders the existing table plus the user's edits;
+        // automatic mode renders the plan it would build — both give the user
+        // a visual of what the disk will look like before they start.
+        let raw_segments = match (disk, &state.table) {
+            (Some(disk), Some(table)) if state.selection.manual => {
+                state.selection.segments(disk, table)
+            }
+            (Some(disk), _) if !state.selection.manual => build_plan(state)
+                .map(|plan| crate::wizard::automatic_segments(&plan, disk.size_bytes))
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        let segments: Vec<SegmentModel> = raw_segments
+            .into_iter()
+            .map(|s| SegmentModel { role_kind: s.role_kind, is_free: s.is_free, fraction: s.fraction, label: s.label.into() })
+            .collect();
+        ui.set_disk_segments(ModelRc::new(VecModel::from(segments)));
+
+        let gaps: Vec<GapModel> =
+            free.iter().map(|g| GapModel { description: format!("Boş alan — {}", g.size_text()).into() }).collect();
+        ui.set_disk_gaps(ModelRc::new(VecModel::from(gaps)));
+
+        let creates: Vec<PlannedCreateModel> = state
+            .selection
+            .creates()
+            .iter()
+            .map(|c| PlannedCreateModel {
+                description: format!(
+                    "{} — {} (boş alanda #{})",
+                    RoleChoice::from_role(c.role).label(),
+                    disk::format_bytes(c.size_bytes),
+                    c.gap + 1,
+                )
+                .into(),
+            })
+            .collect();
+        ui.set_planned_creates(ModelRc::new(VecModel::from(creates)));
 
         // Show why the plan is not yet valid, but stay quiet before the user has
         // done anything on this page.
@@ -168,14 +240,20 @@ pub fn refresh_disk_view(ui: &MainWindow) {
 
 /// Build the plan the install would execute, or the reason it cannot be built.
 ///
-/// Called on every UI change, so it must stay cheap and must not touch the disk.
+/// Called on every UI change, so it must stay cheap and must not touch the
+/// disk — `state.table`, fetched once per disk selection, is what makes that
+/// possible for a manual plan.
 pub fn build_plan(state: &AppState) -> Result<Plan, String> {
     let index = state.selection.disk.ok_or("Bir disk seçin")?;
     let disk: &Disk = state.disks.get(index).ok_or("Seçili disk kayboldu")?;
 
     if state.selection.manual {
-        let assignments = state.selection.assignments(disk);
-        Plan::manual(disk, assignments, disk::is_uefi_boot()).map_err(|error| error.to_string())
+        let table = state.table.as_ref().ok_or("Bölüm tablosu okunamadı")?;
+        let keep = state.selection.assignments(disk);
+        let delete = state.selection.deletions(disk);
+        let create = state.selection.create_requests(&table.free_space());
+        Plan::manual(disk, table, keep, delete, create, disk::is_uefi_boot())
+            .map_err(|error| error.to_string())
     } else {
         Plan::automatic(disk, disk::total_ram_bytes(), disk::is_uefi_boot())
             .map_err(|error| format!("{error:#}"))
