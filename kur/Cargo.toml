@@ -57,26 +57,36 @@ section = "admin"
 priority = "optional"
 extended-description = """
 kur is the BacakOS system installer: a five-step graphical wizard (locale, \
-timezone, partitioning, account, install) that bootstraps Debian 13 onto a \
-disk with debootstrap and GRUB. It offers an automatic GPT layout or manual \
-role assignment over existing partitions, refuses the live medium as a \
-target, and validates the whole plan before touching a single sector."""
+timezone, partitioning, account, install) that unpacks the live ISO's own \
+squashfs onto a disk and installs GRUB. It offers an automatic GPT layout or \
+manual role assignment over existing partitions, refuses the live medium as \
+a target, and validates the whole plan before touching a single sector."""
 
 # `$auto` resolves the directly-linked libraries. The Wayland and xkb libraries
 # are dlopen-ed by winit at runtime, so they are not auto-detected.
 #
-# The command line tools are what the install stages actually execute, and a
-# missing one fails the install halfway through — with the target disk already
-# wiped. They are therefore hard dependencies, not recommendations:
-#   debootstrap  base system
-#   util-linux   sfdisk, lsblk, blkid, mkswap, mount, umount
-#   dosfstools   mkfs.vfat (ESP)      e2fsprogs  mkfs.ext4 (root)
-#   coreutils    chroot, ln           udev       udevadm settle
-#   systemd      systemctl reboot     pkexec     privilege escalation
+# The command line tools are what the install stages actually execute *on the
+# host* (the running live system), and a missing one fails the install halfway
+# through — with the target disk already wiped. They are therefore hard
+# dependencies, not recommendations:
+#   squashfs-tools  unsquashfs (base system extraction)
+#   util-linux      sfdisk, lsblk, blkid, mkswap, mount, umount
+#   dosfstools      mkfs.vfat (ESP)      e2fsprogs  mkfs.ext4 (root)
+#   coreutils       chroot, ln           udev       udevadm settle
+#   systemd         systemctl reboot     pkexec     privilege escalation
+#
+# `locale-gen`, `grub-install`, `update-grub`, `useradd`, `chpasswd`,
+# `systemd-machine-id-setup` and `update-initramfs` also run via `chroot`, but
+# *inside* the target — they must exist in the ISO's squashfs (Buildeba's job),
+# not here.
 depends = """$auto, \
 libwayland-client0, libwayland-cursor0, libxkbcommon0, \
-debootstrap, util-linux, dosfstools, e2fsprogs, coreutils, udev, systemd, \
+squashfs-tools, util-linux, dosfstools, e2fsprogs, coreutils, udev, systemd, \
 pkexec, polkitd | policykit-1"""
+# kur.desktop's `Icon=kur` only resolves from the BacakOS icon theme
+# (bacak-icons); without it the entry falls back to a blank/generic icon
+# rather than failing, so this is a soft recommendation, not a hard depend.
+recommends = "bacak-icons"
 assets = [
     ["target/release/kur", "usr/bin/", "755"],
     ["scripts/kur-baslat", "usr/bin/", "755"],

@@ -8,8 +8,7 @@ GenericName[tr]=Sistem Yükleyici
 Comment=Install BacakOS to a hard disk
 Comment[tr]=BacakOS'u sabit diske kurar
 Exec=kur-baslat
-# Stock icon from the hicolor/Adwaita theme; the package ships no icon of its own.
-Icon=drive-harddisk
+Icon=kur
 Terminal=false
 Categories=System;Settings;
 Keywords=install;installer;setup;

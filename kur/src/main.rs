@@ -24,7 +24,6 @@ use slint::{Model, ModelRc, SharedString, VecModel};
 use backend::disk::{self, Disk};
 use backend::install::{self, Progress};
 use backend::locale::{self, Locale};
-use backend::net;
 use backend::timezone::{self, Zone};
 use wizard::{RoleChoice, Selection};
 
@@ -51,8 +50,11 @@ pub struct AppState {
     pub disks: Vec<Disk>,
     /// Per-partition role and format choices for the selected disk.
     pub selection: Selection,
+    /// The selected disk's partition table, fetched once per selection so
+    /// `pages::build_plan` — run on every keystroke — never shells out to
+    /// `sfdisk` itself. `None` until a disk has been picked.
+    pub table: Option<disk::PartitionTable>,
 
-    pub network: net::Status,
     log: VecDeque<String>,
     /// `Some` only while an install is running; dropping it does not cancel.
     install: Option<install::Handle>,
@@ -91,7 +93,7 @@ fn main() -> Result<()> {
         zones,
         disks,
         selection: Selection::default(),
-        network: net::Status::Checking,
+        table: None,
         log: VecDeque::with_capacity(LOG_LINES),
         install: None,
     }));
@@ -124,6 +126,9 @@ fn populate(ui: &MainWindow, state: &mut AppState) {
     ui.set_locale_labels(strings(state.locales.iter().map(|l| l.label.clone())));
     ui.set_keymaps(strings(state.keymaps.iter().cloned()));
     ui.set_partition_roles(strings(RoleChoice::ALL.iter().map(|r| r.label().to_string())));
+    ui.set_create_roles(strings(
+        wizard::CREATE_ROLES.iter().map(|r| RoleChoice::from_role(*r).label().to_string()),
+    ));
 
     let default_locale = locale::default_locale_index(&state.locales);
     ui.set_locale_index(default_locale as i32);
@@ -225,10 +230,10 @@ fn mark_step_done(ui: &MainWindow, index: i32) {
 
 // ---- Install ----------------------------------------------------------------
 
-/// Entering the last step: render the summary and (re)check connectivity.
+/// Entering the last step: render the summary.
 fn enter_install_step(ui: &MainWindow) {
     with_state(|state| ui.set_install_summary(build_summary(ui, state).into()));
-    start_network_check(ui);
+    refresh_can_start(ui);
 }
 
 fn build_summary(ui: &MainWindow, state: &AppState) -> String {
@@ -251,36 +256,11 @@ fn build_summary(ui: &MainWindow, state: &AppState) -> String {
     )
 }
 
-fn start_network_check(ui: &MainWindow) {
-    with_state(|state| state.network = net::Status::Checking);
-    apply_network_status(ui, net::Status::Checking);
-
-    let weak = ui.as_weak();
-    net::spawn_check(move |status| {
-        let _ = weak.upgrade_in_event_loop(move |ui| {
-            with_state(|state| state.network = status);
-            apply_network_status(&ui, status);
-        });
-    });
-}
-
-fn apply_network_status(ui: &MainWindow, status: net::Status) {
-    ui.set_network_message(status.message().into());
-    // `Notice.kind`: 0 neutral, 1 warning, 2 error, 3 success.
-    ui.set_network_kind(match status {
-        net::Status::Checking => 0,
-        net::Status::Online => 3,
-        net::Status::Offline => 1,
-        net::Status::NoDns => 2,
-    });
-    refresh_can_start(ui);
-}
-
-/// The start button demands a valid plan, a valid account and a live network.
+/// The start button demands a valid plan and a valid account. Installing from
+/// the ISO's own squashfs needs no network, so there is nothing else to gate on.
 fn refresh_can_start(ui: &MainWindow) {
     let ready = with_state(|state| {
-        state.network.allows_install()
-            && pages::build_plan(state).is_ok()
+        pages::build_plan(state).is_ok()
             && pages::account_from_ui(ui).validate(&ui.get_password_confirm()).is_ok()
     })
     .unwrap_or(false);
@@ -326,9 +306,6 @@ fn wire_install(ui: &MainWindow) {
         });
         ui.set_install_stage("İptal ediliyor…".into());
     });
-
-    let weak = ui.as_weak();
-    ui.on_recheck_network(move || start_network_check(&weak.unwrap()));
 
     ui.on_reboot(|| {
         let cancel = backend::cmd::Cancel::new();
@@ -425,8 +402,8 @@ fn apply_progress(ui: &MainWindow, progress: Progress) {
 
 thread_local! {
     /// Lets callbacks dispatched into the event loop without captured state —
-    /// `apply_progress`, the net check — reach `AppState`. The non-`Send` `Rc`
-    /// never crosses a thread this way.
+    /// `apply_progress` — reach `AppState`. The non-`Send` `Rc` never crosses a
+    /// thread this way.
     static APP: RefCell<Option<Rc<RefCell<AppState>>>> = const { RefCell::new(None) };
 }
 

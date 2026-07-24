@@ -11,41 +11,62 @@
 use anyhow::{Context, Result};
 
 use super::cmd::{self, Cancel};
-use super::install::{Config, Reporter, MIRROR, SUITE, TARGET};
+use super::install::{Config, Reporter, TARGET};
+use super::medium;
 use super::plan::{Plan, Role};
 use super::timezone;
 
-/// Packages `debootstrap` does not install but the later stages depend on.
-///
-/// `locales` provides `locale-gen`, which [`configure`] runs; `sudo` makes the
-/// `sudo` group [`account`] adds the user to actually mean something. Both are
-/// Priority: standard, so the base system omits them. Installing them here
-/// rather than later keeps the chroot's first `apt-get` run for the kernel.
-const EXTRA_BASE_PACKAGES: &str = "locales,sudo,tzdata,ca-certificates";
-
-/// Where a live image stages the locally-built BacakOS packages.
-const BACAKOS_DEB_DIR: &str = "/usr/share/bacakos/debs";
+/// Packages the running live image needs but an installed system must not
+/// keep: they only make sense while booted from `/run/live/medium`, and their
+/// initramfs hooks/units would otherwise try to run against a normal disk
+/// boot.
+const LIVE_PACKAGES: &str = "live-boot live-config live-tools";
 
 pub fn partition(config: &Config, cancel: &Cancel, on: &mut Reporter) -> Result<()> {
     if !config.plan.needs_partitioning() {
-        // Manual layout: the user's existing partition table stays untouched.
+        // Manual layout with plain role reassignment: the user's existing
+        // partition table stays untouched.
         on(1.0, "Elle bölümleme: bölüm tablosu korunuyor.");
         return Ok(());
     }
 
-    let script = config
-        .plan
-        .to_sfdisk_script()
-        .context("otomatik plan bir sfdisk betiği üretmedi")?;
-    on(0.0, &format!("sfdisk {} <<EOF\n{script}EOF", config.plan.disk));
+    match config.plan.to_sfdisk_script() {
+        Some(script) => {
+            on(0.0, &format!("sfdisk {} <<EOF\n{script}EOF", config.plan.disk));
+            // `--wipe always` clears stale filesystem signatures that would
+            // otherwise make blkid report two filesystems on one partition.
+            cmd::run_with_stdin("sfdisk", &["--wipe", "always", &config.plan.disk], &script, cancel)?;
+        }
+        // A manual layout never rewrites the whole table — only the deletions
+        // and appends the user actually asked for.
+        None => partition_manual(config, cancel, on)?,
+    }
 
-    // `--wipe always` clears stale filesystem signatures that would otherwise
-    // make blkid report two filesystems on one partition.
-    cmd::run_with_stdin("sfdisk", &["--wipe", "always", &config.plan.disk], &script, cancel)?;
-
-    // Give udev time to create the new /dev/…p1 nodes before mkfs looks for them.
+    // Give udev time to create the new /dev/…pN nodes before mkfs looks for them.
     cmd::run("udevadm", &["settle"], cancel)?;
     on(1.0, "");
+    Ok(())
+}
+
+/// Apply a manual plan's deletions, then append its new partitions — in that
+/// order, since a deleted partition's number is what a fresh one may reuse
+/// (see [`super::plan::Plan::manual`]).
+fn partition_manual(config: &Config, cancel: &Cancel, on: &mut Reporter) -> Result<()> {
+    let numbers = config.plan.manual_delete_numbers();
+    if !numbers.is_empty() {
+        let number_args: Vec<String> = numbers.iter().map(u32::to_string).collect();
+        on(0.0, &format!("sfdisk --delete {} {}", config.plan.disk, number_args.join(" ")));
+
+        let mut args: Vec<&str> = vec!["--delete", &config.plan.disk];
+        args.extend(number_args.iter().map(String::as_str));
+        cmd::run("sfdisk", &args, cancel)?;
+    }
+
+    if let Some(script) = config.plan.manual_create_script() {
+        on(0.5, &format!("sfdisk --append {} <<EOF\n{script}EOF", config.plan.disk));
+        cmd::run_with_stdin("sfdisk", &["--append", &config.plan.disk], &script, cancel)?;
+    }
+
     Ok(())
 }
 
@@ -83,36 +104,30 @@ pub fn mount(config: &Config, cancel: &Cancel, on: &mut Reporter) -> Result<()> 
     Ok(())
 }
 
-/// The long one. `debootstrap` prints a line per package it unpacks, so we count
-/// them against the known package total to synthesise a fraction.
-pub fn debootstrap(_config: &Config, cancel: &Cancel, on: &mut Reporter) -> Result<()> {
-    // `debootstrap --print-debs` would give an exact count but costs a full
-    // dependency solve up front. The base system is ~320 packages and varies
-    // little between Debian point releases; a stale estimate only skews the
-    // bar's speed, never its endpoint (we force 1.0 below).
-    const ESTIMATED_PACKAGES: f32 = 320.0;
-    let mut unpacked = 0.0_f32;
+/// The long one. Unpacks every squashfs layer the live medium is running
+/// from onto [`TARGET`], instead of rebuilding the base system from scratch
+/// with `debootstrap` — the ISO's own `/live/*.squashfs` already *is* a fully
+/// configured BacakOS install (kernel, bootloader packages, desktop, and even
+/// `kur` itself), so this is a plain offline copy.
+pub fn extract_squashfs(_config: &Config, cancel: &Cancel, on: &mut Reporter) -> Result<()> {
+    let layers = medium::find_squashfs_layers()?;
+    let total = layers.len() as f32;
 
-    let include = format!("--include={EXTRA_BASE_PACKAGES}");
-    cmd::run_streaming(
-        "debootstrap",
-        &[
-            "--arch=amd64",
-            "--components=main,contrib,non-free-firmware",
-            &include,
-            SUITE,
-            TARGET,
-            MIRROR,
-        ],
-        cancel,
-        |line| {
-            // debootstrap's progress lines look like "I: Unpacking libc6..."
-            if line.contains("Unpacking ") || line.contains("Extracting ") {
-                unpacked += 1.0;
-            }
-            on((unpacked / ESTIMATED_PACKAGES).min(0.99), line);
-        },
-    )?;
+    for (index, layer) in layers.iter().enumerate() {
+        let path = layer.to_string_lossy();
+        // `-f`: let a later layer overwrite files an earlier one already
+        // wrote, matching live-boot's own union stacking order.
+        cmd::run_streaming("unsquashfs", &["-f", "-d", TARGET, &path], cancel, |line| {
+            // unsquashfs prints "[=====>   ] N/M  XX%" progress lines.
+            let fraction = line
+                .rsplit_once('%')
+                .and_then(|(head, _)| head.rsplit(' ').next())
+                .and_then(|pct| pct.parse::<f32>().ok())
+                .map(|pct| pct / 100.0)
+                .unwrap_or(0.0);
+            on(((index as f32 + fraction) / total).min(0.99), line);
+        })?;
+    }
 
     on(1.0, "");
     Ok(())
@@ -144,12 +159,12 @@ pub fn configure(config: &Config, cancel: &Cancel, on: &mut Reporter) -> Result<
     write_file(&format!("{TARGET}/etc/fstab"), &render_fstab(&config.plan)?)?;
     on(0.4, "");
 
-    // Locale: enable the chosen line, then regenerate. `locales` came in via
-    // debootstrap's --include, so `locale-gen` exists.
+    // Locale: enable the chosen line, then regenerate. `locales` is part of
+    // the squashfs's desktop task, so `locale-gen` exists.
     write_file(&format!("{TARGET}/etc/locale.gen"), &format!("{} UTF-8\n", config.locale))?;
     write_file(&format!("{TARGET}/etc/default/locale"), &format!("LANG={}\n", config.locale))?;
     cmd::chroot(TARGET, "locale-gen", &[], cancel)?;
-    on(0.7, "");
+    on(0.55, "");
 
     // /etc/timezone and /etc/localtime must agree, or tzdata's maintainer
     // script silently reverts the zone on the next upgrade.
@@ -162,7 +177,7 @@ pub fn configure(config: &Config, cancel: &Cancel, on: &mut Reporter) -> Result<
         &["-sf", &timezone::localtime_target(&config.timezone), "/etc/localtime"],
         cancel,
     )?;
-    on(0.9, "");
+    on(0.7, "");
 
     write_file(
         &format!("{TARGET}/etc/default/keyboard"),
@@ -171,6 +186,24 @@ pub fn configure(config: &Config, cancel: &Cancel, on: &mut Reporter) -> Result<
             config.keymap
         ),
     )?;
+    on(0.75, "");
+
+    // The squashfs is a live image: it carries live-boot's own packages and a
+    // machine-id baked in at build time. Neither belongs on an installed
+    // system — the former would try to run its live-medium hooks on the next
+    // boot, the latter would be identical across every install made from this
+    // ISO.
+    let purge = format!("apt-get purge -y {LIVE_PACKAGES}");
+    cmd::chroot(TARGET, "sh", &["-c", &purge], cancel)?;
+    on(0.85, "");
+
+    std::fs::remove_file(format!("{TARGET}/etc/machine-id")).ok();
+    cmd::chroot(TARGET, "systemd-machine-id-setup", &[], cancel)?;
+    on(0.92, "");
+
+    // Regenerate the initramfs now that live-boot's hooks are gone, so it
+    // stops looking for `/run/live/medium` on every future boot.
+    cmd::chroot(TARGET, "update-initramfs", &["-u"], cancel)?;
     on(1.0, "");
     Ok(())
 }
@@ -222,29 +255,9 @@ pub fn bootloader(config: &Config, cancel: &Cancel, on: &mut Reporter) -> Result
     // built for one firmware, and GRUB must match it. See `Plan::is_uefi`.
     let uefi = config.plan.is_uefi();
 
-    let packages: &[&str] = if uefi {
-        &["linux-image-amd64", "grub-efi-amd64", "grub-efi-amd64-signed", "shim-signed"]
-    } else {
-        &["linux-image-amd64", "grub-pc"]
-    };
-
-    // debootstrap populates sources.list but leaves no apt cache behind.
-    cmd::chroot(TARGET, "apt-get", &["update"], cancel)?;
-    on(0.05, "");
-
-    let mut argv = vec![TARGET, "apt-get", "install", "-y", "--no-install-recommends"];
-    argv.extend_from_slice(packages);
-
-    // The kernel plus GRUB pulls in ~120 packages including firmware. As in
-    // debootstrap, the count only shapes the bar's speed, never its endpoint.
-    let mut seen = 0.0_f32;
-    cmd::run_streaming("chroot", &argv, cancel, |line| {
-        if line.starts_with("Unpacking ") || line.starts_with("Setting up ") {
-            seen += 1.0;
-        }
-        on((seen / 120.0).clamp(0.05, 0.85), line);
-    })?;
-
+    // The kernel and GRUB packages are already in the squashfs (live-build
+    // installs them into the chroot to make the ISO itself bootable), so
+    // there is nothing left to fetch — just point GRUB at the target disk.
     if uefi {
         let mut args =
             vec!["--target=x86_64-efi", "--efi-directory=/boot/efi", "--bootloader-id=BacakOS"];
@@ -269,53 +282,6 @@ pub fn bootloader(config: &Config, cancel: &Cancel, on: &mut Reporter) -> Result
     Ok(())
 }
 
-/// Install the locally-built BacakOS packages (compositor, display manager,
-/// altay, bacak-belge) staged on the live image by `build-debs.sh`.
-///
-/// Skipped with a log line when the directory is absent: `kur` must still be
-/// able to produce a plain Debian system when run from a stock live image.
-pub fn bacakos(_config: &Config, cancel: &Cancel, on: &mut Reporter) -> Result<()> {
-    let debs = collect_debs(BACAKOS_DEB_DIR);
-    if debs.is_empty() {
-        on(1.0, &format!("{BACAKOS_DEB_DIR} boş — BacakOS paketleri atlanıyor."));
-        return Ok(());
-    }
-
-    let staging = format!("{TARGET}/var/cache/bacakos");
-    mkdir_p(&staging)?;
-
-    for deb in &debs {
-        let name = deb.file_name().and_then(|n| n.to_str()).context("geçersiz paket adı")?;
-        if cmd::is_dry_run() {
-            log::info!("[dry-run] cp {} {staging}/{name}", deb.display());
-            continue;
-        }
-        std::fs::copy(deb, format!("{staging}/{name}"))
-            .with_context(|| format!("{name} kopyalanamadı"))?;
-    }
-    on(0.3, &format!("{} paket hedefe kopyalandı", debs.len()));
-
-    // `apt-get install ./*.deb` resolves each package's dependencies from the
-    // mirror; `dpkg -i` would leave them unsatisfied. The shell glob is
-    // expanded by apt itself, not by us, so pass the directory pattern.
-    let pattern = "/var/cache/bacakos/*.deb";
-    let mut seen = 0.0_f32;
-    cmd::run_streaming(
-        "chroot",
-        &[TARGET, "sh", "-c", &format!("apt-get install -y {pattern}")],
-        cancel,
-        |line| {
-            if line.starts_with("Unpacking ") || line.starts_with("Setting up ") {
-                seen += 1.0;
-            }
-            on((0.3 + seen / 100.0).min(0.95), line);
-        },
-    )?;
-
-    on(1.0, "");
-    Ok(())
-}
-
 pub fn cleanup(_config: &Config, _cancel: &Cancel, on: &mut Reporter) -> Result<()> {
     unmount_all();
     on(1.0, "");
@@ -323,21 +289,6 @@ pub fn cleanup(_config: &Config, _cancel: &Cancel, on: &mut Reporter) -> Result<
 }
 
 // ---- Helpers ----------------------------------------------------------------
-
-/// `.deb` files in `dir`, sorted for a deterministic install order. Returns
-/// empty when the directory does not exist.
-fn collect_debs(dir: &str) -> Vec<std::path::PathBuf> {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    let mut debs: Vec<_> = entries
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "deb"))
-        .collect();
-    debs.sort();
-    debs
-}
 
 /// Unmount everything under [`TARGET`], deepest path first.
 ///
@@ -433,28 +384,3 @@ fn write_file(path: &str, contents: &str) -> Result<()> {
     std::fs::write(path, contents).with_context(|| format!("{path} yazılamadı"))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn missing_deb_dir_yields_no_packages() {
-        assert!(collect_debs("/nonexistent/bacakos/debs").is_empty());
-    }
-
-    #[test]
-    fn only_deb_files_are_collected_and_sorted() {
-        let dir = std::env::temp_dir().join("kur-deb-test");
-        std::fs::create_dir_all(&dir).unwrap();
-        for name in ["b.deb", "a.deb", "notes.txt"] {
-            std::fs::write(dir.join(name), b"").unwrap();
-        }
-
-        let debs = collect_debs(dir.to_str().unwrap());
-        let names: Vec<_> =
-            debs.iter().map(|p| p.file_name().unwrap().to_str().unwrap()).collect();
-        assert_eq!(names, ["a.deb", "b.deb"]);
-
-        std::fs::remove_dir_all(&dir).ok();
-    }
-}
