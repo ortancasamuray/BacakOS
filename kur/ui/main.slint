@@ -6,14 +6,14 @@
 
 import { Button } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { StepModel, DiskModel, PartitionModel } from "models.slint";
+import { StepModel, DiskModel, PartitionModel, SegmentModel, GapModel, PlannedCreateModel } from "models.slint";
 import {
     StepRow, LanguagePage, TimezonePage, DiskPage, UserPage, InstallPage
 } from "pages.slint";
 
 // Re-exported so `slint::include_modules!()` generates the Rust structs and the
 // `Theme` global accessor. Only what the entry file exports reaches Rust.
-export { Theme, StepModel, DiskModel, PartitionModel }
+export { Theme, StepModel, DiskModel, PartitionModel, SegmentModel, GapModel, PlannedCreateModel }
 
 export component MainWindow inherits Window {
     title: "BacakOS Kurulum";
@@ -46,6 +46,10 @@ export component MainWindow inherits Window {
     in property <bool> manual-mode;
     in property <[PartitionModel]> partitions;
     in property <[string]> partition-roles;
+    in property <[SegmentModel]> disk-segments;
+    in property <[GapModel]> disk-gaps;
+    in property <[string]> create-roles;
+    in property <[PlannedCreateModel]> planned-creates;
     in property <string> plan-error;
 
     in-out property <string> hostname: "bacakos";
@@ -63,8 +67,6 @@ export component MainWindow inherits Window {
     in property <string> install-stage;
     in property <string> install-log;
     in property <string> install-summary;
-    in property <string> network-message;
-    in property <int> network-kind;
     in property <bool> can-start;
 
     // -- Callbacks into Rust
@@ -79,11 +81,12 @@ export component MainWindow inherits Window {
     callback manual-toggled(bool);
     callback partition-role-changed(int, int);
     callback partition-format-toggled(int, bool);
+    callback partition-created(int, int, string);
+    callback partition-create-removed(int);
     /// Any account field changed; Rust re-validates and updates `can-advance`.
     callback user-changed();
     callback install-start();
     callback install-cancel();
-    callback recheck-network();
     callback reboot();
 
     HorizontalLayout {
@@ -158,11 +161,17 @@ export component MainWindow inherits Window {
                 manual-mode: root.manual-mode;
                 partitions: root.partitions;
                 partition-roles: root.partition-roles;
+                segments: root.disk-segments;
+                gaps: root.disk-gaps;
+                create-roles: root.create-roles;
+                creates: root.planned-creates;
                 plan-error: root.plan-error;
                 disk-selected(i) => { root.disk-selected(i); }
                 manual-toggled(on) => { root.manual-toggled(on); }
                 role-changed(i, role) => { root.partition-role-changed(i, role); }
                 format-toggled(i, on) => { root.partition-format-toggled(i, on); }
+                create-partition(gap, role, size) => { root.partition-created(gap, role, size); }
+                remove-create(i) => { root.partition-create-removed(i); }
             }
             if current-step == 3: UserPage {
                 vertical-stretch: 1;
@@ -184,12 +193,9 @@ export component MainWindow inherits Window {
                 stage-label: root.install-stage;
                 log-tail: root.install-log;
                 summary: root.install-summary;
-                network-message: root.network-message;
-                network-kind: root.network-kind;
                 can-start: root.can-start;
                 start => { root.install-start(); }
                 cancel => { root.install-cancel(); }
-                recheck-network => { root.recheck-network(); }
                 reboot => { root.reboot(); }
             }
 

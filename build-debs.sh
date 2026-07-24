@@ -59,6 +59,15 @@ log "=== bacak workspace derleniyor ==="
     log "bacak-plugin-desktop-settings deb oluşturuluyor"
     cargo deb --no-build -p bacak-plugin-desktop-settings -o "$DIST"
 
+    log "bacak-icons deb oluşturuluyor"
+    cargo deb --no-build -p bacak-icons -o "$DIST"
+
+    log "bacak-desktop-defaults deb oluşturuluyor"
+    cargo deb --no-build -p bacak-desktop-defaults -o "$DIST"
+
+    log "bacak-grub-theme deb oluşturuluyor"
+    cargo deb --no-build -p bacak-grub-theme -o "$DIST"
+
     log "bacak (CLI) deb oluşturuluyor"
     cargo deb --no-build -p bacak-cli -o "$DIST"
 )
@@ -129,6 +138,23 @@ KUR_SRC="$HERE/kur"
 
 # NOT: Ayarlar/ dizini kaldırıldı — BT/Wi-Fi/Ses/Ayarlar artık ayrı uygulama
 # değil, bacak-compositor içindedir. (bkz. project-tree.md)
+
+# ---------------------------------------------------------------------------
+# ISO senkronizasyonu: Buildeba/ (live-build) varsa dist/*.deb'i
+# config/packages.chroot'a kopyala, live-build bunları chroot'a kurar —
+# kur'un unutulduğu 2026-07-17 hatasının tekrarını önler.
+#
+# Not: eskiden ayrıca config/includes.chroot/usr/share/bacakos/debs'e de
+# kopyalanırdı; kur artık ISO'nun kendi squashfs'inden kuruyor (bkz.
+# stages::extract_squashfs), o dizini okuyan kod kalmadığı için kaldırıldı.
+# ---------------------------------------------------------------------------
+PACKAGES_CHROOT="$HERE/Buildeba/config/packages.chroot"
+if [ -d "$PACKAGES_CHROOT" ]; then
+    log "=== ISO debs senkronize ediliyor: $PACKAGES_CHROOT ==="
+    cp -v "$DIST"/*.deb "$PACKAGES_CHROOT/"
+else
+    log "Buildeba/ live-build dizini bulunamadı — ISO senkronizasyonu atlandı"
+fi
 
 # ---------------------------------------------------------------------------
 echo ""

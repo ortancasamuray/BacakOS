@@ -11,7 +11,7 @@ pub mod cmd;
 pub mod disk;
 pub mod install;
 pub mod locale;
-pub mod net;
+pub mod medium;
 pub mod plan;
 pub mod stages;
 pub mod timezone;

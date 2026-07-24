@@ -16,7 +16,7 @@ pub use rules::PlanError;
 
 use anyhow::{bail, Result};
 
-use super::disk::{format_bytes, Disk, GIB, MIB, MIN_DISK_BYTES};
+use super::disk::{format_bytes, Disk, PartitionTable, GIB, MIB, MIN_DISK_BYTES};
 
 /// EFI System Partition size. 512 MiB is the Debian installer default and
 /// leaves room for several kernels' worth of fallback images.
@@ -93,12 +93,60 @@ pub struct Assignment {
     pub existing_fstype: Option<String>,
 }
 
+/// A brand new partition to append into a free-space gap, in manual mode.
+///
+/// Unlike [`NewPartition`], this carries an exact placement: `start_bytes`
+/// pins it inside a specific gap the user picked, and `number` is the
+/// partition number [`Plan::manual`] reserved for it up front — via
+/// [`PartitionTable::next_free_numbers`] — so [`Plan::path_for`] can predict
+/// its device node before `sfdisk` has created anything.
+#[derive(Debug, Clone)]
+pub struct ManualCreate {
+    pub role: Role,
+    pub number: u32,
+    pub start_bytes: u64,
+    pub size_bytes: u64,
+}
+
+/// An existing partition to remove before any new one is created.
+#[derive(Debug, Clone)]
+pub struct Deletion {
+    pub device: String,
+    pub number: u32,
+}
+
+/// A manual layout: some existing partitions kept (optionally reformatted),
+/// some removed, and some new ones appended into the freed or already-free
+/// space. Applying it never rewrites the whole table the way an automatic
+/// plan does — see [`Plan::needs_partitioning`].
+#[derive(Debug, Clone, Default)]
+pub struct ManualLayout {
+    pub keep: Vec<Assignment>,
+    pub delete: Vec<Deletion>,
+    pub create: Vec<ManualCreate>,
+    /// The disk's logical sector size, needed to render `create` into an
+    /// `sfdisk` script. Meaningless (and unused) when `create` is empty.
+    sector_bytes: u64,
+}
+
+#[cfg(test)]
+impl ManualLayout {
+    /// A layout that only assigns roles to existing partitions — the shape
+    /// every manual plan had before creation/deletion existed. Only built
+    /// directly like this in tests; production code always goes through
+    /// [`Plan::manual`].
+    pub fn keep_only(keep: Vec<Assignment>) -> Self {
+        Self { keep, delete: Vec::new(), create: Vec::new(), sector_bytes: 512 }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Layout {
     /// Wipe the disk and create a fresh GPT.
     Automatic(Vec<NewPartition>),
-    /// Keep the existing partition table and use the partitions named here.
-    Manual(Vec<Assignment>),
+    /// Keep the existing partition table, reshaped by at most a few targeted
+    /// deletions and appends.
+    Manual(ManualLayout),
 }
 
 /// A disk plus the layout to apply to it.
@@ -148,11 +196,26 @@ impl Plan {
         Ok(Self { disk: disk.path.clone(), layout: Layout::Automatic(partitions) })
     }
 
-    /// Build a manual plan from the user's role assignments, then validate it.
-    pub fn manual(disk: &Disk, assignments: Vec<Assignment>, uefi: bool) -> Result<Self, PlanError> {
-        // Refuse anything currently mounted: formatting a live mount corrupts
-        // the running system, and lsblk already told us which those are.
-        for assignment in &assignments {
+    /// Build a manual plan from the user's role assignments plus any
+    /// deletions and new partitions, then validate it.
+    ///
+    /// `table` must be a snapshot of `disk`'s *current* partition table — it
+    /// is what tells us `delete`'s partition numbers (for `sfdisk --delete`)
+    /// and hands out fresh ones for `create` (for `sfdisk --append`), so a
+    /// stale snapshot would produce a plan that deletes or creates the wrong
+    /// partition.
+    pub fn manual(
+        disk: &Disk,
+        table: &PartitionTable,
+        keep: Vec<Assignment>,
+        delete_devices: Vec<String>,
+        create_requests: Vec<(Role, u64, u64)>,
+        uefi: bool,
+    ) -> Result<Self, PlanError> {
+        // Refuse anything currently mounted: formatting or deleting a live
+        // mount corrupts the running system, and lsblk already told us which
+        // those are.
+        for assignment in &keep {
             let mounted = disk
                 .partitions
                 .iter()
@@ -161,16 +224,85 @@ impl Plan {
                 return Err(PlanError::DeviceMounted(assignment.device.clone()));
             }
         }
+        for device in &delete_devices {
+            let mounted =
+                disk.partitions.iter().any(|p| p.path == *device && p.mountpoint.is_some());
+            if mounted {
+                return Err(PlanError::DeviceMounted(device.clone()));
+            }
+        }
 
-        let layout = Layout::Manual(assignments);
+        let mut delete = Vec::with_capacity(delete_devices.len());
+        for device in delete_devices {
+            let number =
+                table.number_of(&device).ok_or_else(|| PlanError::UnknownDevice(device.clone()))?;
+            delete.push(Deletion { device, number });
+        }
+
+        let freed: Vec<u32> = delete.iter().map(|d| d.number).collect();
+        let numbers = table.next_free_numbers(&freed, create_requests.len());
+        let create = create_requests
+            .into_iter()
+            .zip(numbers)
+            .map(|((role, start_bytes, size_bytes), number)| ManualCreate {
+                role,
+                number,
+                start_bytes,
+                size_bytes,
+            })
+            .collect();
+
+        let layout = Layout::Manual(ManualLayout {
+            keep,
+            delete,
+            create,
+            sector_bytes: table.sector_bytes(),
+        });
         layout.validate(uefi)?;
         Ok(Self { disk: disk.path.clone(), layout })
     }
 
-    /// True when the disk's partition table must be rewritten. Manual plans
-    /// reuse the existing table and skip the partition stage.
+    /// True when a partitioning command must run before formatting. An
+    /// automatic plan always rewrites the whole table; a manual plan only
+    /// does when it deletes or creates something — plain role reassignment
+    /// leaves the existing table untouched.
     pub fn needs_partitioning(&self) -> bool {
-        matches!(self.layout, Layout::Automatic(_))
+        match &self.layout {
+            Layout::Automatic(_) => true,
+            Layout::Manual(m) => !m.delete.is_empty() || !m.create.is_empty(),
+        }
+    }
+
+    /// Partition numbers for `sfdisk --delete <disk> …` — empty unless this
+    /// is a manual plan that removes something.
+    pub fn manual_delete_numbers(&self) -> Vec<u32> {
+        match &self.layout {
+            Layout::Automatic(_) => Vec::new(),
+            Layout::Manual(m) => m.delete.iter().map(|d| d.number).collect(),
+        }
+    }
+
+    /// The `sfdisk --append` script for every partition this plan creates,
+    /// targeting each explicit device node so the partition number sfdisk
+    /// assigns matches the one already baked into [`Self::path_for`]. `None`
+    /// when there is nothing to create.
+    pub fn manual_create_script(&self) -> Option<String> {
+        let Layout::Manual(m) = &self.layout else { return None };
+        if m.create.is_empty() {
+            return None;
+        }
+
+        let mut script = String::new();
+        for c in &m.create {
+            let node = self.partition_path(c.number as usize);
+            let uuid = c.role.type_uuid();
+            script.push_str(&format!(
+                "{node} : start={}, size={}, type={uuid}\n",
+                c.start_bytes / m.sector_bytes,
+                c.size_bytes / m.sector_bytes,
+            ));
+        }
+        Some(script)
     }
 
     /// True when this plan boots via UEFI, i.e. it has an ESP.
@@ -203,14 +335,20 @@ impl Plan {
             Layout::Automatic(parts) => {
                 parts.iter().position(|p| p.role == role).map(|i| self.partition_path(i + 1))
             }
-            Layout::Manual(assignments) => {
-                assignments.iter().find(|a| a.role == role).map(|a| a.device.clone())
-            }
+            Layout::Manual(m) => m
+                .keep
+                .iter()
+                .find(|a| a.role == role)
+                .map(|a| a.device.clone())
+                .or_else(|| {
+                    m.create.iter().find(|c| c.role == role).map(|c| self.partition_path(c.number as usize))
+                }),
         }
     }
 
     /// Devices that must be freshly formatted: every partition in automatic
-    /// mode, only the ticked ones in manual mode.
+    /// mode; in manual mode, the ticked existing partitions plus every newly
+    /// created one, which is always unformatted by definition.
     ///
     /// The BIOS boot partition is never here — GRUB writes raw sectors into it,
     /// and a filesystem would be clobbered on the first `grub-install`.
@@ -222,11 +360,14 @@ impl Plan {
                 .filter(|(_, p)| p.role.needs_filesystem())
                 .map(|(i, p)| (self.partition_path(i + 1), p.role))
                 .collect(),
-            Layout::Manual(assignments) => assignments
-                .iter()
-                .filter(|a| a.format)
-                .map(|a| (a.device.clone(), a.role))
-                .collect(),
+            Layout::Manual(m) => {
+                let mut out: Vec<(String, Role)> =
+                    m.keep.iter().filter(|a| a.format).map(|a| (a.device.clone(), a.role)).collect();
+                out.extend(
+                    m.create.iter().map(|c| (self.partition_path(c.number as usize), c.role)),
+                );
+                out
+            }
         }
     }
 
@@ -269,9 +410,9 @@ impl Plan {
                     ));
                 }
             }
-            Layout::Manual(assignments) => {
+            Layout::Manual(m) => {
                 out.push_str("Düzen: elle (yalnızca seçilen bölümler değişecek)\n");
-                for a in assignments {
+                for a in &m.keep {
                     let action = if a.format {
                         format!("biçimlendirilecek → {}", a.role.filesystem())
                     } else {
@@ -284,6 +425,18 @@ impl Plan {
                         format_bytes(a.size_bytes),
                     ));
                 }
+                for d in &m.delete {
+                    out.push_str(&format!("  {}  silinecek\n", d.device));
+                }
+                for c in &m.create {
+                    out.push_str(&format!(
+                        "  {}  {}  —  {}  (yeni bölüm → {})\n",
+                        self.partition_path(c.number as usize),
+                        c.role.label(),
+                        format_bytes(c.size_bytes),
+                        c.role.filesystem(),
+                    ));
+                }
             }
         }
         out
@@ -294,6 +447,11 @@ impl Plan {
 pub mod tests {
     use super::*;
     use crate::backend::disk::PartitionInfo;
+
+    /// A table containing exactly `partitions`, numbered in the order given.
+    fn table_for(disk_size: u64, partitions: Vec<(&str, u64, u64)>) -> PartitionTable {
+        PartitionTable::for_tests(MIB, disk_size, partitions)
+    }
 
     /// Shared with [`super::rules`]'s tests. Mirrors `crate::wizard::assign`,
     /// which is where production code builds these.
@@ -397,11 +555,19 @@ pub mod tests {
         ]
     }
 
+    fn valid_manual_table() -> PartitionTable {
+        table_for(500 * GIB, vec![("/dev/sda1", MIB, 512 * MIB), ("/dev/sda2", MIB + 512 * MIB, 100 * GIB)])
+    }
+
     #[test]
     fn manual_plan_keeps_table_and_formats_only_ticked() {
-        let plan = Plan::manual(&disk("/dev/sda", 500 * GIB), valid_manual(), true).unwrap();
+        let table = valid_manual_table();
+        let plan =
+            Plan::manual(&disk("/dev/sda", 500 * GIB), &table, valid_manual(), Vec::new(), Vec::new(), true)
+                .unwrap();
         assert!(!plan.needs_partitioning());
         assert!(plan.to_sfdisk_script().is_none());
+        assert!(plan.manual_create_script().is_none());
         // The ESP is preserved, so only root is formatted.
         assert_eq!(plan.to_format(), vec![("/dev/sda2".to_string(), Role::Root)]);
         assert_eq!(plan.path_for(Role::Esp).as_deref(), Some("/dev/sda1"));
@@ -418,9 +584,56 @@ pub mod tests {
             mountpoint: Some("/home".into()),
         }];
         assert_eq!(
-            Plan::manual(&target, valid_manual(), true).unwrap_err(),
+            Plan::manual(&target, &valid_manual_table(), valid_manual(), Vec::new(), Vec::new(), true)
+                .unwrap_err(),
             PlanError::DeviceMounted("/dev/sda2".into())
         );
+    }
+
+    #[test]
+    fn mounted_deletions_are_refused() {
+        let mut target = disk("/dev/sda", 500 * GIB);
+        target.partitions = vec![PartitionInfo {
+            path: "/dev/sda1".into(),
+            size_bytes: 512 * MIB,
+            fstype: Some("vfat".into()),
+            label: None,
+            mountpoint: Some("/boot/efi".into()),
+        }];
+        let root = vec![assign("/dev/sda2", 100 * GIB, Some("ext4"), Role::Root, true)];
+        assert_eq!(
+            Plan::manual(&target, &valid_manual_table(), root, vec!["/dev/sda1".into()], Vec::new(), true)
+                .unwrap_err(),
+            PlanError::DeviceMounted("/dev/sda1".into())
+        );
+    }
+
+    /// A manual plan that deletes the ESP and creates a fresh, larger one in
+    /// its place, alongside a kept root — the scenario `kur`'s manual
+    /// partitioning UI exists for.
+    #[test]
+    fn manual_plan_creates_a_new_partition_in_freed_space() {
+        let target = disk("/dev/sda", 500 * GIB);
+        let table = valid_manual_table();
+        let keep = vec![assign("/dev/sda2", 100 * GIB, Some("ext4"), Role::Root, true)];
+        let create = vec![(Role::Esp, MIB, 512 * MIB)];
+
+        let plan = Plan::manual(&target, &table, keep, vec!["/dev/sda1".into()], create, true).unwrap();
+
+        assert!(plan.needs_partitioning());
+        assert_eq!(plan.manual_delete_numbers(), vec![1]);
+        // The freed number 1 is handed straight back to the new partition.
+        assert_eq!(plan.path_for(Role::Esp).as_deref(), Some("/dev/sda1"));
+
+        let script = plan.manual_create_script().unwrap();
+        assert!(script.contains("/dev/sda1 :"));
+        assert!(script.contains(&format!("start={}", MIB / 512)));
+        assert!(script.contains(&format!("size={}", 512 * MIB / 512)));
+
+        // The new ESP is unconditionally formatted; the kept root only if ticked.
+        let formatted: Vec<Role> = plan.to_format().into_iter().map(|(_, r)| r).collect();
+        assert!(formatted.contains(&Role::Esp));
+        assert!(formatted.contains(&Role::Root));
     }
 
     #[test]

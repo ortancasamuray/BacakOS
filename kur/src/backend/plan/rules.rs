@@ -41,17 +41,26 @@ pub enum PlanError {
     MultipleSwaps,
     #[error("`{0}` şu anda bağlı; önce ayırın")]
     DeviceMounted(String),
+    #[error("`{0}` artık disk üzerinde yok")]
+    UnknownDevice(String),
 }
 
 impl Layout {
     /// Check every rule the install stages later depend on.
+    ///
+    /// A role may be held by either a kept existing partition or a newly
+    /// created one — `count` and the min-size checks below look at both, since
+    /// the user can freely pick either kind for root/ESP/swap.
     pub fn validate(&self, uefi: bool) -> Result<(), PlanError> {
-        let Layout::Manual(assignments) = self else {
+        let Layout::Manual(m) = self else {
             // An automatic layout is constructed by us and correct by design.
             return Ok(());
         };
 
-        let count = |role: Role| assignments.iter().filter(|a| a.role == role).count();
+        let count = |role: Role| {
+            m.keep.iter().filter(|a| a.role == role).count()
+                + m.create.iter().filter(|c| c.role == role).count()
+        };
 
         match count(Role::Root) {
             0 => return Err(PlanError::NoRoot),
@@ -62,14 +71,24 @@ impl Layout {
             return Err(PlanError::MultipleSwaps);
         }
 
-        let root = assignments.iter().find(|a| a.role == Role::Root).expect("checked above");
-        if root.size_bytes < MIN_ROOT_BYTES {
+        let root_size = m
+            .keep
+            .iter()
+            .find(|a| a.role == Role::Root)
+            .map(|a| a.size_bytes)
+            .or_else(|| m.create.iter().find(|c| c.role == Role::Root).map(|c| c.size_bytes))
+            .expect("checked above");
+        if root_size < MIN_ROOT_BYTES {
             return Err(PlanError::RootTooSmall);
         }
-        // Installing over a populated filesystem leaves the old distribution's
-        // files behind and produces an unbootable hybrid.
-        if !root.format {
-            return Err(PlanError::RootNotFormatted);
+        // A kept root over a populated filesystem leaves the old
+        // distribution's files behind and produces an unbootable hybrid; a
+        // created root is always freshly formatted, so only the kept case
+        // needs checking.
+        if let Some(root) = m.keep.iter().find(|a| a.role == Role::Root) {
+            if !root.format {
+                return Err(PlanError::RootNotFormatted);
+            }
         }
 
         if uefi {
@@ -78,15 +97,20 @@ impl Layout {
                 1 => {}
                 _ => return Err(PlanError::MultipleEsps),
             }
-            let esp = assignments.iter().find(|a| a.role == Role::Esp).expect("checked above");
-            if esp.size_bytes < MIN_ESP_BYTES {
-                return Err(PlanError::EspTooSmall);
-            }
-            // Keeping another OS's ESP is the normal dual-boot case, but only
-            // if it really is FAT — GRUB cannot write anywhere else.
-            let is_fat = esp.existing_fstype.as_deref().is_some_and(|fs| fs.starts_with("vfat"));
-            if !esp.format && !is_fat {
-                return Err(PlanError::EspNotFat);
+            if let Some(esp) = m.keep.iter().find(|a| a.role == Role::Esp) {
+                if esp.size_bytes < MIN_ESP_BYTES {
+                    return Err(PlanError::EspTooSmall);
+                }
+                // Keeping another OS's ESP is the normal dual-boot case, but
+                // only if it really is FAT — GRUB cannot write anywhere else.
+                let is_fat = esp.existing_fstype.as_deref().is_some_and(|fs| fs.starts_with("vfat"));
+                if !esp.format && !is_fat {
+                    return Err(PlanError::EspNotFat);
+                }
+            } else if let Some(esp) = m.create.iter().find(|c| c.role == Role::Esp) {
+                if esp.size_bytes < MIN_ESP_BYTES {
+                    return Err(PlanError::EspTooSmall);
+                }
             }
         }
 
@@ -98,7 +122,11 @@ impl Layout {
 mod tests {
     use super::*;
     use crate::backend::plan::tests::assign;
-    use crate::backend::plan::Assignment;
+    use crate::backend::plan::{Assignment, ManualCreate, ManualLayout};
+
+    fn manual(keep: Vec<Assignment>) -> Layout {
+        Layout::Manual(ManualLayout::keep_only(keep))
+    }
 
     fn esp(size: u64, fstype: Option<&str>, format: bool) -> Assignment {
         assign("/dev/sda1", size, fstype, Role::Esp, format)
@@ -114,7 +142,7 @@ mod tests {
 
     #[test]
     fn a_valid_manual_layout_passes() {
-        assert!(Layout::Manual(valid()).validate(true).is_ok());
+        assert!(manual(valid()).validate(true).is_ok());
     }
 
     #[test]
@@ -125,48 +153,48 @@ mod tests {
     #[test]
     fn requires_exactly_one_root() {
         let none = vec![esp(512 * MIB, Some("vfat"), false)];
-        assert_eq!(Layout::Manual(none).validate(true), Err(PlanError::NoRoot));
+        assert_eq!(manual(none).validate(true), Err(PlanError::NoRoot));
 
         let mut two = valid();
         two.push(assign("/dev/sda3", 50 * GIB, None, Role::Root, true));
-        assert_eq!(Layout::Manual(two).validate(true), Err(PlanError::MultipleRoots));
+        assert_eq!(manual(two).validate(true), Err(PlanError::MultipleRoots));
     }
 
     #[test]
     fn root_must_be_formatted() {
         let assignments = vec![esp(512 * MIB, Some("vfat"), false), root(100 * GIB, false)];
-        assert_eq!(Layout::Manual(assignments).validate(true), Err(PlanError::RootNotFormatted));
+        assert_eq!(manual(assignments).validate(true), Err(PlanError::RootNotFormatted));
     }
 
     #[test]
     fn root_must_be_large_enough() {
         let assignments = vec![esp(512 * MIB, Some("vfat"), false), root(4 * GIB, true)];
-        assert_eq!(Layout::Manual(assignments).validate(true), Err(PlanError::RootTooSmall));
+        assert_eq!(manual(assignments).validate(true), Err(PlanError::RootTooSmall));
     }
 
     #[test]
     fn preserved_esp_must_already_be_fat() {
         let assignments = vec![esp(512 * MIB, Some("ext4"), false), root(100 * GIB, true)];
-        assert_eq!(Layout::Manual(assignments).validate(true), Err(PlanError::EspNotFat));
+        assert_eq!(manual(assignments).validate(true), Err(PlanError::EspNotFat));
     }
 
     #[test]
     fn non_fat_esp_is_fine_when_it_will_be_formatted() {
         let assignments = vec![esp(512 * MIB, Some("ext4"), true), root(100 * GIB, true)];
-        assert!(Layout::Manual(assignments).validate(true).is_ok());
+        assert!(manual(assignments).validate(true).is_ok());
     }
 
     #[test]
     fn esp_must_be_large_enough() {
         let assignments = vec![esp(32 * MIB, Some("vfat"), false), root(100 * GIB, true)];
-        assert_eq!(Layout::Manual(assignments).validate(true), Err(PlanError::EspTooSmall));
+        assert_eq!(manual(assignments).validate(true), Err(PlanError::EspTooSmall));
     }
 
     #[test]
     fn bios_boot_needs_no_esp() {
         let assignments = vec![root(100 * GIB, true)];
-        assert!(Layout::Manual(assignments.clone()).validate(false).is_ok());
-        assert_eq!(Layout::Manual(assignments).validate(true), Err(PlanError::NoEsp));
+        assert!(manual(assignments.clone()).validate(false).is_ok());
+        assert_eq!(manual(assignments).validate(true), Err(PlanError::NoEsp));
     }
 
     #[test]
@@ -174,6 +202,43 @@ mod tests {
         let mut assignments = valid();
         assignments.push(assign("/dev/sda3", GIB, None, Role::Swap, true));
         assignments.push(assign("/dev/sda4", GIB, None, Role::Swap, true));
-        assert_eq!(Layout::Manual(assignments).validate(true), Err(PlanError::MultipleSwaps));
+        assert_eq!(manual(assignments).validate(true), Err(PlanError::MultipleSwaps));
+    }
+
+    fn create(role: Role, size_bytes: u64) -> ManualCreate {
+        ManualCreate { role, number: 3, start_bytes: 0, size_bytes }
+    }
+
+    #[test]
+    fn root_and_esp_can_both_be_freshly_created_partitions() {
+        let layout = Layout::Manual(ManualLayout {
+            keep: Vec::new(),
+            delete: Vec::new(),
+            create: vec![create(Role::Esp, 512 * MIB), create(Role::Root, 100 * GIB)],
+            ..ManualLayout::keep_only(Vec::new())
+        });
+        assert!(layout.validate(true).is_ok());
+    }
+
+    #[test]
+    fn created_root_needs_no_format_check_but_still_needs_size() {
+        let layout = Layout::Manual(ManualLayout {
+            keep: vec![esp(512 * MIB, Some("vfat"), false)],
+            delete: Vec::new(),
+            create: vec![create(Role::Root, 4 * GIB)],
+            ..ManualLayout::keep_only(Vec::new())
+        });
+        assert_eq!(layout.validate(true), Err(PlanError::RootTooSmall));
+    }
+
+    #[test]
+    fn created_esp_must_be_large_enough() {
+        let layout = Layout::Manual(ManualLayout {
+            keep: vec![root(100 * GIB, true)],
+            delete: Vec::new(),
+            create: vec![create(Role::Esp, 32 * MIB)],
+            ..ManualLayout::keep_only(Vec::new())
+        });
+        assert_eq!(layout.validate(true), Err(PlanError::EspTooSmall));
     }
 }

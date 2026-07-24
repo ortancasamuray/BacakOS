@@ -35,10 +35,6 @@ use super::user::Account;
 /// Where the target filesystem is mounted while we populate it.
 pub const TARGET: &str = "/mnt/kur-target";
 
-/// Debian suite to bootstrap.
-pub const SUITE: &str = "trixie";
-pub const MIRROR: &str = "http://deb.debian.org/debian";
-
 /// Messages sent from the worker thread to the UI.
 #[derive(Debug, Clone)]
 pub enum Progress {
@@ -81,11 +77,10 @@ const STAGES: &[Stage] = &[
     Stage { label: "Disk bölümleniyor…",              weight: 0.03, run: stages::partition },
     Stage { label: "Dosya sistemleri oluşturuluyor…", weight: 0.04, run: stages::format },
     Stage { label: "Hedef bağlanıyor…",               weight: 0.01, run: stages::mount },
-    Stage { label: "Taban sistem kuruluyor…",         weight: 0.55, run: stages::debootstrap },
-    Stage { label: "Sistem yapılandırılıyor…",        weight: 0.08, run: stages::configure },
+    Stage { label: "Taban sistem kuruluyor…",         weight: 0.62, run: stages::extract_squashfs },
+    Stage { label: "Sistem yapılandırılıyor…",        weight: 0.10, run: stages::configure },
     Stage { label: "Kullanıcı oluşturuluyor…",        weight: 0.02, run: stages::account },
     Stage { label: "Önyükleyici kuruluyor…",          weight: 0.15, run: stages::bootloader },
-    Stage { label: "BacakOS masaüstü kuruluyor…",     weight: 0.09, run: stages::bacakos },
     Stage { label: "Temizleniyor…",                   weight: 0.03, run: stages::cleanup },
 ];
 
