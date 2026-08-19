@@ -1067,9 +1067,27 @@ pub(crate) fn render_dock(
         } else if entry.app == crate::state::SETTINGS_BUTTON_APP {
             push_settings_glyph(tile, fade, output_scale, off_x, off_y, out);
         } else if entry.app == crate::state::RECENTS_BUTTON_APP {
-            push_recents_glyph(tile, fade, output_scale, off_x, off_y, out);
+            // Prefer the BacakOS icon theme's "overview" badge; fall back to
+            // the hand-drawn overlapping-cards glyph if it isn't installed.
+            if let Some(el) =
+                app_icon_element(state, renderer, "overview", tile, fade, output_scale, off_x, off_y)
+            {
+                out.push(el);
+            } else {
+                push_recents_glyph(tile, fade, output_scale, off_x, off_y, out);
+            }
         } else if entry.app == crate::state::SCREENSHOT_BUTTON_APP {
-            push_screenshot_glyph(tile, fade, output_scale, off_x, off_y, out);
+            // Prefer the real "screenshot" camera icon from the BacakOS icon
+            // theme (a proper circular lens reads far better at tile size
+            // than the old blocky-rect glyph); fall back to hand-drawn
+            // rectangles only if `bacak-icons` isn't installed.
+            if let Some(el) =
+                app_icon_element(state, renderer, "screenshot", tile, fade, output_scale, off_x, off_y)
+            {
+                out.push(el);
+            } else {
+                push_screenshot_glyph(renderer, tile, fade, output_scale, off_x, off_y, out);
+            }
         } else if let Some(el) = app_icon_element(
             state, renderer, &entry.app, tile, fade, output_scale, off_x, off_y,
         ) {
@@ -1332,7 +1350,8 @@ fn push_settings_glyph(
     ));
 }
 
-/// Recents/Overview button glyph: two overlapping cards suggesting a
+/// Fallback overview button glyph, used only when the BacakOS icon theme's
+/// "overview" SVG isn't installed. Two overlapping cards suggesting a
 /// stack of recent apps. Front card (brighter) pushed first so it lands
 /// on top; the dimmer back card peeks out at the upper-right.
 fn push_recents_glyph(
@@ -1368,9 +1387,14 @@ fn push_recents_glyph(
     ));
 }
 
-/// Screenshot button glyph: camera body + viewfinder bump + lens ring,
-/// built from solid rectangles like the other sentinel button glyphs.
+/// Fallback screenshot button glyph, used only when the `bacak-icons` theme
+/// (which ships a proper "screenshot" camera SVG — circular lens, resolved
+/// through [`app_icon_element`]) isn't installed. Approximates the same
+/// colour-badge + camera look from solid rectangles; blockier since there's
+/// no curved-path primitive here, but recognisable as a last resort.
+#[allow(clippy::too_many_arguments)]
 fn push_screenshot_glyph(
+    renderer: &mut GlesRenderer,
     tile: Rect,
     fade: f32,
     output_scale: i32,
@@ -1378,27 +1402,33 @@ fn push_screenshot_glyph(
     off_y: i32,
     out: &mut Vec<BacakElements>,
 ) {
-    let color = Color32F::new(0.85, 0.9, 0.95, 0.9 * fade);
-    let dark  = Color32F::new(0.04, 0.08, 0.14, 0.9 * fade);
+    // Slate — same accent `bacak-icons` uses for the "configure"/system-tool
+    // family of icons (#64748b).
+    let badge = Color32F::new(0.392, 0.455, 0.545, 1.0 * fade);
+    cc_card(out, renderer, tile, badge, tile.w * 0.22, output_scale, off_x, off_y);
+
+    let color = Color32F::new(1.0, 1.0, 1.0, 0.95 * fade);
     let cx = tile.x + tile.w / 2.0;
     // Camera body — slightly below centre so the bump fits.
-    let bw = tile.w * 0.64;
-    let bh = tile.h * 0.40;
-    let by = tile.y + tile.h * 0.38;
+    let bw = tile.w * 0.56;
+    let bh = tile.h * 0.36;
+    let by = tile.y + tile.h * 0.40;
     out.push(solid_element(Rect::new(cx - bw / 2.0, by, bw, bh), color, output_scale, off_x, off_y));
     // Viewfinder bump (top centre).
     let vw = bw * 0.30;
-    let vh = tile.h * 0.13;
+    let vh = tile.h * 0.11;
     out.push(solid_element(
         Rect::new(cx - vw / 2.0, by - vh + 1.0, vw, vh),
         color, output_scale, off_x, off_y,
     ));
-    // Lens ring: bright outer square, dark inner square (ring illusion).
-    let lr = tile.w * 0.155;
+    // Lens ring: bright outer square, badge-colour inner square (ring
+    // illusion — the "hole" shows the badge colour instead of the dark navy
+    // the old monochrome glyph used, matching the SVG icons' stroked-ring look).
+    let lr = tile.w * 0.135;
     let lcy = by + bh * 0.5;
     out.push(solid_element(Rect::new(cx - lr, lcy - lr, lr * 2.0, lr * 2.0), color, output_scale, off_x, off_y));
-    let li = lr * 0.58;
-    out.push(solid_element(Rect::new(cx - li, lcy - li, li * 2.0, li * 2.0), dark, output_scale, off_x, off_y));
+    let li = lr * 0.55;
+    out.push(solid_element(Rect::new(cx - li, lcy - li, li * 2.0, li * 2.0), badge, output_scale, off_x, off_y));
 }
 
 /// Render the applications grid menu (Launchpad-style) when open on this
@@ -2263,6 +2293,221 @@ pub(crate) fn render_mic_panel(
 /// Render the screenshot options dialog (scope + delay) when open. Modal-style
 /// panel, centred. Front-to-back: labels, then button cards (selected scope /
 /// delay tinted accent, capture green), then the panel backdrop.
+fn onboarding_ease(t: f32) -> f32 {
+    if t < 0.5 { 4.0 * t * t * t } else { 1.0 - (-2.0 * t + 2.0).powi(3) / 2.0 }
+}
+
+fn onboarding_lerp_rect(a: Rect, b: Rect, t: f32) -> Rect {
+    Rect::new(
+        a.x + (b.x - a.x) * t,
+        a.y + (b.y - a.y) * t,
+        a.w + (b.w - a.w) * t,
+        a.h + (b.h - a.h) * t,
+    )
+}
+
+/// 0 → 1 → 0 bump centred at `center`, `width` seconds wide — a single
+/// finger-tap pulse.
+fn onboarding_pulse(t: f32, center: f32, width: f32) -> f32 {
+    let d = (t - center).abs();
+    if d > width { 0.0 } else { 1.0 - onboarding_ease(d / width) }
+}
+
+fn onboarding_frac_rect(stage: Rect, f: (f32, f32, f32, f32)) -> Rect {
+    Rect::new(stage.x + f.0 * stage.w, stage.y + f.1 * stage.h, f.2 * stage.w, f.3 * stage.h)
+}
+
+/// One computed frame of the gesture demo: everything [`render_onboarding_dialog`]
+/// needs to draw, at time `t` (seconds into the loop). Ported 1:1 from the
+/// `kilavuz` guide's canvas `draw(t)` — see that file for the phase-by-phase
+/// commentary; this is the same four phases (drag, double-tap fullscreen,
+/// three-finger swipe, quad-tap terminal) redrawn with compositor primitives
+/// instead of `<canvas>`.
+struct OnboardingFrame {
+    phase: usize,
+    win: Rect,
+    win_alpha: f32,
+    term: Option<(Rect, f32)>,
+    /// (x, y, alpha) in stage-local logical px, one per visible finger dot.
+    fingers: Vec<(f32, f32, f32)>,
+    ws_active: usize,
+}
+
+fn onboarding_compute_frame(stage: Rect, t: f32) -> OnboardingFrame {
+    use crate::plugins::onboarding::{
+        ONBOARDING_PHASE_SECS as PD, TERM_FRAC, WIN_END_FRAC, WIN_FULL_FRAC, WIN_START_FRAC,
+    };
+    let win_start = onboarding_frac_rect(stage, WIN_START_FRAC);
+    let win_end = onboarding_frac_rect(stage, WIN_END_FRAC);
+    let win_full = onboarding_frac_rect(stage, WIN_FULL_FRAC);
+    let term_target = onboarding_frac_rect(stage, TERM_FRAC);
+
+    let phase = ((t / PD) as usize) % 4;
+    let lt = t - (t / PD).floor() * PD;
+
+    let mut frame = OnboardingFrame {
+        phase,
+        win: win_end,
+        win_alpha: 1.0,
+        term: None,
+        fingers: Vec::new(),
+        ws_active: usize::from(phase >= 2 && (phase > 2 || lt > 2.0)),
+    };
+
+    match phase {
+        0 => {
+            let drag_t = ((lt - 0.6) / 2.4).clamp(0.0, 1.0);
+            frame.win = onboarding_lerp_rect(win_start, win_end, onboarding_ease(drag_t));
+            let a = if lt < 0.4 {
+                onboarding_ease(lt / 0.4)
+            } else if lt > 3.4 {
+                1.0 - onboarding_ease((lt - 3.4) / 0.4)
+            } else {
+                1.0
+            };
+            frame.fingers.push((frame.win.x + 60.0, frame.win.y + 15.0, a));
+        }
+        1 => {
+            let grow_t = ((lt - 1.0) / 1.0).clamp(0.0, 1.0);
+            let shrink_t = ((lt - 3.0) / 0.8).clamp(0.0, 1.0);
+            frame.win = if shrink_t > 0.0 {
+                onboarding_lerp_rect(win_full, win_end, onboarding_ease(shrink_t))
+            } else {
+                onboarding_lerp_rect(win_end, win_full, onboarding_ease(grow_t))
+            };
+            let (cx, cy) = (win_end.x + win_end.w / 2.0, win_end.y + win_end.h / 2.0);
+            for center in [0.45, 0.8] {
+                let a = onboarding_pulse(lt, center, 0.22);
+                if a > 0.02 {
+                    frame.fingers.push((cx - 16.0, cy, a));
+                }
+            }
+        }
+        2 => {
+            frame.win_alpha = 0.55;
+            let swipe_t = ((lt - 0.5) / 1.5).clamp(0.0, 1.0);
+            let dx = -220.0 * onboarding_ease(swipe_t);
+            let (base_x, base_y) = (stage.x + 0.583 * stage.w, stage.y + 0.778 * stage.h);
+            let a = if lt < 0.5 {
+                onboarding_ease(lt / 0.5)
+            } else if lt > 2.0 {
+                (1.0 - (lt - 2.0) / 0.4).clamp(0.0, 1.0)
+            } else {
+                1.0
+            };
+            for off in [-40.0, 0.0, 40.0] {
+                frame.fingers.push((base_x + off + dx, base_y, a));
+            }
+        }
+        _ => {
+            let (cx, cy) = (term_target.x + term_target.w / 2.0, term_target.y + term_target.h + 60.0);
+            for center in [0.35, 0.55, 0.75, 0.95] {
+                let a = onboarding_pulse(lt, center, 0.14);
+                if a > 0.02 {
+                    frame.fingers.push((cx - 14.0, cy, a));
+                    frame.fingers.push((cx + 14.0, cy, a));
+                }
+            }
+            let open_t = ((lt - 1.1) / 0.5).clamp(0.0, 1.0);
+            let close_t = ((lt - 3.4) / 0.5).clamp(0.0, 1.0);
+            let term_alpha = if close_t > 0.0 { 1.0 - onboarding_ease(close_t) } else { onboarding_ease(open_t) };
+            if term_alpha > 0.01 {
+                frame.term = Some((term_target, term_alpha));
+            }
+        }
+    }
+    frame
+}
+
+/// Render the first-boot touch-gesture onboarding dialog, if open on this
+/// output: the demo "device screen" (mock window/terminal + finger dots +
+/// workspace indicator, per [`onboarding_compute_frame`]), the phase caption,
+/// and the dismiss button.
+pub(crate) fn render_onboarding_dialog(
+    state: &BacakState,
+    renderer: &mut GlesRenderer,
+    output: OutputId,
+    output_scale: i32,
+    off_x: i32,
+    off_y: i32,
+    out: &mut Vec<BacakElements>,
+) {
+    use crate::plugins::onboarding::ONBOARDING_TOTAL_SECS;
+
+    let Some(d) = state.onboarding_dialog.as_ref() else { return };
+    if d.output != output {
+        return;
+    }
+    let accent = SWITCHER_RING_COLOR;
+    let t = d.start.elapsed().as_secs_f32() % ONBOARDING_TOTAL_SECS;
+    let frame = onboarding_compute_frame(d.stage, t);
+
+    // --- pass 1: labels (front) ---
+    if let Some(cap) = d.captions.get(frame.phase).and_then(|c| c.as_ref()) {
+        let (_, w, _) = cap;
+        let lx = d.stage.x + (d.stage.w - *w as f32) / 2.0;
+        cc_blit_label(out, renderer, &d.captions[frame.phase], lx, d.stage.y + d.stage.h + 14.0, output_scale, off_x, off_y);
+    }
+    if let Some((_, w, h)) = &d.l_dismiss {
+        let lx = d.dismiss.x + (d.dismiss.w - *w as f32) / 2.0;
+        let ly = d.dismiss.y + (d.dismiss.h - *h as f32) / 2.0;
+        cc_blit_label(out, renderer, &d.l_dismiss, lx, ly, output_scale, off_x, off_y);
+    }
+    // The terminal's text label isn't itself faded (`cc_blit_label` has no
+    // alpha knob) — only drawn once the terminal card is mostly opaque, so
+    // the brief mismatch during the open/close tween isn't visible.
+    if let Some((term, alpha)) = frame.term {
+        if alpha > 0.6 && d.l_terminal.is_some() {
+            cc_blit_label(out, renderer, &d.l_terminal, term.x + 14.0, term.y + 14.0, output_scale, off_x, off_y);
+        }
+    }
+
+    // --- pass 2: mock window / terminal / finger dots / dismiss button ---
+    let win_col = Color32F::new(0.91, 0.92, 0.94, frame.win_alpha);
+    cc_card(out, renderer, frame.win, win_col, 10.0, output_scale, off_x, off_y);
+    let bar = Rect::new(frame.win.x, frame.win.y, frame.win.w, 26.0_f32.min(frame.win.h));
+    cc_card(out, renderer, bar, Color32F::new(accent.r(), accent.g(), accent.b(), frame.win_alpha), 10.0, output_scale, off_x, off_y);
+
+    if let Some((term, alpha)) = frame.term {
+        cc_card(out, renderer, term, Color32F::new(0.05, 0.06, 0.07, alpha), 12.0, output_scale, off_x, off_y);
+    }
+
+    for (fx, fy, a) in &frame.fingers {
+        let r = 15.0;
+        let dot = Rect::new(fx - r, fy - r, r * 2.0, r * 2.0);
+        cc_card(out, renderer, dot, Color32F::new(accent.r(), accent.g(), accent.b(), 0.35 * a), r, output_scale, off_x, off_y);
+        let core = 9.0;
+        let core_r = Rect::new(fx - core, fy - core, core * 2.0, core * 2.0);
+        cc_card(out, renderer, core_r, Color32F::new(0.95, 0.96, 0.98, *a), core, output_scale, off_x, off_y);
+    }
+
+    // Workspace indicator: 3 small dots, top-right of the stage.
+    for i in 0..3 {
+        let cx = d.stage.x + d.stage.w - 30.0 + i as f32 * 12.0;
+        let cy = d.stage.y + 18.0;
+        let r = if i == frame.ws_active { 4.0 } else { 3.0 };
+        let dot = Rect::new(cx - r, cy - r, r * 2.0, r * 2.0);
+        let col = if i == frame.ws_active {
+            Color32F::new(accent.r(), accent.g(), accent.b(), 1.0)
+        } else {
+            Color32F::new(1.0, 1.0, 1.0, 0.28)
+        };
+        cc_card(out, renderer, dot, col, r, output_scale, off_x, off_y);
+    }
+
+    cc_card(out, renderer, d.dismiss, accent, 14.0, output_scale, off_x, off_y);
+
+    // --- pass 3: stage + panel backdrop (back) ---
+    let stage_g = Color32F::new(0.043, 0.055, 0.071, 1.0);
+    cc_card(out, renderer, d.stage, stage_g, 12.0, output_scale, off_x, off_y);
+    let panel_col = if state.dark_mode {
+        Color32F::new(0.05, 0.08, 0.13, 0.97)
+    } else {
+        Color32F::new(0.20, 0.22, 0.27, 0.97)
+    };
+    cc_card(out, renderer, d.panel, panel_col, 22.0, output_scale, off_x, off_y);
+}
+
 pub(crate) fn render_shot_dialog(
     state: &BacakState,
     renderer: &mut GlesRenderer,
