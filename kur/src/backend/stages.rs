@@ -11,6 +11,7 @@
 use anyhow::{Context, Result};
 
 use super::cmd::{self, Cancel};
+use super::disk;
 use super::install::{Config, Reporter, TARGET};
 use super::medium;
 use super::plan::{Plan, Role};
@@ -32,6 +33,14 @@ pub fn partition(config: &Config, cancel: &Cancel, on: &mut Reporter) -> Result<
 
     match config.plan.to_sfdisk_script() {
         Some(script) => {
+            // The disk was read once, at selection time; the desktop's own
+            // automount (gvfs/udisks2) may have since mounted something on it
+            // (an old NTFS partition is exactly what autofs mounts on sight),
+            // and `sfdisk` refuses to repartition anything the kernel still
+            // considers busy. An automatic plan wipes the whole disk anyway,
+            // so releasing everything on it first is always correct here.
+            disk::release(&config.plan.disk, cancel);
+
             on(0.0, &format!("sfdisk {} <<EOF\n{script}EOF", config.plan.disk));
             // `--wipe always` clears stale filesystem signatures that would
             // otherwise make blkid report two filesystems on one partition.
@@ -199,6 +208,16 @@ pub fn configure(config: &Config, cancel: &Cancel, on: &mut Reporter) -> Result<
 
     std::fs::remove_file(format!("{TARGET}/etc/machine-id")).ok();
     cmd::chroot(TARGET, "systemd-machine-id-setup", &[], cancel)?;
+
+    // `/etc/bacak-display-manager.conf` is baked into the squashfs by
+    // config/includes.chroot solely to autologin the live medium's "insan"
+    // user (see the file's own header comment). Left on an installed system,
+    // BDM tries to autologin a user that was never created and crash-loops
+    // until systemd rate-limits it — the machine boots to a blank screen
+    // with nothing but a blinking cursor. The .deb never installs this file,
+    // so on a real install BDM falls back to its compiled-in defaults, which
+    // don't autologin.
+    std::fs::remove_file(format!("{TARGET}/etc/bacak-display-manager.conf")).ok();
     on(0.92, "");
 
     // Regenerate the initramfs now that live-boot's hooks are gone, so it
