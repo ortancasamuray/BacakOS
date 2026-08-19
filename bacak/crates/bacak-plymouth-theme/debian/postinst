@@ -1,0 +1,15 @@
+#!/bin/sh
+# BacakOS Plymouth teması — kurulumda varsayılan yapar ve initramfs'i
+# tazeler. plymouth-set-default-theme yoksa (ör. bu paket plymouth kurulu
+# olmayan bir ortamda test ediliyorsa) sessizce atlar.
+set -e
+
+if command -v plymouth-set-default-theme >/dev/null 2>&1; then
+    plymouth-set-default-theme bacakos
+
+    if command -v update-initramfs >/dev/null 2>&1; then
+        update-initramfs -u -k all || true
+    fi
+fi
+
+exit 0

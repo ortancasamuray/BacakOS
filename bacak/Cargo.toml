@@ -8,6 +8,10 @@ members = [
     "crates/bacak-plugin-network",
     "crates/bacak-plugin-audio",
     "crates/bacak-plugin-desktop-settings",
+    "crates/bacak-icons",
+    "crates/bacak-desktop-defaults",
+    "crates/bacak-grub-theme",
+    "crates/bacak-plymouth-theme",
 ]
 
 [workspace.package]
