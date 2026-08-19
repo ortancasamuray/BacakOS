@@ -63,7 +63,9 @@ use smithay::input::touch::{DownEvent, MotionEvent as TouchMotionEvent, TouchHan
 use smithay::output::{Mode as OutputMode, Output, PhysicalProperties, Subpixel};
 use smithay::backend::allocator::Fourcc as DrmFourcc;
 use smithay::wayland::dmabuf::DmabufFeedbackBuilder;
-use smithay::reexports::drm::control::{connector, crtc, Device as DrmControlDevice, ModeTypeFlags};
+use smithay::reexports::drm::control::{
+    connector, crtc, Device as DrmControlDevice, Mode as DrmMode, ModeFlags, ModeTypeFlags,
+};
 use smithay::reexports::input::Libinput;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{Client, Display, DisplayHandle, ListeningSocket};
@@ -78,6 +80,7 @@ use smithay::xwayland::xwm::{Reorder, ResizeEdge, WmWindowProperty, XwmId};
 use smithay::xwayland::{X11Surface, X11Wm, XWayland, XWaylandEvent, XwmHandler};
 use tracing::{error, info, warn};
 
+use std::collections::HashMap;
 use std::collections::HashSet;
 
 use crate::config::{CompositorConfig, ConfigWatcher};
@@ -150,6 +153,14 @@ struct RenderTarget {
     /// Per-target redraw flag. We try to keep targets independent so a
     /// slow monitor doesn't block a fast one.
     needs_redraw: bool,
+    /// DRM connector name (`"HDMI-1"`, …) — the `outputs.<connector>`
+    /// key in `compositor.json`.
+    connector_name: String,
+    /// Selectable modes for the settings UI: deduped by resolution
+    /// (highest refresh kept), sorted highest-first.
+    mode_list: Vec<(u16, u16, u32)>,
+    /// The mode this target was brought up with.
+    current_mode: (u16, u16, u32),
 }
 
 /// Shared dependencies for [`try_bringup_target`]. Lives at the top of
@@ -209,6 +220,11 @@ struct LoopData {
     /// `$BACAK_STARTUP` client spawned once after the first event-loop tick,
     /// when the Wayland socket is actively dispatching connections.
     startup_spawned: bool,
+    /// Mode sizes that failed to scan out (page-flip `ENOMEM`, usually a
+    /// resolution too large for the GPU's available memory) per connector.
+    /// `try_bringup_target` skips these on retry so a failed bring-up
+    /// doesn't just pick the same doomed mode again.
+    blacklisted_modes: HashMap<u32, HashSet<(u16, u16)>>,
 }
 
 impl LoopData {
@@ -431,6 +447,7 @@ pub fn run() -> Result<()> {
         (0, 0),
         &dh,
         &state.config,
+        &HashSet::new(),
     )
     .context("boot target bring-up failed")?;
     // Sync the WM's primary bounds with the actual mode we just lit up;
@@ -454,6 +471,7 @@ pub fn run() -> Result<()> {
     // Register the smithay Output so layer-shell / render / input can reach its
     // LayerMap (the backend's own copy lives in the RenderTarget).
     state.register_output(primary_oid, boot_target._output.clone());
+    publish_output_modes(&mut state, &boot_target);
     output_registry.adopt(boot_connector_raw, primary_oid);
     info!(
         connector = boot_connector_raw,
@@ -470,7 +488,7 @@ pub fn run() -> Result<()> {
     // is already in the registry so it shouldn't appear in `changes`;
     // anything else is a secondary monitor that was plugged in before
     // the session started.
-    let snapshots = scan_connectors(&drm_device, &output_registry, &state.wm);
+    let snapshots = scan_connectors(&drm_device, &output_registry, &state.wm, &state.config);
     let extra_changes = output_registry.reconcile(&snapshots, &state.wm);
     for change in &extra_changes {
         if let HotplugChange::Added { connector, output } = change {
@@ -485,11 +503,13 @@ pub fn run() -> Result<()> {
                 (bounds.x as i32, bounds.y as i32),
                 &dh,
                 &state.config,
+                &HashSet::new(),
             ) {
                 Ok(t) => {
                     info!(connector, output, "secondary connector brought up at boot");
                     state.wm.set_output_scale(*output, t.scale as f64);
                     state.register_output(*output, t._output.clone());
+                    publish_output_modes(&mut state, &t);
                     targets.push(t);
                 }
                 Err(err) => warn!(?err, connector, "failed to bring up secondary at boot"),
@@ -534,6 +554,7 @@ pub fn run() -> Result<()> {
         config_watch,
         signal,
         startup_spawned: false,
+        blacklisted_modes: HashMap::new(),
     };
 
     register_sources(
@@ -624,7 +645,29 @@ pub fn run() -> Result<()> {
             crate::launcher::spawn_startup();
         }
 
+        // First-boot touch-gesture onboarding: show once per real user
+        // session (not the greeter), as soon as a primary output exists to
+        // centre it on. Retries every tick until then, but only ever opens
+        // the dialog once (`onboarding_checked`) — dismissing it is what
+        // persists `config.onboarding_shown` so it stays gone after this.
+        if !loop_data.state.onboarding_checked && !loop_data.state.is_greeter {
+            if let Some(out) = loop_data.state.wm.primary_output() {
+                loop_data.state.onboarding_checked = true;
+                if !loop_data.state.config.onboarding_shown {
+                    loop_data.state.open_onboarding_dialog(out);
+                }
+            }
+        }
+
         maybe_reload_config(&mut loop_data);
+
+        // Desktop Settings resolution page wrote a new output mode:
+        // apply it now rather than waiting on the config watcher (which
+        // may be off if the config dir didn't exist at boot).
+        if loop_data.state.output_mode_dirty {
+            loop_data.state.output_mode_dirty = false;
+            apply_config_output_modes(&mut loop_data);
+        }
 
         // Drive spring animations and arm a redraw on every target if any
         // animation is still moving — we can't know which output it's on
@@ -1075,6 +1118,63 @@ fn pick_scale(mode_px: (u16, u16), phys_mm: (u32, u32)) -> i32 {
 /// logical-pixel top-left in the WM's global coordinate space; we plumb
 /// it into Smithay's `change_current_state` so client surfaces see the
 /// layout that the WM thinks is real.
+/// Order a connector's DRM modes by bring-up priority:
+/// 1. If compositor.json specifies a mode for this connector, matching DRM
+///    modes (exact WxH; exact refresh when given, else highest) go first.
+/// 2. All remaining modes follow, highest resolution first (pixel area,
+///    then refresh, PREFERRED flag as tie-break); interlaced modes sort
+///    last regardless of size.
+/// `try_bringup_target` tries candidates in this order and settles on the
+/// first one the GPU actually accepts; `scan_connectors` sizes its
+/// snapshots from `candidates[0]` so hot-plug reconciles against the mode
+/// the bring-up will actually pick (a mismatch would flag a spurious
+/// `Resized` on every udev event).
+fn mode_candidates(
+    info: &connector::Info,
+    cfg: &crate::config::CompositorConfig,
+) -> Vec<DrmMode> {
+    let connector_raw: u32 = info.handle().into();
+    let mut candidates: Vec<DrmMode> = info.modes().to_vec();
+    candidates.sort_by_key(|m| {
+        let s = m.size();
+        std::cmp::Reverse((
+            !m.flags().contains(ModeFlags::INTERLACE),
+            (s.0 as u64) * (s.1 as u64),
+            m.vrefresh() as u64,
+            m.mode_type().contains(ModeTypeFlags::PREFERRED),
+        ))
+    });
+    let connector_name = connector_interface_name(info);
+    if let Some(cfg_mode) = cfg.outputs.get(&connector_name).and_then(|c| c.mode.as_deref()) {
+        if let Some((req_w, req_h, req_hz)) = crate::config::OutputConfig::parse_mode(cfg_mode) {
+            let matches = |m: &DrmMode| {
+                let s = m.size();
+                s.0 == req_w && s.1 == req_h && (req_hz == 0 || m.vrefresh() == req_hz)
+            };
+            if candidates.iter().any(matches) {
+                info!(
+                    connector = connector_raw,
+                    mode = cfg_mode,
+                    "using config-specified output mode"
+                );
+                // Stable sort: matching modes move to the front, keeping the
+                // refresh-descending order among them and the resolution
+                // ranking among the rest as fallback.
+                candidates.sort_by_key(|m| !matches(m));
+            } else {
+                warn!(
+                    connector = connector_raw,
+                    mode = cfg_mode,
+                    "config mode not found in connector's mode list; falling back to highest supported"
+                );
+            }
+        } else {
+            warn!(connector = connector_raw, mode = cfg_mode, "could not parse configured mode string");
+        }
+    }
+    candidates
+}
+
 fn try_bringup_target(
     drm: &mut DrmDevice,
     env: &RenderEnv,
@@ -1084,6 +1184,7 @@ fn try_bringup_target(
     location_logical: (i32, i32),
     dh: &DisplayHandle,
     cfg: &crate::config::CompositorConfig,
+    excluded_sizes: &HashSet<(u16, u16)>,
 ) -> Result<RenderTarget> {
     let res = drm
         .resource_handles()
@@ -1102,52 +1203,58 @@ fn try_bringup_target(
     let output_cfg = cfg.outputs.get(&connector_name);
 
     let modes = info.modes();
-    // Mode selection priority:
-    // 1. If compositor.json specifies a mode for this connector, find the
-    //    closest DRM mode match (exact WxH, then best refresh, fallback preferred).
-    // 2. Otherwise prefer the mode with the PREFERRED flag from EDID/firmware.
-    // 3. Fall back to the first mode in the driver list.
-    let drm_mode = if let Some(cfg_mode) = output_cfg.and_then(|c| c.mode.as_deref()) {
-        if let Some((req_w, req_h, req_hz)) = crate::config::OutputConfig::parse_mode(cfg_mode) {
-            let matched = modes.iter().copied().filter(|m| {
-                let s = m.size();
-                s.0 == req_w && s.1 == req_h && (req_hz == 0 || m.vrefresh() as u32 == req_hz)
-            })
-            .max_by_key(|m| m.vrefresh());
-            if let Some(m) = matched {
-                info!(
-                    connector = connector_raw,
-                    mode = cfg_mode,
-                    "using config-specified output mode"
-                );
-                m
-            } else {
-                warn!(
-                    connector = connector_raw,
-                    mode = cfg_mode,
-                    "config mode not found in connector's mode list; falling back to preferred"
-                );
-                modes.iter().copied()
-                    .find(|m| m.mode_type().contains(ModeTypeFlags::PREFERRED))
-                    .or_else(|| modes.iter().copied().next())
-                    .ok_or_else(|| anyhow!("connector {connector_raw} reports no modes"))?
-            }
-        } else {
-            warn!(connector = connector_raw, mode = cfg_mode, "could not parse configured mode string");
-            modes.iter().copied()
-                .find(|m| m.mode_type().contains(ModeTypeFlags::PREFERRED))
-                .or_else(|| modes.iter().copied().next())
-                .ok_or_else(|| anyhow!("connector {connector_raw} reports no modes"))?
-        }
+    let candidates = mode_candidates(&info, cfg);
+    if candidates.is_empty() {
+        return Err(anyhow!("connected connector {connector_raw} reports no modes"));
+    }
+    // Drop sizes that already failed to scan out earlier this run (see
+    // `blacklisted_modes`) — unless that would leave nothing to try, in
+    // which case we'd rather retry a known-bad mode than give up outright.
+    let filtered: Vec<DrmMode> = candidates
+        .iter()
+        .cloned()
+        .filter(|m| !excluded_sizes.contains(&m.size()))
+        .collect();
+    let candidates = if filtered.is_empty() {
+        candidates
     } else {
-        // No config override — prefer the PREFERRED mode (highest-quality mode
-        // recommended by the display's EDID), then fall back to first.
-        modes.iter().copied()
-            .find(|m| m.mode_type().contains(ModeTypeFlags::PREFERRED))
-            .or_else(|| modes.iter().copied().next())
-            .ok_or_else(|| anyhow!("connected connector {connector_raw} reports no modes"))?
+        if filtered.len() != candidates.len() {
+            info!(
+                connector = connector_raw,
+                skipped = candidates.len() - filtered.len(),
+                "skipping mode(s) that previously failed to scan out"
+            );
+        }
+        filtered
     };
-    let mode_size = drm_mode.size();
+
+    // Settings-UI mode inventory: progressive modes deduped by resolution
+    // (highest refresh kept), sorted highest-first, capped so the
+    // resolution page fits on screen without scrolling.
+    let mut ui_modes: Vec<(u16, u16, u32)> = modes
+        .iter()
+        .filter(|m| !m.flags().contains(ModeFlags::INTERLACE))
+        .map(|m| {
+            let s = m.size();
+            (s.0, s.1, m.vrefresh())
+        })
+        .collect();
+    if ui_modes.is_empty() {
+        // Interlaced-only panel — offer those rather than nothing.
+        ui_modes = modes
+            .iter()
+            .map(|m| {
+                let s = m.size();
+                (s.0, s.1, m.vrefresh())
+            })
+            .collect();
+    }
+    ui_modes.sort_by_key(|&(w, h, hz)| std::cmp::Reverse(((w as u64) * (h as u64), w, hz)));
+    {
+        let mut seen: HashSet<(u16, u16)> = HashSet::new();
+        ui_modes.retain(|&(w, h, _)| seen.insert((w, h)));
+    }
+    ui_modes.truncate(14);
 
     // Find a CRTC that's both compatible with this connector's encoders
     // and not currently driving another output.
@@ -1166,93 +1273,251 @@ fn try_bringup_target(
         found.ok_or_else(|| anyhow!("no free CRTC for connector {connector_raw}"))?
     };
 
-    let drm_surface = drm
-        .create_surface(crtc_handle, drm_mode, &[handle])
-        .map_err(|e| anyhow!("DrmDevice::create_surface: {e}"))?;
-
     let (phys_w, phys_h) = info.size().unwrap_or((0, 0));
-    let smithay_output = Output::new(
-        connector_interface_name(&info),
-        PhysicalProperties {
-            size: (phys_w as i32, phys_h as i32).into(),
-            subpixel: Subpixel::Unknown,
-            make: "Bacak".into(),
-            model: "DRM".into(),
+    let mut last_err = anyhow!("connector {connector_raw}: no mode could be brought up");
+    for drm_mode in candidates {
+        let mode_size = drm_mode.size();
+
+        let drm_surface = match drm.create_surface(crtc_handle, drm_mode, &[handle]) {
+            Ok(s) => s,
+            Err(e) => {
+                warn!(
+                    connector = connector_raw,
+                    mode_w = mode_size.0,
+                    mode_h = mode_size.1,
+                    refresh = drm_mode.vrefresh(),
+                    "DrmDevice::create_surface failed; trying next mode: {e}"
+                );
+                last_err = anyhow!("DrmDevice::create_surface: {e}");
+                continue;
+            }
+        };
+
+        let smithay_output = Output::new(
+            connector_interface_name(&info),
+            PhysicalProperties {
+                size: (phys_w as i32, phys_h as i32).into(),
+                subpixel: Subpixel::Unknown,
+                make: "Bacak".into(),
+                model: "DRM".into(),
+            },
+        );
+        let smithay_mode = OutputMode {
+            size: (mode_size.0 as i32, mode_size.1 as i32).into(),
+            refresh: (drm_mode.vrefresh() as i32) * 1000,
+        };
+        let scale = if let Some(&s) = output_cfg.and_then(|c| c.scale.as_ref()) {
+            let clamped = s.clamp(1, 3);
+            if clamped != s {
+                warn!(connector = connector_raw, requested = s, used = clamped, "scale clamped to 1–3");
+            }
+            info!(connector = connector_raw, scale = clamped, "using config-specified output scale");
+            clamped
+        } else {
+            pick_scale(mode_size, (phys_w, phys_h))
+        };
+        smithay_output.set_preferred(smithay_mode);
+        smithay_output.change_current_state(
+            Some(smithay_mode),
+            Some(Transform::Normal),
+            Some(smithay::output::Scale::Integer(scale)),
+            Some(location_logical.into()),
+        );
+
+        let allocator = GbmAllocator::new(
+            env.gbm.clone(),
+            GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT,
+        );
+        let exporter = GbmFramebufferExporter::new(env.gbm.clone(), None);
+        let cursor_size = drm.cursor_size();
+        let compositor = match DrmCompositor::new(
+            &smithay_output,
+            drm_surface,
+            None,
+            allocator,
+            exporter,
+            [DrmFourcc::Argb8888, DrmFourcc::Xrgb8888],
+            env.renderer_formats.clone(),
+            cursor_size,
+            Some(env.gbm.clone()),
+        ) {
+            Ok(c) => c,
+            Err(e) => {
+                warn!(
+                    connector = connector_raw,
+                    mode_w = mode_size.0,
+                    mode_h = mode_size.1,
+                    refresh = drm_mode.vrefresh(),
+                    "DrmCompositor::new failed; trying next mode: {e:?}"
+                );
+                last_err = anyhow!("DrmCompositor::new: {e:?}");
+                continue;
+            }
+        };
+
+        info!(
+            connector = connector_raw,
+            mode_w = mode_size.0,
+            mode_h = mode_size.1,
+            refresh = drm_mode.vrefresh(),
+            phys_mm_w = phys_w,
+            phys_mm_h = phys_h,
+            scale,
+            "selected output mode and scale (override via compositor.json outputs.<connector>)"
+        );
+        // Advertise this monitor as a `wl_output` global (xdg-output rides
+        // along via OutputManagerState). Real toolkits — Chromium's
+        // Ozone-Wayland backend, Firefox, GTK/Qt — require at least one
+        // output and abort/crash without it. Created only after the DRM
+        // surface and compositor exist so a failed mode attempt doesn't
+        // leak a global. The Output is moved into the RenderTarget below,
+        // so the global lives for the connector's lifetime.
+        smithay_output.create_global::<BacakState>(dh);
+
+        let output_size = UtilsSize::<i32, smithay::utils::Physical>::from((
+            mode_size.0 as i32,
+            mode_size.1 as i32,
+        ));
+
+        return Ok(RenderTarget {
+            output_id,
+            connector: connector_raw,
+            crtc: crtc_handle,
+            _output: smithay_output,
+            compositor,
+            output_size,
+            scale,
+            flip_pending: false,
+            needs_redraw: true,
+            connector_name: connector_name.clone(),
+            mode_list: ui_modes.clone(),
+            current_mode: (mode_size.0, mode_size.1, drm_mode.vrefresh()),
+        });
+    }
+    Err(last_err)
+}
+
+/// Publish a freshly brought-up target's mode inventory to
+/// [`BacakState::output_modes`] so the Desktop Settings resolution page
+/// can list and mark them.
+fn publish_output_modes(state: &mut BacakState, t: &RenderTarget) {
+    state.output_modes.insert(
+        t.output_id,
+        crate::state::OutputModes {
+            connector: t.connector_name.clone(),
+            modes: t.mode_list.clone(),
+            current: t.current_mode,
         },
     );
-    let smithay_mode = OutputMode {
-        size: (mode_size.0 as i32, mode_size.1 as i32).into(),
-        refresh: (drm_mode.vrefresh() as i32) * 1000,
-    };
-    let scale = if let Some(&s) = output_cfg.and_then(|c| c.scale.as_ref()) {
-        let clamped = s.clamp(1, 3);
-        if clamped != s {
-            warn!(connector = connector_raw, requested = s, used = clamped, "scale clamped to 1–3");
+}
+
+/// Re-modeset every target whose `outputs.<connector>.mode` in the
+/// (already reloaded) config differs from the mode it's running at.
+/// Mirrors the hot-plug `Resized` path: drop the old target so its CRTC
+/// frees up, bring the connector back up (the config-requested mode
+/// sorts first in `try_bringup_target`), then republish WM bounds /
+/// scale / output registration. Called when the Desktop Settings
+/// resolution page flags `output_mode_dirty` and after a config
+/// hot-reload, so hand-edited configs apply live too.
+fn apply_config_output_modes(data: &mut LoopData) {
+    let mut stale: Vec<(u32, crate::wm::OutputId)> = Vec::new();
+    for t in &data.targets {
+        let Some(mode_str) = data
+            .state
+            .config
+            .outputs
+            .get(&t.connector_name)
+            .and_then(|c| c.mode.as_deref())
+        else {
+            continue;
+        };
+        let Some((w, h, hz)) = crate::config::OutputConfig::parse_mode(mode_str) else {
+            warn!(connector = t.connector, mode = mode_str, "config: unparseable mode string");
+            continue;
+        };
+        let (cw, ch, chz) = t.current_mode;
+        if cw == w && ch == h && (hz == 0 || chz == hz) {
+            continue;
         }
-        info!(connector = connector_raw, scale = clamped, "using config-specified output scale");
-        clamped
-    } else {
-        pick_scale(mode_size, (phys_w, phys_h))
-    };
-    info!(
-        connector = connector_raw,
-        mode_w = mode_size.0,
-        mode_h = mode_size.1,
-        phys_mm_w = phys_w,
-        phys_mm_h = phys_h,
-        scale,
-        "selected output mode and scale (override via compositor.json outputs.<connector>)"
-    );
-    smithay_output.set_preferred(smithay_mode);
-    smithay_output.change_current_state(
-        Some(smithay_mode),
-        Some(Transform::Normal),
-        Some(smithay::output::Scale::Integer(scale)),
-        Some(location_logical.into()),
-    );
-    // Advertise this monitor as a `wl_output` global (xdg-output rides
-    // along via OutputManagerState). Real toolkits — Chromium's
-    // Ozone-Wayland backend, Firefox, GTK/Qt — require at least one
-    // output and abort/crash without it. The Output is moved into the
-    // RenderTarget below, so the global lives for the connector's
-    // lifetime.
-    smithay_output.create_global::<BacakState>(dh);
+        let available = t
+            .mode_list
+            .iter()
+            .any(|&(mw, mh, mhz)| mw == w && mh == h && (hz == 0 || mhz == hz));
+        if !available {
+            warn!(
+                connector = t.connector,
+                mode = mode_str,
+                "config: requested mode not offered by connector; keeping current"
+            );
+            continue;
+        }
+        stale.push((t.connector, t.output_id));
+    }
+    if stale.is_empty() {
+        return;
+    }
 
-    let allocator = GbmAllocator::new(
-        env.gbm.clone(),
-        GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT,
-    );
-    let exporter = GbmFramebufferExporter::new(env.gbm.clone(), None);
-    let cursor_size = drm.cursor_size();
-    let compositor = DrmCompositor::new(
-        &smithay_output,
-        drm_surface,
-        None,
-        allocator,
-        exporter,
-        [DrmFourcc::Argb8888, DrmFourcc::Xrgb8888],
-        env.renderer_formats.clone(),
-        cursor_size,
-        Some(env.gbm.clone()),
-    )
-    .map_err(|e| anyhow!("DrmCompositor::new: {e:?}"))?;
+    let dh = data.state.display_handle.clone();
+    for (connector, output) in stale {
+        data.targets.retain(|t| t.connector != connector);
+        let prev = data
+            .state
+            .wm
+            .output(output)
+            .map(|o| o.bounds)
+            .unwrap_or_default();
+        let used = data.used_crtcs();
+        let excluded = data.blacklisted_modes.get(&connector).cloned().unwrap_or_default();
+        match try_bringup_target(
+            &mut data.drm,
+            &data.env,
+            &used,
+            connector,
+            output,
+            (prev.x as i32, prev.y as i32),
+            &dh,
+            &data.state.config,
+            &excluded,
+        ) {
+            Ok(t) => {
+                // Sync the WM's logical bounds with the mode we just lit
+                // up, keeping the output's position in the layout.
+                let nb = WmRect::new(
+                    prev.x,
+                    prev.y,
+                    (t.output_size.w / t.scale) as f32,
+                    (t.output_size.h / t.scale) as f32,
+                );
+                if let Err(e) = data.state.wm.set_output_bounds(output, nb) {
+                    warn!(?e, connector, output, "config re-modeset: set_output_bounds failed");
+                }
+                data.state.wm.set_output_scale(output, t.scale as f64);
+                data.state.register_output(output, t._output.clone());
+                publish_output_modes(&mut data.state, &t);
+                info!(
+                    connector,
+                    output,
+                    w = t.output_size.w,
+                    h = t.output_size.h,
+                    "config: output re-modeset"
+                );
+                data.targets.push(t);
+                // Reopen the settings panel so it recentres on the new
+                // geometry and shows the fresh current-mode value.
+                if data.state.desktop_settings.as_ref().map(|d| d.output) == Some(output) {
+                    data.state.open_desktop_settings(output);
+                }
+            }
+            Err(err) => {
+                warn!(?err, connector, output, "config re-modeset failed; output is dark");
+            }
+        }
+    }
 
-    let output_size = UtilsSize::<i32, smithay::utils::Physical>::from((
-        mode_size.0 as i32,
-        mode_size.1 as i32,
-    ));
-
-    Ok(RenderTarget {
-        output_id,
-        connector: connector_raw,
-        crtc: crtc_handle,
-        _output: smithay_output,
-        compositor,
-        output_size,
-        scale,
-        flip_pending: false,
-        needs_redraw: true,
-    })
+    data.state.apply_dock_strut();
+    for t in data.targets.iter_mut() {
+        t.needs_redraw = true;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1534,7 +1799,7 @@ fn handle_udev_event(data: &mut LoopData, event: UdevEvent) {
 /// converge here so the two diverge only in the seeding of the boot
 /// connector.
 fn apply_hotplug(data: &mut LoopData) {
-    let snapshots = scan_connectors(&data.drm, &data.output_registry, &data.state.wm);
+    let snapshots = scan_connectors(&data.drm, &data.output_registry, &data.state.wm, &data.state.config);
     let changes = data
         .output_registry
         .reconcile(&snapshots, &data.state.wm);
@@ -1553,6 +1818,7 @@ fn apply_hotplug(data: &mut LoopData) {
                     .map(|o| o.bounds)
                     .unwrap_or_default();
                 let used = data.used_crtcs();
+                let excluded = data.blacklisted_modes.get(&connector).cloned().unwrap_or_default();
                 match try_bringup_target(
                     &mut data.drm,
                     &data.env,
@@ -1562,11 +1828,13 @@ fn apply_hotplug(data: &mut LoopData) {
                     (bounds.x as i32, bounds.y as i32),
                     &dh,
                     &data.state.config,
+                    &excluded,
                 ) {
                     Ok(t) => {
                         info!(connector, output, "hotplug: target brought up");
                         data.state.wm.set_output_scale(output, t.scale as f64);
                         data.state.register_output(output, t._output.clone());
+                        publish_output_modes(&mut data.state, &t);
                         data.targets.push(t);
                     }
                     Err(err) => warn!(?err, connector, output, "hotplug: bring-up failed"),
@@ -1574,6 +1842,7 @@ fn apply_hotplug(data: &mut LoopData) {
             }
             HotplugChange::Removed { connector, output } => {
                 data.state.outputs.remove(&output);
+                data.state.output_modes.remove(&output);
                 let before = data.targets.len();
                 data.targets.retain(|t| t.connector != connector);
                 if data.targets.len() < before {
@@ -1603,6 +1872,7 @@ fn apply_hotplug(data: &mut LoopData) {
                         .map(|o| o.bounds)
                         .unwrap_or_default();
                     let used = data.used_crtcs();
+                    let excluded = data.blacklisted_modes.get(&connector).cloned().unwrap_or_default();
                     match try_bringup_target(
                         &mut data.drm,
                         &data.env,
@@ -1612,11 +1882,13 @@ fn apply_hotplug(data: &mut LoopData) {
                         (bounds.x as i32, bounds.y as i32),
                         &dh,
                         &data.state.config,
+                        &excluded,
                     ) {
                         Ok(t) => {
                             info!(connector, output, "hotplug: target re-modeset");
                             data.state.wm.set_output_scale(output, t.scale as f64);
                             data.state.register_output(output, t._output.clone());
+                            publish_output_modes(&mut data.state, &t);
                             data.targets.push(t);
                         }
                         Err(err) => {
@@ -1669,6 +1941,7 @@ fn scan_connectors(
     drm: &DrmDevice,
     registry: &OutputRegistry,
     wm: &crate::wm::WindowManager,
+    cfg: &crate::config::CompositorConfig,
 ) -> Vec<ConnectorSnapshot> {
     let res = match drm.resource_handles() {
         Ok(r) => r,
@@ -1694,11 +1967,21 @@ fn scan_connectors(
         if info.state() != connector::State::Connected {
             continue;
         }
-        let Some(mode) = info.modes().iter().copied().next() else {
+        // Size the snapshot from the mode bring-up will actually pick
+        // (config override or highest) — sizing from `modes()[0]` would
+        // disagree with the live target and flag a spurious `Resized`
+        // on every reconcile.
+        let Some(mode) = mode_candidates(&info, cfg).into_iter().next() else {
             continue;
         };
         let (w, h) = mode.size();
-        let scale = pick_scale((w, h), info.size().unwrap_or((0, 0)));
+        let name = connector_interface_name(&info);
+        let scale = cfg
+            .outputs
+            .get(&name)
+            .and_then(|c| c.scale)
+            .map(|s| s.clamp(1, 3))
+            .unwrap_or_else(|| pick_scale((w, h), info.size().unwrap_or((0, 0))));
         let handle: u32 = c.into();
         raw.push((handle, w as i32 / scale, h as i32 / scale));
     }
@@ -1872,11 +2155,25 @@ fn maybe_reload_config(data: &mut LoopData) {
     }
     let new = CompositorConfig::load();
     tracing::info!(blur = new.blur, "compositor config reloaded");
+    let font_changed = data.state.config.font != new.font;
+    let theme_changed = data.state.config.icon_theme != new.icon_theme;
     data.state.blur_enabled = new.blur_enabled();
     data.state.config = new;
+    if font_changed {
+        data.state.text = crate::text::TextRenderer::load_with_override(&data.state.config.font);
+    }
+    if theme_changed {
+        crate::icons::set_icon_theme_override(
+            (!data.state.config.icon_theme.is_empty()).then(|| data.state.config.icon_theme.clone()),
+        );
+        data.state.icon_cache.lock().clear();
+    }
     // The dock toggle / height may have changed: re-apply the bottom
     // strut so snap math and `work_area` track the new bar.
     data.state.apply_dock_strut();
+    // A changed `outputs.<connector>.mode` re-modesets live (covers
+    // hand-edited configs; the settings UI also flags output_mode_dirty).
+    apply_config_output_modes(data);
     for t in data.targets.iter_mut() {
         t.needs_redraw = true;
     }
@@ -1916,6 +2213,16 @@ fn render_dirty_targets(data: &mut LoopData) -> Result<()> {
     {
         crate::render::capture_window_snapshots(&data.state, &mut data.renderer);
     }
+
+    // Outputs whose scan-out failed this tick (index into `data.targets`
+    // at loop time). Handled after the loop instead of via `?` — a mode
+    // the GPU can't actually flip to (commonly `ENOMEM` at a resolution
+    // too large for available graphics memory — see `mode_candidates`'s
+    // "highest resolution" picker) used to take the whole compositor
+    // down and back into an eternal crash-restart loop, since a fresh
+    // process just picks the same doomed mode again. Now we tear the
+    // target down and retry at a smaller mode instead.
+    let mut failed_targets: Vec<usize> = Vec::new();
 
     // Index loop so we can re-borrow the same target mutably (the
     // build_styled_elements call takes an immutable borrow of state +
@@ -1991,24 +2298,98 @@ fn render_dirty_targets(data: &mut LoopData) -> Result<()> {
         // the DrmCompositor honour our element z-order, so our UI always
         // paints on top of clients — including fullscreen ones. (We use a
         // software cursor element, so we lose no cursor-plane benefit.)
-        let result = t
-            .compositor
-            .render_frame::<_, BacakElements>(
-                &mut data.renderer,
-                &elements,
-                CLEAR_COLOR,
-                FrameFlags::empty(),
-            )
-            .map_err(|e| anyhow!("render_frame(output={output_id}): {e:?}"))?;
+        let result = match t.compositor.render_frame::<_, BacakElements>(
+            &mut data.renderer,
+            &elements,
+            CLEAR_COLOR,
+            FrameFlags::empty(),
+        ) {
+            Ok(r) => r,
+            Err(e) => {
+                warn!(
+                    output = output_id,
+                    "render_frame failed; output will retry at a lower mode: {e:?}"
+                );
+                failed_targets.push(i);
+                continue;
+            }
+        };
 
         if !result.is_empty {
-            t.compositor
-                .queue_frame(())
-                .map_err(|e| anyhow!("queue_frame(output={output_id}): {e:?}"))?;
+            if let Err(e) = t.compositor.queue_frame(()) {
+                warn!(
+                    output = output_id,
+                    "queue_frame failed; output will retry at a lower mode: {e:?}"
+                );
+                failed_targets.push(i);
+                continue;
+            }
             t.flip_pending = true;
         }
         t.needs_redraw = false;
         any_redrew = true;
+    }
+
+    // Tear down and retry any output that failed to scan out above.
+    // Processed high-to-low so earlier removals don't shift indices still
+    // queued. The freed CRTC and the mode blacklist together steer
+    // `try_bringup_target` away from repeating the same failure.
+    for i in failed_targets.into_iter().rev() {
+        let removed = data.targets.remove(i);
+        let (failed_w, failed_h, failed_hz) = removed.current_mode;
+        data.blacklisted_modes
+            .entry(removed.connector)
+            .or_default()
+            .insert((failed_w, failed_h));
+        let bounds = data
+            .state
+            .wm
+            .output(removed.output_id)
+            .map(|o| o.bounds)
+            .unwrap_or_default();
+        let used = data.used_crtcs();
+        let excluded = data
+            .blacklisted_modes
+            .get(&removed.connector)
+            .cloned()
+            .unwrap_or_default();
+        let dh = data.state.display_handle.clone();
+        match try_bringup_target(
+            &mut data.drm,
+            &data.env,
+            &used,
+            removed.connector,
+            removed.output_id,
+            (bounds.x as i32, bounds.y as i32),
+            &dh,
+            &data.state.config,
+            &excluded,
+        ) {
+            Ok(t) => {
+                warn!(
+                    connector = removed.connector,
+                    failed_w,
+                    failed_h,
+                    failed_hz,
+                    new_w = t.current_mode.0,
+                    new_h = t.current_mode.1,
+                    "output recovered at a smaller mode after scan-out failure"
+                );
+                data.state.wm.set_output_scale(removed.output_id, t.scale as f64);
+                data.state.register_output(removed.output_id, t._output.clone());
+                publish_output_modes(&mut data.state, &t);
+                data.targets.push(t);
+            }
+            Err(err) => {
+                warn!(
+                    ?err,
+                    connector = removed.connector,
+                    failed_w,
+                    failed_h,
+                    "output scan-out failed and no smaller mode worked; output is dark"
+                );
+            }
+        }
     }
 
     // Fire frame callbacks once per tick (not per target) so clients
@@ -2612,6 +2993,12 @@ fn forward_libinput_event(
         InputEvent::PointerButton { event } => {
             let serial = SERIAL_COUNTER.next_serial();
             let bstate = event.state();
+
+            // Double chord-press (LEFT+RIGHT together, twice) → open a
+            // terminal. Tracked before the per-button branches below (some
+            // of which `return` early) so it sees every LEFT/RIGHT edge.
+            data.state
+                .chord_button_event(event.button_code(), bstate == ButtonState::Pressed);
 
             // Compositor dock owns left-clicks that land on a tile.
             // Press registers (and may start a pinned-tile drag);

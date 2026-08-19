@@ -301,6 +301,7 @@ pub use crate::plugins::overview::{DismissAnim, DismissKind, Overview, OverviewC
 pub use crate::plugins::dock::{
     DockDrag, DockEntry, DockMenu, DockMenuAction, DockMenuItem, DockTooltip,
 };
+pub use crate::plugins::onboarding::{OnboardingDialog, TERM_W_FRAC};
 pub use crate::plugins::screenshot::{RegionShot, ScreenshotReq, ShotDialog, Toast};
 pub use crate::plugins::desktop_settings::{
     DsAction, DsMode, DsResult, DsRow, DesktopSettingsPanel, FbEntry, FileBrowserPanel,
@@ -687,6 +688,19 @@ pub struct BacakState {
     pub title_drag: Option<TitleDrag>,
     /// Last title-bar press `(window, when, x, y)` for double-click → maximise.
     pub last_title_click: Option<(WindowId, Instant, f32, f32)>,
+    /// LEFT/RIGHT mouse buttons currently held, as a bitmask — tracked only
+    /// to detect the "press both at once, twice" → open-terminal gesture.
+    /// See [`State::chord_button_event`].
+    pub pressed_chord_buttons: u32,
+    /// When both LEFT+RIGHT were last pressed together. A second such chord
+    /// press within 400ms launches a terminal; see [`State::chord_button_event`].
+    pub last_chord_press: Option<Instant>,
+    /// Consecutive [`crate::input::Gesture::SecondaryTap`] (2-finger tap)
+    /// count so far — 4 in a row within 400ms of each other opens a
+    /// terminal. See [`State::secondary_tap_event`].
+    pub secondary_tap_count: u8,
+    /// When the last 2-finger tap landed, for the same-window check above.
+    pub last_secondary_tap: Option<Instant>,
     /// Title-bar text cache, keyed by `WindowId` + title string (separate from
     /// the switcher's `label_cache` because the decoration rasterises at its
     /// own size / width, so sharing one cache would thrash both).
@@ -1004,6 +1018,13 @@ pub struct BacakState {
     pub ds_rx: Option<std::sync::mpsc::Receiver<DsResult>>,
     /// File browser overlay (opened from Desktop Settings "Resim Yolu" row).
     pub file_browser: Option<FileBrowserPanel>,
+    /// First-boot touch-gesture onboarding dialog. `None` once dismissed
+    /// (or if `config.onboarding_shown` was already true at session start).
+    pub onboarding_dialog: Option<OnboardingDialog>,
+    /// Set once the compositor has checked (and possibly opened) the
+    /// onboarding dialog for this session, so the udev main loop only tries
+    /// it until a primary output exists — not forever. Not persisted.
+    pub onboarding_checked: bool,
     /// Screenshot options dialog (scope + delay), opened from the Control
     /// Center's screenshot button.
     pub shot_dialog: Option<ShotDialog>,
@@ -1058,6 +1079,34 @@ pub struct BacakState {
     /// Decoded wallpaper image pixels (ABGR8, output-size), cached per
     /// logical resolution.  Rebuilt when the path or output size changes.
     pub wallpaper_cache: std::collections::HashMap<(u32, u32), smithay::backend::renderer::element::memory::MemoryRenderBuffer>,
+    /// In-flight background wallpaper decode: `Ok(path, buf, w, h)` on
+    /// success, `Err(path)` on decode/IO failure. One decode at a time;
+    /// [`Self::wallpaper_tick`] spawns the next missing output size.
+    pub wallpaper_rx: Option<std::sync::mpsc::Receiver<Result<(String, smithay::backend::renderer::element::memory::MemoryRenderBuffer, u32, u32), String>>>,
+    /// The `wallpaper_image` path the cache pixels were decoded from;
+    /// a config change to a different path flushes the cache.
+    pub wallpaper_cache_path: Option<String>,
+    /// Path that failed to decode — suppresses a retry-per-frame loop.
+    /// Cleared when the configured path changes.
+    pub wallpaper_failed: Option<String>,
+
+    /// Per-output DRM mode inventory published by the udev backend at
+    /// every bring-up: connector name, the selectable modes, and the mode
+    /// currently driving the output. Empty on the winit backend — the
+    /// Desktop Settings resolution row hides itself when absent.
+    pub output_modes: HashMap<OutputId, OutputModes>,
+    /// Set by the Desktop Settings resolution page after writing
+    /// `outputs.<connector>.mode` to `compositor.json`; the udev loop
+    /// consumes it and re-modesets the affected connectors.
+    pub output_mode_dirty: bool,
+
+    /// Font list backing the Desktop Settings font page's `SetFont(i)`
+    /// rows: `(display name, absolute path)`, rebuilt each time the page
+    /// opens. `SetFont(i)` indexes into this to recover the path.
+    pub ds_font_list: Vec<(String, String)>,
+    /// Icon-theme names backing the Desktop Settings icon-theme page's
+    /// `SetIconTheme(i)` rows, rebuilt each time the page opens.
+    pub ds_icon_theme_list: Vec<String>,
 
     /// Saved pre-maximise/fullscreen geometry per window, so the
     /// unmaximise / unfullscreen path can restore the floating size
@@ -1331,7 +1380,10 @@ impl BacakState {
 
         let now = Instant::now();
         let config = crate::config::CompositorConfig::load();
-        let text = TextRenderer::load();
+        if !config.icon_theme.is_empty() {
+            crate::icons::set_icon_theme_override(Some(config.icon_theme.clone()));
+        }
+        let text = TextRenderer::load_with_override(&config.font);
         let osk_font = TextRenderer::load_symbol();
         let emoji_font = crate::emoji::EmojiFont::load();
         // Build the close "×" once; falls back to the bare chip if the font
@@ -1397,6 +1449,10 @@ impl BacakState {
             decorated: std::collections::HashSet::new(),
             title_drag: None,
             last_title_click: None,
+            pressed_chord_buttons: 0,
+            last_chord_press: None,
+            secondary_tap_count: 0,
+            last_secondary_tap: None,
             deco_label_cache: Mutex::new(HashMap::new()),
             xwm: None,
             x11_windows: HashMap::new(),
@@ -1474,6 +1530,8 @@ impl BacakState {
             desktop_settings: None,
             ds_rx: None,
             file_browser: None,
+            onboarding_dialog: None,
+            onboarding_checked: false,
             shot_dialog: None,
             pending_shot: None,
             overview: None,
@@ -1488,6 +1546,13 @@ impl BacakState {
             dark_mode: true,
             maximize_restore: HashMap::new(),
             wallpaper_cache: HashMap::new(),
+            wallpaper_rx: None,
+            wallpaper_cache_path: None,
+            wallpaper_failed: None,
+            output_modes: HashMap::new(),
+            output_mode_dirty: false,
+            ds_font_list: Vec::new(),
+            ds_icon_theme_list: Vec::new(),
         };
         // Reserve the dock's bottom strut before anything else can
         // touch struts, so the OSK save/restore composes on top of it.
@@ -7048,6 +7113,84 @@ impl BacakState {
         self.focus_history.most_recent_matching(|id| wm.get(id).is_ok())
     }
 
+    /// Build and show the first-boot touch-gesture onboarding dialog,
+    /// centred on `out`. Does not touch `config.onboarding_shown` — that's
+    /// only set (and persisted) when the dialog is dismissed, so an
+    /// interrupted session (crash, power loss) shows it again next boot.
+    pub(crate) fn open_onboarding_dialog(&mut self, out: OutputId) {
+        let bounds = self
+            .wm
+            .output(out)
+            .map(|o| o.bounds)
+            .unwrap_or(Rect::new(0.0, 0.0, 1920.0, 1080.0));
+
+        const PAD: f32 = 22.0;
+        const GAP: f32 = 14.0;
+        const STAGE_W: f32 = 560.0;
+        const STAGE_H: f32 = 300.0;
+        const CAPTION_H: f32 = 20.0;
+        const BTN_W: f32 = 160.0;
+        const BTN_H: f32 = 42.0;
+
+        let panel_w = STAGE_W + 2.0 * PAD;
+        let panel_h = PAD + STAGE_H + GAP + CAPTION_H + GAP + BTN_H + PAD;
+        let bx = bounds.x + (bounds.w - panel_w) / 2.0;
+        let by = bounds.y + (bounds.h - panel_h) / 2.0;
+        let panel = Rect::new(bx, by, panel_w, panel_h);
+        let stage = Rect::new(bx + PAD, by + PAD, STAGE_W, STAGE_H);
+        let dismiss = Rect::new(
+            bx + (panel_w - BTN_W) / 2.0,
+            stage.y + STAGE_H + GAP + CAPTION_H + GAP,
+            BTN_W,
+            BTN_H,
+        );
+
+        let text = self.text.as_ref();
+        const LABEL: [u8; 3] = [232, 236, 244];
+        const SUB: [u8; 3] = [198, 204, 218];
+        let cap = |s: &str| cc_rasterize(text, s, 14.0, SUB, STAGE_W as usize);
+        let captions = [
+            cap("Tek parmak sürükle → pencereyi taşı"),
+            cap("İki parmak çift dokun → tam ekran"),
+            cap("Üç parmak kaydır → çalışma alanı değiştir"),
+            cap("İki parmakla 4 hızlı dokunuş → terminal aç"),
+        ];
+
+        self.onboarding_dialog = Some(OnboardingDialog {
+            output: out,
+            start: Instant::now(),
+            panel,
+            stage,
+            dismiss,
+            l_dismiss: cc_rasterize(text, "Anladım", 15.0, LABEL, (BTN_W - 12.0) as usize),
+            captions,
+            l_terminal: cc_rasterize(
+                text,
+                "os5@bacakos:~$ _",
+                12.0,
+                [220, 226, 236],
+                (TERM_W_FRAC * STAGE_W) as usize,
+            ),
+        });
+    }
+
+    /// Handle a press while the onboarding dialog is open. Only the
+    /// "Anladım" button or a click outside the panel dismisses it (and
+    /// persists `onboarding_shown`) — a tap on the demo stage itself is
+    /// just consumed, so poking at the animation doesn't skip the tour.
+    /// Always consumes while open; returns `false` only when no dialog is
+    /// open.
+    pub fn onboarding_dialog_press(&mut self, px: f32, py: f32) -> bool {
+        let Some(d) = self.onboarding_dialog.as_ref() else { return false };
+        let hit = |r: Rect| px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h;
+        if !hit(d.panel) || hit(d.dismiss) {
+            self.onboarding_dialog = None;
+            self.config.onboarding_shown = true;
+            let _ = self.config.save();
+        }
+        true
+    }
+
     /// Build the screenshot options dialog (scope + delay), centred on `out`.
     fn open_shot_dialog(&mut self, out: OutputId) {
         self.apps_menu = None;
@@ -7761,6 +7904,81 @@ impl BacakState {
         true
     }
 
+    /// LEFT/RIGHT bits in [`Self::pressed_chord_buttons`] — `BTN_LEFT`/
+    /// `BTN_RIGHT` from `linux/input-event-codes.h`, remapped to a compact
+    /// mask since the raw codes (0x110/0x111) aren't adjacent bits.
+    const CHORD_BIT_LEFT: u32 = 0b01;
+    const CHORD_BIT_RIGHT: u32 = 0b10;
+    const CHORD_BOTH: u32 = Self::CHORD_BIT_LEFT | Self::CHORD_BIT_RIGHT;
+
+    /// Feed a raw LEFT/RIGHT mouse-button edge into the "press both buttons
+    /// at once, twice in a row" gesture detector — pressing the chord twice
+    /// within 400ms opens a terminal. Both backends call this for every
+    /// `PointerButton` event (before their per-button branches, some of
+    /// which `return` early) so the chord is tracked regardless of which
+    /// branch ultimately consumes the event; other button codes are no-ops.
+    pub fn chord_button_event(&mut self, button: u32, pressed: bool) {
+        let bit = match button {
+            crate::runtime::BTN_LEFT => Self::CHORD_BIT_LEFT,
+            crate::runtime::BTN_RIGHT => Self::CHORD_BIT_RIGHT,
+            _ => return,
+        };
+        if pressed {
+            self.pressed_chord_buttons |= bit;
+        } else {
+            self.pressed_chord_buttons &= !bit;
+            return; // gesture only fires on the press that completes the chord
+        }
+        if self.pressed_chord_buttons != Self::CHORD_BOTH {
+            return;
+        }
+        let now = Instant::now();
+        let dbl = self
+            .last_chord_press
+            .is_some_and(|t| now.duration_since(t).as_millis() < 400);
+        if dbl {
+            self.last_chord_press = None;
+            self.launch_terminal();
+        } else {
+            self.last_chord_press = Some(now);
+        }
+    }
+
+    /// Feed one recognised [`crate::input::Gesture::SecondaryTap`] (a
+    /// 2-finger tap) into the "tap four times in a row" gesture: each tap
+    /// within 400ms of the previous one extends the streak; the 4th opens a
+    /// terminal (mirrors [`Self::chord_button_event`]'s mouse-chord gesture,
+    /// same window, same target action). A gap of 400ms+ resets the streak
+    /// to 1 (the tap that just landed still counts as the start of a new
+    /// streak, not a dropped event).
+    pub fn secondary_tap_event(&mut self) {
+        let now = Instant::now();
+        let continues = self
+            .last_secondary_tap
+            .is_some_and(|t| now.duration_since(t).as_millis() < 400);
+        self.secondary_tap_count = if continues { self.secondary_tap_count + 1 } else { 1 };
+        self.last_secondary_tap = Some(now);
+        if self.secondary_tap_count >= 4 {
+            self.secondary_tap_count = 0;
+            self.last_secondary_tap = None;
+            self.launch_terminal();
+        }
+    }
+
+    /// Spawn the system's default terminal emulator (first of
+    /// `foot`/`alacritty`/`kitty`/`wezterm`/`konsole`/`gnome-terminal`/
+    /// `x-terminal-emulator`/`xterm` found on `$PATH`), detached. Triggered
+    /// by the double chord-press gesture; a no-op (logged) if none is
+    /// installed.
+    pub fn launch_terminal(&self) {
+        match crate::icons::terminal_emulator() {
+            Some(term) => {
+                crate::launcher::spawn_detached(&[term]);
+            }
+            None => tracing::warn!("chord gesture: no terminal emulator found on $PATH"),
+        }
+    }
+
     /// Track an in-flight title-bar drag — the window follows the pointer at
     /// the captured grab offset. Cheap no-op when no drag is active.
     pub fn title_pointer_motion(&mut self, px: f32, py: f32) {
@@ -8237,6 +8455,8 @@ impl BacakState {
         let bt_open = self.bt_panel.is_some();
         // Desktop settings background auth/action worker.
         let ds_pending = self.ds_rx.is_some();
+        // Wallpaper image decode pending / cache out of date.
+        let wp_pending = self.wallpaper_pending();
         if self.animations.is_empty()
             && self.workspace_slides.is_empty()
             && self.switcher_fade.is_none()
@@ -8250,6 +8470,8 @@ impl BacakState {
             && !cc_pending
             && !bt_open
             && !ds_pending
+            && !wp_pending
+            && self.onboarding_dialog.is_none()
         {
             return false;
         }
@@ -8265,6 +8487,12 @@ impl BacakState {
         // --- Desktop Settings background worker -------------------------
         if ds_pending {
             still_running |= self.ds_tick();
+        }
+
+        // --- Wallpaper image decode --------------------------------------
+        if wp_pending {
+            still_running |= self.wallpaper_tick();
+            still_running |= self.wallpaper_pending();
         }
 
         // --- Control Center background state ----------------------------
@@ -8573,6 +8801,13 @@ impl BacakState {
                 // Fully faded out — drop it.
                 self.switcher_fade = None;
             }
+        }
+
+        // Keep redrawing every frame while the onboarding gesture demo
+        // plays — it's a continuous animation, not a spring settling to
+        // rest, so there's no "moving" flag to check like the others above.
+        if self.onboarding_dialog.is_some() {
+            still_running = true;
         }
 
         still_running
@@ -9106,6 +9341,25 @@ mod overview_uniform_tests {
 // Desktop Settings panel
 // ---------------------------------------------------------------------------
 
+/// DRM mode inventory for one output, published by the udev backend at
+/// bring-up (see `udev_runtime::publish_output_modes`). Modes are
+/// `(width, height, refresh_hz)`, deduplicated by resolution (highest
+/// refresh kept) and sorted highest-first.
+#[derive(Debug, Clone)]
+pub struct OutputModes {
+    /// DRM connector name (`"HDMI-1"`, `"Virtual-1"`, …) — the key used
+    /// under `outputs` in `compositor.json`.
+    pub connector: String,
+    pub modes: Vec<(u16, u16, u32)>,
+    /// The mode currently driving the output.
+    pub current: (u16, u16, u32),
+}
+
+/// Human-readable mode string for the settings UI.
+fn ds_mode_label((w, h, hz): (u16, u16, u32)) -> String {
+    format!("{w} × {h}  @ {hz} Hz")
+}
+
 fn ds_rasterize(
     font: &Option<crate::text::TextRenderer>,
     s: &str,
@@ -9185,6 +9439,56 @@ impl BacakState {
             swatch: None,
             is_toggle: true,
             toggled: self.dark_mode,
+        });
+        y += ROW_H + GAP;
+
+        // Resolution row — only when the backend published a mode list
+        // for this output (udev yes, winit no).
+        if let Some(om) = self.output_modes.get(&out) {
+            let cur = ds_mode_label(om.current);
+            rows.push(DsRow {
+                rect: Rect::new(0.0, y, inner, ROW_H),
+                action: DsAction::OpenResolutionList,
+                label: ds_rasterize(text, "Çözünürlük", 15.0, LABEL, iw / 2),
+                value_label: ds_rasterize(text, &cur, 12.0, SUB, iw / 2),
+                swatch: None,
+                is_toggle: false,
+                toggled: false,
+            });
+            y += ROW_H + GAP;
+        }
+
+        // Font row
+        let font_val = if self.config.font.is_empty() {
+            "Sistem".to_string()
+        } else {
+            std::path::Path::new(&self.config.font)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("Sistem")
+                .to_string()
+        };
+        rows.push(DsRow {
+            rect: Rect::new(0.0, y, inner, ROW_H),
+            action: DsAction::OpenFontList,
+            label: ds_rasterize(text, "Yazı Tipi", 15.0, LABEL, iw / 2),
+            value_label: ds_rasterize(text, &font_val, 12.0, SUB, iw / 2),
+            swatch: None,
+            is_toggle: false,
+            toggled: false,
+        });
+        y += ROW_H + GAP;
+
+        // Icon theme row
+        let theme_val = if self.config.icon_theme.is_empty() { "Otomatik" } else { &self.config.icon_theme };
+        rows.push(DsRow {
+            rect: Rect::new(0.0, y, inner, ROW_H),
+            action: DsAction::OpenIconThemeList,
+            label: ds_rasterize(text, "İkon Seti", 15.0, LABEL, iw / 2),
+            value_label: ds_rasterize(text, theme_val, 12.0, SUB, iw / 2),
+            swatch: None,
+            is_toggle: false,
+            toggled: false,
         });
         y += ROW_H + GAP;
 
@@ -9286,7 +9590,27 @@ impl BacakState {
         });
         y += ROW_H + GAP;
 
-        let content_h = y;
+        self.ds_assemble_panel(out, bounds, rows, y, "Masaüstü Ayarları");
+    }
+
+    /// Lay out a Desktop Settings page: centre a `W`-wide panel on
+    /// `bounds`, offset the pre-built rows by the content origin, and
+    /// compute the shared auth/entry overlay geometry. Both the main
+    /// page and the resolution page assemble through here.
+    fn ds_assemble_panel(
+        &mut self,
+        out: OutputId,
+        bounds: Rect,
+        mut rows: Vec<DsRow>,
+        content_h: f32,
+        title_str: &str,
+    ) {
+        const W: f32 = 400.0;
+        const PAD: f32 = 20.0;
+        const TITLE_H: f32 = 38.0;
+        let iw = (W - 2.0 * PAD) as usize;
+        let text = &self.text;
+
         let panel_h = TITLE_H + PAD + content_h + PAD;
         let panel_h = panel_h.min(bounds.h * 0.85);
         let panel_w = W;
@@ -9317,10 +9641,10 @@ impl BacakState {
         let entry_ok_rect = auth_ok_rect;
         let entry_cancel_rect = auth_cancel_rect;
 
-        let title = ds_rasterize(text, "Masaüstü Ayarları", 16.0, LABEL, iw);
-        let auth_title_label = ds_rasterize(text, "Root Parolası Gerekli", 15.0, LABEL, A_W as usize);
-        let auth_ok_label = ds_rasterize(text, "Onayla", 14.0, LABEL, btn_w as usize);
-        let auth_cancel_label = ds_rasterize(text, "İptal", 14.0, LABEL, btn_w as usize);
+        let title = ds_rasterize(text, title_str, 16.0, [232, 236, 244], iw);
+        let auth_title_label = ds_rasterize(text, "Root Parolası Gerekli", 15.0, [232, 236, 244], A_W as usize);
+        let auth_ok_label = ds_rasterize(text, "Onayla", 14.0, [232, 236, 244], btn_w as usize);
+        let auth_cancel_label = ds_rasterize(text, "İptal", 14.0, [232, 236, 244], btn_w as usize);
         let entry_ok_label = auth_ok_label.clone();
         let entry_cancel_label = auth_cancel_label.clone();
 
@@ -9350,6 +9674,210 @@ impl BacakState {
             entry_ok_label,
             entry_cancel_label,
         });
+    }
+
+    /// Build the resolution-picker page: one row per selectable mode for
+    /// the panel's output, plus an "auto" row (clears the override) and a
+    /// back row. Selecting a mode persists `outputs.<connector>.mode` to
+    /// `compositor.json`; the udev loop applies it live.
+    fn ds_open_resolution_page(&mut self, out: OutputId) {
+        let Some(om) = self.output_modes.get(&out).cloned() else { return };
+        let bounds = self
+            .wm
+            .output(out)
+            .map(|o| o.bounds)
+            .unwrap_or(Rect::new(0.0, 0.0, 1920.0, 1080.0));
+
+        const W: f32 = 400.0;
+        const PAD: f32 = 20.0;
+        const GAP: f32 = 6.0;
+        const ROW_H: f32 = 40.0;
+        const HDR_H: f32 = 32.0;
+        let inner = W - 2.0 * PAD;
+        let iw = inner as usize;
+
+        const LABEL: [u8; 3] = [232, 236, 244];
+        const SUB:   [u8; 3] = [170, 178, 196];
+        let text = &self.text;
+        let has_override = self
+            .config
+            .outputs
+            .get(&om.connector)
+            .map(|c| c.mode.is_some())
+            .unwrap_or(false);
+
+        let mut rows: Vec<DsRow> = Vec::new();
+        let mut y = 0.0_f32;
+
+        rows.push(DsRow {
+            rect: Rect::new(0.0, y, inner, HDR_H),
+            action: DsAction::BackToMain,
+            label: ds_rasterize(text, "‹ Geri", 14.0, SUB, iw),
+            value_label: None,
+            swatch: None,
+            is_toggle: false,
+            toggled: false,
+        });
+        y += HDR_H + GAP;
+
+        // Auto row: no explicit override → highest supported mode.
+        rows.push(DsRow {
+            rect: Rect::new(0.0, y, inner, ROW_H),
+            action: DsAction::ResolutionAuto,
+            label: ds_rasterize(text, "Otomatik (en yüksek)", 14.0, LABEL, iw - 60),
+            value_label: if has_override { None } else { ds_rasterize(text, "✓", 14.0, [80, 200, 120], 40) },
+            swatch: None,
+            is_toggle: false,
+            toggled: !has_override,
+        });
+        y += ROW_H + GAP;
+
+        for (i, &m) in om.modes.iter().enumerate() {
+            let is_current = m == om.current;
+            rows.push(DsRow {
+                rect: Rect::new(0.0, y, inner, ROW_H),
+                action: DsAction::SetResolution(i),
+                label: ds_rasterize(text, &ds_mode_label(m), 14.0, LABEL, iw - 60),
+                value_label: if is_current { ds_rasterize(text, "✓", 14.0, [80, 200, 120], 40) } else { None },
+                swatch: None,
+                is_toggle: false,
+                toggled: is_current,
+            });
+            y += ROW_H + GAP;
+        }
+
+        self.ds_assemble_panel(out, bounds, rows, y, "Çözünürlük");
+    }
+
+    /// Build the font-picker page: an "auto" row plus one row per `.ttf`/
+    /// `.otf`/`.ttc` found under the standard font directories. Selecting a
+    /// font persists its absolute path to `compositor.json` `font` and
+    /// reloads [`Self::text`] immediately.
+    fn ds_open_font_list(&mut self, out: OutputId) {
+        let bounds = self.wm.output(out).map(|o| o.bounds).unwrap_or(Rect::new(0.0, 0.0, 1920.0, 1080.0));
+
+        const W: f32 = 400.0;
+        const PAD: f32 = 20.0;
+        const GAP: f32 = 6.0;
+        const ROW_H: f32 = 40.0;
+        const HDR_H: f32 = 32.0;
+        let inner = W - 2.0 * PAD;
+        let iw = inner as usize;
+
+        const LABEL: [u8; 3] = [232, 236, 244];
+        const SUB:   [u8; 3] = [170, 178, 196];
+        let text = &self.text;
+        let current = self.config.font.clone();
+
+        let fonts = TextRenderer::list_available_fonts();
+
+        let mut rows: Vec<DsRow> = Vec::new();
+        let mut y = 0.0_f32;
+
+        rows.push(DsRow {
+            rect: Rect::new(0.0, y, inner, HDR_H),
+            action: DsAction::BackToMain,
+            label: ds_rasterize(text, "‹ Geri", 14.0, SUB, iw),
+            value_label: None,
+            swatch: None,
+            is_toggle: false,
+            toggled: false,
+        });
+        y += HDR_H + GAP;
+
+        rows.push(DsRow {
+            rect: Rect::new(0.0, y, inner, ROW_H),
+            action: DsAction::FontAuto,
+            label: ds_rasterize(text, "Sistem Varsayılanı", 14.0, LABEL, iw - 60),
+            value_label: if current.is_empty() { ds_rasterize(text, "✓", 14.0, [80, 200, 120], 40) } else { None },
+            swatch: None,
+            is_toggle: false,
+            toggled: current.is_empty(),
+        });
+        y += ROW_H + GAP;
+
+        for (i, (name, path)) in fonts.iter().enumerate() {
+            let is_current = &current == path;
+            rows.push(DsRow {
+                rect: Rect::new(0.0, y, inner, ROW_H),
+                action: DsAction::SetFont(i),
+                label: ds_rasterize(text, name, 14.0, LABEL, iw - 60),
+                value_label: if is_current { ds_rasterize(text, "✓", 14.0, [80, 200, 120], 40) } else { None },
+                swatch: None,
+                is_toggle: false,
+                toggled: is_current,
+            });
+            y += ROW_H + GAP;
+        }
+
+        self.ds_font_list = fonts;
+        self.ds_assemble_panel(out, bounds, rows, y, "Yazı Tipi");
+    }
+
+    /// Build the icon-theme-picker page: an "auto" row plus one row per
+    /// installed theme (a directory with an `index.theme` under an XDG icon
+    /// dir). Selecting a theme persists it to `compositor.json` `icon_theme`
+    /// and flushes `icon_cache` so icons re-resolve against it.
+    fn ds_open_icon_theme_list(&mut self, out: OutputId) {
+        let bounds = self.wm.output(out).map(|o| o.bounds).unwrap_or(Rect::new(0.0, 0.0, 1920.0, 1080.0));
+
+        const W: f32 = 400.0;
+        const PAD: f32 = 20.0;
+        const GAP: f32 = 6.0;
+        const ROW_H: f32 = 40.0;
+        const HDR_H: f32 = 32.0;
+        let inner = W - 2.0 * PAD;
+        let iw = inner as usize;
+
+        const LABEL: [u8; 3] = [232, 236, 244];
+        const SUB:   [u8; 3] = [170, 178, 196];
+        let text = &self.text;
+        let current = self.config.icon_theme.clone();
+
+        let mut themes = crate::icons::installed_icon_themes();
+        themes.sort();
+
+        let mut rows: Vec<DsRow> = Vec::new();
+        let mut y = 0.0_f32;
+
+        rows.push(DsRow {
+            rect: Rect::new(0.0, y, inner, HDR_H),
+            action: DsAction::BackToMain,
+            label: ds_rasterize(text, "‹ Geri", 14.0, SUB, iw),
+            value_label: None,
+            swatch: None,
+            is_toggle: false,
+            toggled: false,
+        });
+        y += HDR_H + GAP;
+
+        rows.push(DsRow {
+            rect: Rect::new(0.0, y, inner, ROW_H),
+            action: DsAction::IconThemeAuto,
+            label: ds_rasterize(text, "Otomatik", 14.0, LABEL, iw - 60),
+            value_label: if current.is_empty() { ds_rasterize(text, "✓", 14.0, [80, 200, 120], 40) } else { None },
+            swatch: None,
+            is_toggle: false,
+            toggled: current.is_empty(),
+        });
+        y += ROW_H + GAP;
+
+        for (i, name) in themes.iter().enumerate() {
+            let is_current = &current == name;
+            rows.push(DsRow {
+                rect: Rect::new(0.0, y, inner, ROW_H),
+                action: DsAction::SetIconTheme(i),
+                label: ds_rasterize(text, name, 14.0, LABEL, iw - 60),
+                value_label: if is_current { ds_rasterize(text, "✓", 14.0, [80, 200, 120], 40) } else { None },
+                swatch: None,
+                is_toggle: false,
+                toggled: is_current,
+            });
+            y += ROW_H + GAP;
+        }
+
+        self.ds_icon_theme_list = themes;
+        self.ds_assemble_panel(out, bounds, rows, y, "İkon Seti");
     }
 
     pub fn close_desktop_settings(&mut self) {
@@ -9410,6 +9938,131 @@ impl BacakState {
                 let out = self.desktop_settings.as_ref().map(|d| d.output);
                 if let Some(out) = out {
                     self.open_file_browser(out);
+                }
+            }
+            DsAction::OpenResolutionList => {
+                let out = self.desktop_settings.as_ref().map(|d| d.output);
+                if let Some(out) = out {
+                    self.ds_open_resolution_page(out);
+                }
+            }
+            DsAction::SetResolution(i) => {
+                let out = self.desktop_settings.as_ref().map(|d| d.output);
+                if let Some(out) = out {
+                    if let Some((connector, mode)) = self
+                        .output_modes
+                        .get(&out)
+                        .and_then(|om| om.modes.get(i).map(|&m| (om.connector.clone(), m)))
+                    {
+                        let (w, h, hz) = mode;
+                        let entry = self.config.outputs.entry(connector).or_default();
+                        entry.mode = Some(format!("{w}x{h}@{hz}"));
+                        if let Err(e) = self.config.save() {
+                            tracing::warn!(?e, "resolution: config save failed");
+                        }
+                        self.output_mode_dirty = true;
+                        // Rebuild the main page; the udev loop re-modesets and
+                        // reopens the panel at the new geometry when done.
+                        self.open_desktop_settings(out);
+                        if let Some(ds) = self.desktop_settings.as_mut() {
+                            ds.status = ds_rasterize(&self.text, "Çözünürlük uygulanıyor…", 13.0, [170, 178, 196], 300);
+                            ds.status_ok = true;
+                        }
+                    }
+                }
+            }
+            DsAction::ResolutionAuto => {
+                let out = self.desktop_settings.as_ref().map(|d| d.output);
+                if let Some(out) = out {
+                    if let Some(connector) = self.output_modes.get(&out).map(|om| om.connector.clone()) {
+                        if let Some(oc) = self.config.outputs.get_mut(&connector) {
+                            oc.mode = None;
+                            if oc.scale.is_none() {
+                                self.config.outputs.remove(&connector);
+                            }
+                        }
+                        if let Err(e) = self.config.save() {
+                            tracing::warn!(?e, "resolution: config save failed");
+                        }
+                        self.output_mode_dirty = true;
+                        self.open_desktop_settings(out);
+                        if let Some(ds) = self.desktop_settings.as_mut() {
+                            ds.status = ds_rasterize(&self.text, "Çözünürlük uygulanıyor…", 13.0, [170, 178, 196], 300);
+                            ds.status_ok = true;
+                        }
+                    }
+                }
+            }
+            DsAction::OpenFontList => {
+                let out = self.desktop_settings.as_ref().map(|d| d.output);
+                if let Some(out) = out {
+                    self.ds_open_font_list(out);
+                }
+            }
+            DsAction::SetFont(i) => {
+                let out = self.desktop_settings.as_ref().map(|d| d.output);
+                if let (Some(out), Some(path)) = (out, self.ds_font_list.get(i).map(|(_, p)| p.clone())) {
+                    self.config.font = path;
+                    if let Err(e) = self.config.save() {
+                        tracing::warn!(?e, "font: config save failed");
+                    }
+                    self.text = TextRenderer::load_with_override(&self.config.font);
+                    self.open_desktop_settings(out);
+                    if let Some(ds) = self.desktop_settings.as_mut() {
+                        ds.status = ds_rasterize(&self.text, "Yazı tipi uygulandı", 13.0, [170, 178, 196], 300);
+                        ds.status_ok = true;
+                    }
+                }
+            }
+            DsAction::FontAuto => {
+                let out = self.desktop_settings.as_ref().map(|d| d.output);
+                if let Some(out) = out {
+                    self.config.font = String::new();
+                    if let Err(e) = self.config.save() {
+                        tracing::warn!(?e, "font: config save failed");
+                    }
+                    self.text = TextRenderer::load();
+                    self.open_desktop_settings(out);
+                }
+            }
+            DsAction::OpenIconThemeList => {
+                let out = self.desktop_settings.as_ref().map(|d| d.output);
+                if let Some(out) = out {
+                    self.ds_open_icon_theme_list(out);
+                }
+            }
+            DsAction::SetIconTheme(i) => {
+                let out = self.desktop_settings.as_ref().map(|d| d.output);
+                if let (Some(out), Some(theme)) = (out, self.ds_icon_theme_list.get(i).cloned()) {
+                    self.config.icon_theme = theme.clone();
+                    if let Err(e) = self.config.save() {
+                        tracing::warn!(?e, "icon theme: config save failed");
+                    }
+                    crate::icons::set_icon_theme_override(Some(theme));
+                    self.icon_cache.lock().clear();
+                    self.open_desktop_settings(out);
+                    if let Some(ds) = self.desktop_settings.as_mut() {
+                        ds.status = ds_rasterize(&self.text, "İkon seti uygulandı", 13.0, [170, 178, 196], 300);
+                        ds.status_ok = true;
+                    }
+                }
+            }
+            DsAction::IconThemeAuto => {
+                let out = self.desktop_settings.as_ref().map(|d| d.output);
+                if let Some(out) = out {
+                    self.config.icon_theme = String::new();
+                    if let Err(e) = self.config.save() {
+                        tracing::warn!(?e, "icon theme: config save failed");
+                    }
+                    crate::icons::set_icon_theme_override(None);
+                    self.icon_cache.lock().clear();
+                    self.open_desktop_settings(out);
+                }
+            }
+            DsAction::BackToMain => {
+                let out = self.desktop_settings.as_ref().map(|d| d.output);
+                if let Some(out) = out {
+                    self.open_desktop_settings(out);
                 }
             }
             DsAction::EditHostname => self.ds_require_auth(DsAction::EditHostname),
@@ -9525,21 +10178,13 @@ impl BacakState {
                         }
                     }
                 } else {
-                    // Load image on background thread.
-                    let out_bounds = self.wm.output(self.desktop_settings.as_ref().map(|d| d.output).unwrap_or_default())
-                        .map(|o| (o.bounds.w as u32, o.bounds.h as u32))
-                        .unwrap_or((1920, 1080));
-                    let (tx, rx) = std::sync::mpsc::channel::<DsResult>();
-                    let path2 = path.clone();
-                    let (ow, oh) = out_bounds;
-                    std::thread::spawn(move || {
-                        let result = crate::state::load_wallpaper_buffer(&path2, ow, oh)
-                            .map(|buf| (buf, ow, oh))
-                            .ok_or(());
-                        let _ = tx.send(DsResult::WallpaperLoaded(result));
-                    });
-                    self.ds_rx = Some(rx);
                     self.config.wallpaper_image = Some(path.clone());
+                    // Persist immediately; wallpaper_tick decodes it into
+                    // wallpaper_cache asynchronously.
+                    if let Err(e) = self.config.save() {
+                        tracing::warn!(?e, "wallpaper: config save failed");
+                    }
+                    self.wallpaper_failed = None;
                     if let Some(ds) = self.desktop_settings.as_mut() {
                         ds.mode = DsMode::Main;
                         ds.status = ds_rasterize(&self.text, "Resim yükleniyor…", 13.0, [170, 178, 196], 300);
@@ -9725,32 +10370,109 @@ impl BacakState {
                     ds.status_ok = ok;
                 }
             }
-            DsResult::WallpaperLoaded(result) => {
-                match result {
-                    Ok((buf, w, h)) => {
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Wallpaper image loading
+    //
+    // The single owner of wallpaper_cache population. Runs every
+    // animation tick on both backends: flushes the cache when the
+    // configured path changes, drains a finished background decode, and
+    // spawns a decode for any output size still missing. Because it
+    // keys off `config.wallpaper_image`, it also (re)loads the image at
+    // boot and after a config hot-reload or a resolution change — the
+    // UI selection paths only save the config and let this catch up.
+
+    /// True while wallpaper work is pending (drives redraw scheduling).
+    fn wallpaper_pending(&self) -> bool {
+        if self.wallpaper_rx.is_some() {
+            return true;
+        }
+        if self.wallpaper_cache_path != self.config.wallpaper_image {
+            return true;
+        }
+        let Some(path) = self.config.wallpaper_image.as_deref() else { return false };
+        if self.wallpaper_failed.as_deref() == Some(path) {
+            return false;
+        }
+        self.wm
+            .outputs()
+            .iter()
+            .any(|o| !self.wallpaper_cache.contains_key(&(o.bounds.w as u32, o.bounds.h as u32)))
+    }
+
+    /// Advance wallpaper loading; returns `true` when something changed
+    /// and a redraw is needed.
+    pub fn wallpaper_tick(&mut self) -> bool {
+        let mut redraw = false;
+
+        // Path changed (UI selection, hot-reload, clear) → flush stale pixels.
+        if self.wallpaper_cache_path != self.config.wallpaper_image {
+            self.wallpaper_cache.clear();
+            self.wallpaper_cache_path = self.config.wallpaper_image.clone();
+            self.wallpaper_failed = None;
+            redraw = true;
+        }
+
+        // Drain a finished decode.
+        if let Some(rx) = &self.wallpaper_rx {
+            match rx.try_recv() {
+                Ok(Ok((path, buf, w, h))) => {
+                    self.wallpaper_rx = None;
+                    // Ignore a decode that raced a path change.
+                    if self.wallpaper_cache_path.as_deref() == Some(path.as_str()) {
                         self.wallpaper_cache.insert((w, h), buf);
-                        let _ = self.config.save();
+                        redraw = true;
                         if let Some(ds) = self.desktop_settings.as_mut() {
                             ds.status = ds_rasterize(&self.text, "Resim uygulandı", 13.0, [80, 200, 120], 300);
                             ds.status_ok = true;
                         }
                     }
-                    Err(()) => {
-                        self.config.wallpaper_image = None;
-                        let _ = self.config.save();
+                }
+                Ok(Err(path)) => {
+                    self.wallpaper_rx = None;
+                    if self.wallpaper_cache_path.as_deref() == Some(path.as_str()) {
+                        self.wallpaper_failed = Some(path);
+                        redraw = true;
                         if let Some(ds) = self.desktop_settings.as_mut() {
                             ds.status = ds_rasterize(&self.text, "Hata: resim yüklenemedi", 13.0, [230, 80, 80], 300);
                             ds.status_ok = false;
-                            for row in &mut ds.rows {
-                                if matches!(row.action, DsAction::SetWallpaperImage) {
-                                    row.value_label = ds_rasterize(&self.text, "Seçilmedi", 12.0, [170, 178, 196], 200);
-                                }
-                            }
                         }
                     }
                 }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.wallpaper_rx = None;
+                }
             }
         }
+        if self.wallpaper_rx.is_some() {
+            return redraw;
+        }
+
+        // Spawn a decode for the first output size not yet cached.
+        let Some(path) = self.config.wallpaper_image.clone() else { return redraw };
+        if self.wallpaper_failed.as_deref() == Some(path.as_str()) {
+            return redraw;
+        }
+        let missing = self
+            .wm
+            .outputs()
+            .iter()
+            .map(|o| (o.bounds.w as u32, o.bounds.h as u32))
+            .find(|k| k.0 > 0 && k.1 > 0 && !self.wallpaper_cache.contains_key(k));
+        if let Some((w, h)) = missing {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let result = load_wallpaper_buffer(&path, w, h)
+                    .map(|buf| (path.clone(), buf, w, h))
+                    .ok_or(path);
+                let _ = tx.send(result);
+            });
+            self.wallpaper_rx = Some(rx);
+        }
+        redraw
     }
 
     fn ds_open_entry_osk(&mut self, out: OutputId) {
@@ -10016,22 +10738,25 @@ impl BacakState {
         } else if is_image {
             let path_str = path.to_string_lossy().into_owned();
             self.config.wallpaper_image = Some(path_str.clone());
+            // Persist immediately — deferring the save to the decode
+            // result loses the setting if the panel closes first.
+            if let Err(e) = self.config.save() {
+                tracing::warn!(?e, "wallpaper: config save failed");
+            }
+            self.wallpaper_failed = None;
             self.file_browser = None;
-            // Kick off async load into wallpaper_cache
-            let (tx, rx) = std::sync::mpsc::channel();
-            let out_dims = self.wm.outputs().into_iter().next().map(|o| (o.bounds.w as u32, o.bounds.h as u32));
-            if let Some((ow, oh)) = out_dims {
-                let path2 = path_str;
-                std::thread::spawn(move || {
-                    let result = crate::state::load_wallpaper_buffer(&path2, ow, oh)
-                        .map(|buf| (buf, ow, oh))
-                        .ok_or(());
-                    let _ = tx.send(DsResult::WallpaperLoaded(result));
-                });
-                self.ds_rx = Some(rx);
-                if let Some(ds) = self.desktop_settings.as_mut() {
-                    ds.status = ds_rasterize(&self.text, "Resim yükleniyor...", 13.0, [170, 178, 196], 300);
-                    ds.status_ok = true;
+            // wallpaper_tick decodes it into wallpaper_cache asynchronously.
+            if let Some(ds) = self.desktop_settings.as_mut() {
+                ds.status = ds_rasterize(&self.text, "Resim yükleniyor...", 13.0, [170, 178, 196], 300);
+                ds.status_ok = true;
+                let short = std::path::Path::new(&path_str)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(&path_str);
+                for row in &mut ds.rows {
+                    if matches!(row.action, DsAction::SetWallpaperImage) {
+                        row.value_label = ds_rasterize(&self.text, short, 12.0, [170, 178, 196], 200);
+                    }
                 }
             }
         }

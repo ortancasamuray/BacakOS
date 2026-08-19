@@ -42,6 +42,7 @@ pub mod dock;
 pub mod gestures;
 pub mod keyboard;
 pub mod network;
+pub mod onboarding;
 pub mod overview;
 pub mod screenshot;
 pub mod selection;
@@ -147,6 +148,7 @@ pub trait Plugin: Sync {
 pub static PLUGINS: &[&dyn Plugin] = &[
     &selection::SelectionPlugin,
     &overview::OverviewPlugin,
+    &onboarding::OnboardingPlugin,
     &screenshot::ScreenshotPlugin,
     &apps_menu::AppsMenuPlugin,
     &control_center::ControlCenterPlugin,

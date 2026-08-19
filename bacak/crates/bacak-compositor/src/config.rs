@@ -47,7 +47,7 @@ impl DockEdge {
 /// ```json
 /// "outputs": { "HDMI-1": { "mode": "1920x1080@60", "scale": 1 } }
 /// ```
-/// Absent fields are auto-detected (preferred DRM mode, DPI-based scale).
+/// Absent fields are auto-detected (highest supported DRM mode, DPI-based scale).
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct OutputConfig {
     /// Requested mode: `"WIDTHxHEIGHT"` or `"WIDTHxHEIGHT@REFRESH"`.
@@ -128,6 +128,22 @@ pub struct CompositorConfig {
     /// use auto-detected mode (preferred DRM mode) and scale (DPI-based).
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub outputs: HashMap<String, OutputConfig>,
+    /// Absolute path to a `.ttf`/`.otf`/`.ttc` file to use as the compositor
+    /// UI font (Desktop Settings panels, dock labels, on-screen keyboard).
+    /// Empty (the default) auto-detects from [`crate::text::FONT_CANDIDATES`].
+    #[serde(default)]
+    pub font: String,
+    /// Icon theme name (a directory under an XDG icon dir with an
+    /// `index.theme`, e.g. `"Adwaita"`, `"breeze"`, `"Papirus"`). Empty (the
+    /// default) auto-detects from GTK settings, then the most complete
+    /// installed theme, falling back to `hicolor`.
+    #[serde(default)]
+    pub icon_theme: String,
+    /// Whether the first-boot touch-gesture onboarding dialog has already
+    /// been shown and dismissed. Not exposed via `bacak-cli set` — this is
+    /// an internal one-shot flag, not a user preference to edit by hand.
+    #[serde(default)]
+    pub onboarding_shown: bool,
 }
 
 impl Default for CompositorConfig {
@@ -148,6 +164,9 @@ impl Default for CompositorConfig {
             wallpaper_color: [10, 14, 22],
             wallpaper_image: None,
             outputs: HashMap::new(),
+            font: String::new(),
+            icon_theme: String::new(),
+            onboarding_shown: false,
         }
     }
 }
@@ -241,6 +260,8 @@ impl CompositorConfig {
         "dock_edge",
         "dock_autohide",
         "dock_pinned",
+        "font",
+        "icon_theme",
     ];
 
     /// Split a comma-separated list value into trimmed, non-empty,
@@ -304,6 +325,8 @@ impl CompositorConfig {
                     .map_err(|_| format!("`{value}` is not true/false"))?
             }
             "dock_pinned" => self.dock_pinned = Self::parse_list(value),
+            "font" => self.font = value.trim().to_string(),
+            "icon_theme" => self.icon_theme = value.trim().to_string(),
             other => {
                 return Err(format!(
                     "unknown key `{other}` (valid: {})",
@@ -331,6 +354,8 @@ impl CompositorConfig {
             "dock_edge" => self.dock_edge = d.dock_edge,
             "dock_autohide" => self.dock_autohide = d.dock_autohide,
             "dock_pinned" => self.dock_pinned = d.dock_pinned,
+            "font" => self.font = d.font,
+            "icon_theme" => self.icon_theme = d.icon_theme,
             other => {
                 return Err(format!(
                     "unknown key `{other}` (valid: {})",
@@ -367,6 +392,8 @@ impl CompositorConfig {
         // run the same normaliser `set` uses so the in-memory list is
         // always clean for the launcher path.
         self.dock_pinned = Self::parse_list(&self.dock_pinned.join(","));
+        self.font = self.font.trim().to_string();
+        self.icon_theme = self.icon_theme.trim().to_string();
     }
 
     /// Effective blur setting: the `BACAK_BLUR` env var force-enables
