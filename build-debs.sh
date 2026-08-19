@@ -68,6 +68,9 @@ log "=== bacak workspace derleniyor ==="
     log "bacak-grub-theme deb oluşturuluyor"
     cargo deb --no-build -p bacak-grub-theme -o "$DIST"
 
+    log "bacak-plymouth-theme deb oluşturuluyor"
+    cargo deb --no-build -p bacak-plymouth-theme -o "$DIST"
+
     log "bacak (CLI) deb oluşturuluyor"
     cargo deb --no-build -p bacak-cli -o "$DIST"
 )
