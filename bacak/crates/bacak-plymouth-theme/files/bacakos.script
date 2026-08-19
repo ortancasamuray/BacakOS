@@ -1,11 +1,11 @@
 # bacakos.script — BacakOS Plymouth boot splash (script plugin)
 #
 # Dark gradient background, a centered logo with a slow breathing-opacity
-# animation, and a thin accent-coloured progress bar. Deliberately much
-# smaller than the stock Debian "anadolupanteri" theme this replaces: no
-# multi-device fsck queue, no rotating glow ring — a single boot target
-# (one root filesystem) never needs that machinery, and the extra state
-# only made the script harder to change.
+# animation, a rotating comet-trail glow ring behind it, and a thin
+# accent-coloured progress bar. Deliberately much smaller than the stock
+# Debian "anadolupanteri" theme this replaces: no multi-device fsck queue —
+# a single boot target (one root filesystem) never needs that machinery,
+# and the extra state only made the script harder to change.
 
 # ---- Palette (accent matches bacak-display-manager's default accent) ----
 BG_TOP.r    = 0.043; BG_TOP.g    = 0.055; BG_TOP.b    = 0.071;  # #0b0e12
@@ -21,20 +21,50 @@ screen.height = Window.GetHeight ();
 small_dim = Math.Min (screen.width, screen.height);
 
 # ---- Logo (breathing opacity) --------------------------------------------
+logo_center.x = screen.width / 2;
+logo_center.y = screen.height * 0.44;
+
 logo_size = small_dim * 0.16;
 logo = Image ("logo.png");
 logo = logo.Scale (logo_size, logo_size * logo.GetHeight () / logo.GetWidth ());
 
 logo_sprite = Sprite (logo);
-logo_sprite.SetPosition (screen.width / 2 - logo.GetWidth () / 2,
-                          screen.height * 0.44 - logo.GetHeight () / 2,
+logo_sprite.SetPosition (logo_center.x - logo.GetWidth () / 2,
+                          logo_center.y - logo.GetHeight () / 2,
                           10);
 
+# ---- Rotating glow ring behind the logo -------------------------------
+# Rotated frames are precomputed once (cheap: the source image is small)
+# and cycled by elapsed time, the same on-demand-cache trick the old
+# theme used for its swirl — just with a single ring sprite instead of a
+# whole second logo layer.
+GLOW_ROTATION_STEPS = 60;
+GLOW_PERIOD_SECONDS = 3.0;
+
+glow_size = logo_size * 1.55;
+glow_source = Image ("logo_glow.png");
+glow_source = glow_source.Scale (glow_size, glow_size);
+
+glow_sprite = Sprite (glow_source);
+glow_sprite.SetPosition (logo_center.x - glow_size / 2,
+                          logo_center.y - glow_size / 2,
+                          9);
+
 elapsed = 0;
-fun refresh_logo_breath () {
+fun refresh_animations () {
     elapsed += 0.02;  # refresh runs ~50/s
+
     breath = 0.72 + 0.28 * (0.5 + 0.5 * Math.Sin (elapsed * 1.6));
     logo_sprite.SetOpacity (breath);
+
+    step = Math.Int (elapsed / GLOW_PERIOD_SECONDS * GLOW_ROTATION_STEPS) % GLOW_ROTATION_STEPS;
+    frame = glow_frames[step];
+    if (frame == NULL) {
+        angle = step * 2 * Math.Pi / GLOW_ROTATION_STEPS;
+        frame = glow_source.Rotate (angle);
+        glow_frames[step] = frame;
+    }
+    glow_sprite.SetImage (frame);
 }
 
 # ---- Progress bar -----------------------------------------------------
@@ -58,7 +88,7 @@ fun progress_callback (duration, progress) {
 }
 
 Plymouth.SetBootProgressFunction (progress_callback);
-Plymouth.SetRefreshFunction (refresh_logo_breath);
+Plymouth.SetRefreshFunction (refresh_animations);
 
 # ---- Status line (fsck / systemd messages) --------------------------
 status_sprite = Sprite ();

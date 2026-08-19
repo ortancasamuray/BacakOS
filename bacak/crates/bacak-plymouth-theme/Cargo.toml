@@ -16,15 +16,17 @@ copyright  = "2026, Bacak Desktop Project"
 section    = "x11"
 priority   = "optional"
 extended-description = """\
-Koyu gradyan arka plan, nefes alan logo animasyonu ve ince vurgu renkli
-ilerleme çubuğuyla modern bir Plymouth açılış teması kurar. Kurulum
-sırasında (postinst) temayı varsayılan yapar ve initramfs'i günceller."""
+Koyu gradyan arka plan, nefes alan logo animasyonu, logonun etrafında
+dönen ışıklı bir halka ve ince vurgu renkli ilerleme çubuğuyla modern bir
+Plymouth açılış teması kurar. Kurulum sırasında (postinst) temayı
+varsayılan yapar ve initramfs'i günceller."""
 depends = "plymouth, plymouth-label"
 maintainer-scripts = "debian"
 assets = [
     ["files/bacakos.plymouth",     "usr/share/plymouth/themes/bacakos/bacakos.plymouth",     "644"],
     ["files/bacakos.script",       "usr/share/plymouth/themes/bacakos/bacakos.script",       "644"],
     ["files/logo.png",             "usr/share/plymouth/themes/bacakos/logo.png",             "644"],
+    ["files/logo_glow.png",        "usr/share/plymouth/themes/bacakos/logo_glow.png",        "644"],
     ["files/progress_track.png",   "usr/share/plymouth/themes/bacakos/progress_track.png",   "644"],
     ["files/progress_fill.png",    "usr/share/plymouth/themes/bacakos/progress_fill.png",    "644"],
     ["files/password_field.png",   "usr/share/plymouth/themes/bacakos/password_field.png",   "644"],
