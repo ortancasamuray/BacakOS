@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <!-- Board -->
+  <rect x="6" y="10" width="52" height="36" rx="4" fill="#2b3140"/>
+  <rect x="10" y="14" width="44" height="28" rx="2" fill="#3a4256"/>
+  <!-- Stand -->
+  <path d="M26 46 L20 58 L24 58 L30 48 Z" fill="#2b3140"/>
+  <path d="M38 46 L44 58 L40 58 L34 48 Z" fill="#2b3140"/>
+  <!-- Pen stroke -->
+  <path d="M16 34 C 22 20, 30 20, 34 28 S 46 34, 50 20" fill="none" stroke="#ffffff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Pen tip -->
+  <circle cx="50" cy="20" r="3.5" fill="#3b82f6"/>
+</svg>
