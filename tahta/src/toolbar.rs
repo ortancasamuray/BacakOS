@@ -42,6 +42,8 @@ pub enum ToolbarAction {
     Undo,
     Clear,
     ToggleZone,
+    /// Shows/hides the draggable, rotatable straightedge overlay.
+    ToggleRuler,
     /// Steps through the curated background+grid presets.
     CycleBackground,
     PrevPage,
@@ -60,6 +62,7 @@ pub struct ToolbarState {
     pub grid: GridPattern,
     pub page_index: usize,
     pub page_count: usize,
+    pub ruler_visible: bool,
 }
 
 // Scaled down toward the dock's ~36px icon / ~10px gap proportions
@@ -78,11 +81,12 @@ const COLOR_BUTTON_ACTIVE: [f32; 4] = [0.23, 0.51, 0.96, 1.0]; // accent blue
 const COLOR_GLYPH: [f32; 4] = [0.95, 0.95, 0.97, 1.0];
 const COLOR_SEPARATOR: [f32; 4] = [1.0, 1.0, 1.0, 0.10];
 
-const BUTTONS: [ToolbarAction; 12] = [
+const BUTTONS: [ToolbarAction; 13] = [
     ToolbarAction::SelectTool(Tool::Pen),
     ToolbarAction::SelectTool(Tool::Hand),
     ToolbarAction::SelectTool(Tool::Eraser),
     ToolbarAction::SelectTool(Tool::Compass),
+    ToolbarAction::ToggleRuler,
     ToolbarAction::CycleBrush,
     ToolbarAction::CycleColor,
     ToolbarAction::Undo,
@@ -95,7 +99,7 @@ const BUTTONS: [ToolbarAction; 12] = [
 
 /// Index right before which a thin separator is drawn, to visually group
 /// tool-select (0-3) / brush+color (4-5) / actions (6-9).
-const SEPARATOR_BEFORE: [usize; 3] = [4, 6, 9];
+const SEPARATOR_BEFORE: [usize; 3] = [5, 7, 10];
 
 /// Bottom-center floating toolbar. Screen-space, never affected by canvas
 /// pan/zoom, recomputed each frame from the current window size.
@@ -186,6 +190,7 @@ fn is_active(action: ToolbarAction, state: &ToolbarState) -> bool {
     match action {
         ToolbarAction::SelectTool(t) => t == state.active_tool,
         ToolbarAction::ToggleZone => state.zone_enabled,
+        ToolbarAction::ToggleRuler => state.ruler_visible,
         _ => false,
     }
 }
@@ -276,6 +281,17 @@ fn draw_glyph(
             push_rect(center + Vec2::new(-half_w, -r), Vec2::new(half_w - gap, r * 2.0), COLOR_GLYPH, out_vertices, out_indices);
             let outline_color = [COLOR_GLYPH[0], COLOR_GLYPH[1], COLOR_GLYPH[2], 0.35];
             push_rect(center + Vec2::new(gap, -r), Vec2::new(half_w - gap, r * 2.0), outline_color, out_vertices, out_indices);
+        }
+        ToolbarAction::ToggleRuler => {
+            // A tilted ruler: a rect with a few tick marks.
+            let w = r * 1.7;
+            let h = r * 0.6;
+            push_rect(center - Vec2::new(w / 2.0, h / 2.0), Vec2::new(w, h), COLOR_GLYPH, out_vertices, out_indices);
+            let tick_color = [0.15, 0.15, 0.18, 0.8];
+            for i in 0..4 {
+                let x = center.x - w / 2.0 + w * (i as f32 + 1.0) / 5.0;
+                push_line(Vec2::new(x, center.y - h / 2.0), Vec2::new(x, center.y), 1.5, tick_color, out_vertices, out_indices);
+            }
         }
         ToolbarAction::CycleBackground => {
             push_rect(center - Vec2::splat(r), Vec2::splat(r * 2.0), state.background.color(), out_vertices, out_indices);
