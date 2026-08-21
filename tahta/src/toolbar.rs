@@ -54,6 +54,10 @@ pub enum ToolbarAction {
     ToggleStopwatch,
     /// Shows/hides the draggable dice panel.
     ToggleDice,
+    /// Shows/hides the draggable, resizable spotlight overlay.
+    ToggleSpotlight,
+    /// Shows/hides the draggable, resizable magnifier lens.
+    ToggleMagnifier,
     /// Steps through the curated background+grid presets.
     CycleBackground,
     PrevPage,
@@ -78,6 +82,8 @@ pub struct ToolbarState {
     pub calculator_visible: bool,
     pub stopwatch_visible: bool,
     pub dice_visible: bool,
+    pub spotlight_visible: bool,
+    pub magnifier_visible: bool,
 }
 
 // Scaled down toward the dock's ~36px icon / ~10px gap proportions
@@ -96,7 +102,7 @@ const COLOR_BUTTON_ACTIVE: [f32; 4] = [0.23, 0.51, 0.96, 1.0]; // accent blue
 const COLOR_GLYPH: [f32; 4] = [0.95, 0.95, 0.97, 1.0];
 const COLOR_SEPARATOR: [f32; 4] = [1.0, 1.0, 1.0, 0.10];
 
-const BUTTONS: [ToolbarAction; 18] = [
+const BUTTONS: [ToolbarAction; 20] = [
     ToolbarAction::SelectTool(Tool::Pen),
     ToolbarAction::SelectTool(Tool::Hand),
     ToolbarAction::SelectTool(Tool::Eraser),
@@ -107,6 +113,8 @@ const BUTTONS: [ToolbarAction; 18] = [
     ToolbarAction::ToggleCalculator,
     ToolbarAction::ToggleStopwatch,
     ToolbarAction::ToggleDice,
+    ToolbarAction::ToggleSpotlight,
+    ToolbarAction::ToggleMagnifier,
     ToolbarAction::CycleBrush,
     ToolbarAction::CycleColor,
     ToolbarAction::Undo,
@@ -118,9 +126,9 @@ const BUTTONS: [ToolbarAction; 18] = [
 ];
 
 /// Index right before which a thin separator is drawn, to visually group
-/// tool-select (0-3) / drafting+widget tools (4-9) / brush+color (10-11) /
-/// actions (12-14).
-const SEPARATOR_BEFORE: [usize; 4] = [4, 10, 12, 15];
+/// tool-select (0-3) / drafting+widget tools (4-11) / brush+color (12-13) /
+/// actions (14-16).
+const SEPARATOR_BEFORE: [usize; 4] = [4, 12, 14, 17];
 
 /// Bottom-center floating toolbar. Screen-space, never affected by canvas
 /// pan/zoom, recomputed each frame from the current window size.
@@ -217,6 +225,8 @@ fn is_active(action: ToolbarAction, state: &ToolbarState) -> bool {
         ToolbarAction::ToggleCalculator => state.calculator_visible,
         ToolbarAction::ToggleStopwatch => state.stopwatch_visible,
         ToolbarAction::ToggleDice => state.dice_visible,
+        ToolbarAction::ToggleSpotlight => state.spotlight_visible,
+        ToolbarAction::ToggleMagnifier => state.magnifier_visible,
         _ => false,
     }
 }
@@ -381,6 +391,40 @@ fn draw_glyph(
             for &(fx, fy) in &[(0.25, 0.25), (0.75, 0.25), (0.5, 0.5), (0.25, 0.75), (0.75, 0.75)] {
                 push_circle(center + Vec2::new((fx - 0.5) * s, (fy - 0.5) * s), 1.8, pip_color, 8, out_vertices, out_indices);
             }
+        }
+        ToolbarAction::ToggleSpotlight => {
+            // A bright dot inside a dashed ring — "light in the dark".
+            for i in 0..12 {
+                if i % 2 == 0 {
+                    continue;
+                }
+                let theta = i as f32 / 12.0 * std::f32::consts::TAU;
+                let theta1 = (i + 1) as f32 / 12.0 * std::f32::consts::TAU;
+                let p0 = center + Vec2::new(theta.cos(), theta.sin()) * r;
+                let p1 = center + Vec2::new(theta1.cos(), theta1.sin()) * r;
+                push_line(p0, p1, 2.5, COLOR_GLYPH, out_vertices, out_indices);
+            }
+            push_circle(center, r * 0.35, COLOR_GLYPH, 14, out_vertices, out_indices);
+        }
+        ToolbarAction::ToggleMagnifier => {
+            // Classic magnifying glass: ring + a handle at ~4-5 o'clock.
+            let lens_center = center + Vec2::new(-r * 0.15, -r * 0.15);
+            for i in 0..20 {
+                let theta = i as f32 / 20.0 * std::f32::consts::TAU;
+                let theta1 = (i + 1) as f32 / 20.0 * std::f32::consts::TAU;
+                let p0 = lens_center + Vec2::new(theta.cos(), theta.sin()) * (r * 0.6);
+                let p1 = lens_center + Vec2::new(theta1.cos(), theta1.sin()) * (r * 0.6);
+                push_line(p0, p1, 2.5, COLOR_GLYPH, out_vertices, out_indices);
+            }
+            let handle_dir = Vec2::new(1.0, 1.0).normalize();
+            push_line(
+                lens_center + handle_dir * (r * 0.6),
+                lens_center + handle_dir * (r * 1.25),
+                3.0,
+                COLOR_GLYPH,
+                out_vertices,
+                out_indices,
+            );
         }
         ToolbarAction::CycleBackground => {
             push_rect(center - Vec2::splat(r), Vec2::splat(r * 2.0), state.background.color(), out_vertices, out_indices);
