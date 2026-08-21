@@ -6,6 +6,7 @@
 
 use glam::Vec2;
 
+use crate::board::{BoardBackground, GridPattern};
 use crate::brush::BrushType;
 use crate::stroke::{push_circle, push_line, push_rect, Vertex};
 
@@ -38,16 +39,24 @@ pub enum ToolbarAction {
     Undo,
     Clear,
     ToggleZone,
+    /// Steps through the curated background+grid presets.
+    CycleBackground,
+    PrevPage,
+    NextPage,
 }
 
 /// What the toolbar needs to know to draw each button's current-state
-/// glyph (which tool/brush/color is active, whether dual-zone is on).
+/// glyph (which tool/brush/color/page is active, whether dual-zone is on).
 pub struct ToolbarState {
     pub active_tool: Tool,
     pub brush_type: BrushType,
     pub color: [f32; 4],
     pub zone_enabled: bool,
     pub eraser_mode: EraserMode,
+    pub background: BoardBackground,
+    pub grid: GridPattern,
+    pub page_index: usize,
+    pub page_count: usize,
 }
 
 const BUTTON_SIZE: f32 = 72.0;
@@ -61,7 +70,7 @@ const COLOR_BUTTON_ACTIVE: [f32; 4] = [0.23, 0.51, 0.96, 1.0]; // accent blue
 const COLOR_GLYPH: [f32; 4] = [0.95, 0.95, 0.97, 1.0];
 const COLOR_SEPARATOR: [f32; 4] = [1.0, 1.0, 1.0, 0.10];
 
-const BUTTONS: [ToolbarAction; 8] = [
+const BUTTONS: [ToolbarAction; 11] = [
     ToolbarAction::SelectTool(Tool::Pen),
     ToolbarAction::SelectTool(Tool::Hand),
     ToolbarAction::SelectTool(Tool::Eraser),
@@ -70,11 +79,14 @@ const BUTTONS: [ToolbarAction; 8] = [
     ToolbarAction::Undo,
     ToolbarAction::Clear,
     ToolbarAction::ToggleZone,
+    ToolbarAction::CycleBackground,
+    ToolbarAction::PrevPage,
+    ToolbarAction::NextPage,
 ];
 
 /// Index right before which a thin separator is drawn, to visually group
 /// tool-select (0-2) / mode (3-4) / destructive-ish actions (5-7).
-const SEPARATOR_BEFORE: [usize; 2] = [3, 5];
+const SEPARATOR_BEFORE: [usize; 3] = [3, 5, 8];
 
 /// Bottom-center floating toolbar. Screen-space, never affected by canvas
 /// pan/zoom, recomputed each frame from the current window size.
@@ -137,6 +149,26 @@ impl Toolbar {
             let color = if active { COLOR_BUTTON_ACTIVE } else { COLOR_BUTTON_IDLE };
             push_rect(rect.0, rect.1, color, out_vertices, out_indices);
             draw_glyph(action, *rect, state, out_vertices, out_indices);
+        }
+
+        self.render_page_dots(state, out_vertices, out_indices);
+    }
+
+    /// A small row of dots above the page-nav buttons — the only "which
+    /// page am I on" indicator, since this app has no text renderer yet.
+    fn render_page_dots(&self, state: &ToolbarState, out_vertices: &mut Vec<Vertex>, out_indices: &mut Vec<u32>) {
+        if state.page_count <= 1 {
+            return;
+        }
+        let dot_r = 4.0;
+        let gap = 14.0;
+        let count = state.page_count.min(20) as f32;
+        let total_w = (count - 1.0) * gap;
+        let start_x = self.bar_rect.0.x + self.bar_rect.1.x / 2.0 - total_w / 2.0;
+        let y = self.bar_rect.0.y - 14.0;
+        for i in 0..state.page_count.min(20) {
+            let color = if i == state.page_index { COLOR_BUTTON_ACTIVE } else { COLOR_BUTTON_IDLE };
+            push_circle(Vec2::new(start_x + i as f32 * gap, y), dot_r, color, 10, out_vertices, out_indices);
         }
     }
 }
@@ -224,6 +256,35 @@ fn draw_glyph(
             push_rect(center + Vec2::new(-half_w, -r), Vec2::new(half_w - gap, r * 2.0), COLOR_GLYPH, out_vertices, out_indices);
             let outline_color = [COLOR_GLYPH[0], COLOR_GLYPH[1], COLOR_GLYPH[2], 0.35];
             push_rect(center + Vec2::new(gap, -r), Vec2::new(half_w - gap, r * 2.0), outline_color, out_vertices, out_indices);
+        }
+        ToolbarAction::CycleBackground => {
+            push_rect(center - Vec2::splat(r), Vec2::splat(r * 2.0), state.background.color(), out_vertices, out_indices);
+            let border = [COLOR_GLYPH[0], COLOR_GLYPH[1], COLOR_GLYPH[2], 0.4];
+            let t = 2.0;
+            push_rect(center + Vec2::new(-r, -r), Vec2::new(r * 2.0, t), border, out_vertices, out_indices);
+            push_rect(center + Vec2::new(-r, r - t), Vec2::new(r * 2.0, t), border, out_vertices, out_indices);
+
+            let grid_line = [border[0], border[1], border[2], 0.6];
+            match state.grid {
+                GridPattern::Plain => {}
+                GridPattern::Lined => {
+                    push_line(center + Vec2::new(-r * 0.7, 0.0), center + Vec2::new(r * 0.7, 0.0), 1.5, grid_line, out_vertices, out_indices);
+                }
+                GridPattern::Checkered => {
+                    push_line(center + Vec2::new(-r * 0.7, 0.0), center + Vec2::new(r * 0.7, 0.0), 1.5, grid_line, out_vertices, out_indices);
+                    push_line(center + Vec2::new(0.0, -r * 0.7), center + Vec2::new(0.0, r * 0.7), 1.5, grid_line, out_vertices, out_indices);
+                }
+            }
+        }
+        ToolbarAction::PrevPage => {
+            push_line(center + Vec2::new(r * 0.4, -r), center + Vec2::new(-r * 0.4, 0.0), 5.0, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(center + Vec2::new(-r * 0.4, 0.0), center + Vec2::new(r * 0.4, r), 5.0, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(center + Vec2::new(r * 0.55, -r), center + Vec2::new(r * 0.55, r), 3.0, COLOR_GLYPH, out_vertices, out_indices);
+        }
+        ToolbarAction::NextPage => {
+            push_line(center + Vec2::new(-r * 0.4, -r), center + Vec2::new(r * 0.4, 0.0), 5.0, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(center + Vec2::new(r * 0.4, 0.0), center + Vec2::new(-r * 0.4, r), 5.0, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(center + Vec2::new(-r * 0.55, -r), center + Vec2::new(-r * 0.55, r), 3.0, COLOR_GLYPH, out_vertices, out_indices);
         }
     }
 }
