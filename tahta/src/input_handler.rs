@@ -86,6 +86,15 @@ enum PointerRole {
     /// Touch landed on a calculator key; already applied on touch-down,
     /// nothing more happens until lift (no drag-to-repeat).
     CalculatorPress,
+    /// Dragging the stopwatch panel by its header.
+    StopwatchMove { grab_offset: Vec2 },
+    /// Touch landed on a stopwatch button; already applied on touch-down.
+    StopwatchPress,
+    /// Dragging the dice panel by its header.
+    DiceMove { grab_offset: Vec2 },
+    /// Touch landed on a die or the roll button; already applied on
+    /// touch-down.
+    DicePress,
     /// Touch landed on the toolbar; consumed, never reaches the canvas.
     Toolbar,
     /// Flagged by the palm-rejection heuristic, or consumed by a
@@ -117,6 +126,8 @@ pub struct InputHandler {
     setsquare: Option<crate::setsquare::SetSquare>,
     protractor: Option<crate::protractor::Protractor>,
     calculator: Option<crate::calculator::Calculator>,
+    stopwatch: Option<crate::stopwatch::Stopwatch>,
+    dice: Option<crate::dice::Dice>,
 
     zone_enabled: bool,
     zone_pens: [PenSettings; 2],
@@ -147,6 +158,8 @@ impl InputHandler {
             setsquare: None,
             protractor: None,
             calculator: None,
+            stopwatch: None,
+            dice: None,
             zone_enabled: false,
             zone_pens: [
                 PenSettings::ballpoint([0.92, 0.92, 0.95, 1.0]),
@@ -335,6 +348,21 @@ impl InputHandler {
                     None => Some(crate::calculator::Calculator::new(self.screen_size / 2.0 - Vec2::new(140.0, 200.0))),
                 };
             }
+            ToolbarAction::ToggleStopwatch => {
+                self.stopwatch = match self.stopwatch {
+                    Some(_) => None,
+                    None => Some(crate::stopwatch::Stopwatch::new(self.screen_size / 2.0 - Vec2::new(280.0, 100.0))),
+                };
+            }
+            ToolbarAction::ToggleDice => {
+                self.dice = match self.dice {
+                    Some(_) => None,
+                    None => {
+                        let seed = self.last_input_at.unwrap_or(1.0).to_bits() ^ self.screen_size.x.to_bits() as u64;
+                        Some(crate::dice::Dice::new(self.screen_size / 2.0 + Vec2::new(60.0, -100.0), seed))
+                    }
+                };
+            }
             ToolbarAction::CycleBackground => {
                 let page = &mut self.pages[self.current_page];
                 let (bg, grid) = board::next_preset((page.background, page.grid));
@@ -416,6 +444,34 @@ impl InputHandler {
             if calculator.contains(position) {
                 calculator.press_at(position);
                 self.sessions.insert(id, PointerSession { role: PointerRole::CalculatorPress, start_pos: position, start_time: now });
+                return;
+            }
+        }
+
+        // Same UI-panel priority for the stopwatch.
+        if let Some(stopwatch) = &mut self.stopwatch {
+            if stopwatch.is_on_header(position) {
+                let grab_offset = position - stopwatch.position;
+                self.sessions.insert(id, PointerSession { role: PointerRole::StopwatchMove { grab_offset }, start_pos: position, start_time: now });
+                return;
+            }
+            if stopwatch.contains(position) {
+                stopwatch.press_at(position, now);
+                self.sessions.insert(id, PointerSession { role: PointerRole::StopwatchPress, start_pos: position, start_time: now });
+                return;
+            }
+        }
+
+        // Same UI-panel priority for the dice.
+        if let Some(dice) = &mut self.dice {
+            if dice.is_on_header(position) {
+                let grab_offset = position - dice.position;
+                self.sessions.insert(id, PointerSession { role: PointerRole::DiceMove { grab_offset }, start_pos: position, start_time: now });
+                return;
+            }
+            if dice.contains(position) {
+                dice.press_at(position, now);
+                self.sessions.insert(id, PointerSession { role: PointerRole::DicePress, start_pos: position, start_time: now });
                 return;
             }
         }
@@ -606,7 +662,23 @@ impl InputHandler {
                     calculator.drag_to(position, grab_offset);
                 }
             }
-            PointerRole::Toolbar | PointerRole::Palm | PointerRole::CalculatorPress => {}
+            PointerRole::StopwatchMove { grab_offset } => {
+                let grab_offset = *grab_offset;
+                if let Some(stopwatch) = &mut self.stopwatch {
+                    stopwatch.drag_to(position, grab_offset);
+                }
+            }
+            PointerRole::DiceMove { grab_offset } => {
+                let grab_offset = *grab_offset;
+                if let Some(dice) = &mut self.dice {
+                    dice.drag_to(position, grab_offset);
+                }
+            }
+            PointerRole::Toolbar
+            | PointerRole::Palm
+            | PointerRole::CalculatorPress
+            | PointerRole::StopwatchPress
+            | PointerRole::DicePress => {}
         }
         if do_erase {
             self.erase_at(position, self.eraser_radius);
@@ -866,11 +938,19 @@ impl InputHandler {
             setsquare_visible: self.setsquare.is_some(),
             protractor_visible: self.protractor.is_some(),
             calculator_visible: self.calculator.is_some(),
+            stopwatch_visible: self.stopwatch.is_some(),
+            dice_visible: self.dice.is_some(),
         };
         self.toolbar.render(&toolbar_state, &mut normal_v, &mut normal_i);
 
         if let Some(calculator) = &self.calculator {
             calculator.render(&mut normal_v, &mut normal_i);
+        }
+        if let Some(stopwatch) = &self.stopwatch {
+            stopwatch.render(now, &mut normal_v, &mut normal_i);
+        }
+        if let Some(dice) = &self.dice {
+            dice.render(&mut normal_v, &mut normal_i);
         }
 
         if let Some(menu) = &self.radial_menu {
