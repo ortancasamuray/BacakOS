@@ -153,6 +153,10 @@ pub struct InputHandler {
     screen_size: Vec2,
 
     last_input_at: Option<f64>,
+    /// (message, expires-at) for the brief on-screen confirmation after a
+    /// one-shot action like PDF export — no toast/notification system
+    /// exists yet, so this is the whole of it.
+    toast: Option<(String, f64)>,
 }
 
 impl InputHandler {
@@ -187,6 +191,7 @@ impl InputHandler {
             toolbar: Toolbar::layout(screen_size),
             screen_size,
             last_input_at: None,
+            toast: None,
         }
     }
 
@@ -413,6 +418,20 @@ impl InputHandler {
                 if self.current_page >= self.pages.len() {
                     self.pages.push(Page::new());
                 }
+            }
+            ToolbarAction::ExportPdf => {
+                let now = self.last_input_at.unwrap_or(0.0);
+                let message = match crate::pdf_export::export_to_pdf(&self.pages, self.screen_size) {
+                    Ok(path) => {
+                        log::info!("PDF dışa aktarıldı: {}", path.display());
+                        "PDF KAYDEDILDI".to_string()
+                    }
+                    Err(e) => {
+                        log::error!("PDF dışa aktarma hatası: {e:#}");
+                        "PDF HATASI".to_string()
+                    }
+                };
+                self.toast = Some((message, now + 2.5));
             }
         }
     }
@@ -1076,6 +1095,16 @@ impl InputHandler {
         if let Some(menu) = &self.radial_menu {
             // No live drag-hover any more (tap-to-select, see module docs).
             menu.render(None, &mut normal_v, &mut normal_i);
+        }
+
+        if let Some((message, expires_at)) = &self.toast {
+            if now < *expires_at {
+                let cell = Vec2::new(14.0, 22.0);
+                let width = message.chars().count() as f32 * (cell.x + cell.x * 1.5);
+                let pos = Vec2::new((self.screen_size.x - width) / 2.0, 32.0);
+                push_rect(pos - Vec2::new(16.0, 12.0), Vec2::new(width + 32.0, cell.y + 24.0), [0.08, 0.09, 0.11, 0.88], &mut normal_v, &mut normal_i);
+                crate::font5x7::push_text(message, pos, cell, [0.95, 0.95, 0.97, 1.0], &mut normal_v, &mut normal_i);
+            }
         }
 
         (normal_v, normal_i, highlight_v, highlight_i, page.pdf_image.clone())
