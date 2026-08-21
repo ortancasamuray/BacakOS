@@ -125,6 +125,21 @@ BELGELER_SRC="$HERE/Belgeler"
 )
 
 # ---------------------------------------------------------------------------
+# tahta: dijital beyaz tahta
+# ---------------------------------------------------------------------------
+log "=== tahta derleniyor ==="
+TAHTA_SRC="$HERE/tahta"
+(
+    cd "$TAHTA_SRC"
+
+    log "tahta derleniyor…"
+    cargo build --release
+
+    log "tahta deb oluşturuluyor"
+    cargo deb --no-build -o "$DIST"
+)
+
+# ---------------------------------------------------------------------------
 # kur: sistem yükleyici
 # ---------------------------------------------------------------------------
 log "=== kur derleniyor ==="

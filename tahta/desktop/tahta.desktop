@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Tahta
+Name[tr]=Tahta
+GenericName=Dijital Beyaz Tahta
+GenericName[tr]=Dijital Beyaz Tahta
+Comment=GPU hızlandırmalı, düşük gecikmeli dijital beyaz tahta
+Comment[tr]=GPU hızlandırmalı, düşük gecikmeli dijital beyaz tahta
+Exec=tahta
+Icon=tahta
+Categories=Graphics;Education;
+StartupNotify=true
