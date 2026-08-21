@@ -7,6 +7,7 @@ mod brush;
 mod calculator;
 mod dice;
 mod digits;
+mod font5x7;
 mod geom;
 mod input_handler;
 mod magnifier;
@@ -20,6 +21,7 @@ mod setsquare;
 mod spotlight;
 mod stopwatch;
 mod stroke;
+mod textbox;
 mod toolbar;
 mod ui;
 
