@@ -50,6 +50,10 @@ pub enum ToolbarAction {
     ToggleProtractor,
     /// Shows/hides the draggable calculator panel.
     ToggleCalculator,
+    /// Shows/hides the draggable stopwatch panel.
+    ToggleStopwatch,
+    /// Shows/hides the draggable dice panel.
+    ToggleDice,
     /// Steps through the curated background+grid presets.
     CycleBackground,
     PrevPage,
@@ -72,6 +76,8 @@ pub struct ToolbarState {
     pub setsquare_visible: bool,
     pub protractor_visible: bool,
     pub calculator_visible: bool,
+    pub stopwatch_visible: bool,
+    pub dice_visible: bool,
 }
 
 // Scaled down toward the dock's ~36px icon / ~10px gap proportions
@@ -90,7 +96,7 @@ const COLOR_BUTTON_ACTIVE: [f32; 4] = [0.23, 0.51, 0.96, 1.0]; // accent blue
 const COLOR_GLYPH: [f32; 4] = [0.95, 0.95, 0.97, 1.0];
 const COLOR_SEPARATOR: [f32; 4] = [1.0, 1.0, 1.0, 0.10];
 
-const BUTTONS: [ToolbarAction; 16] = [
+const BUTTONS: [ToolbarAction; 18] = [
     ToolbarAction::SelectTool(Tool::Pen),
     ToolbarAction::SelectTool(Tool::Hand),
     ToolbarAction::SelectTool(Tool::Eraser),
@@ -99,6 +105,8 @@ const BUTTONS: [ToolbarAction; 16] = [
     ToolbarAction::ToggleSetSquare,
     ToolbarAction::ToggleProtractor,
     ToolbarAction::ToggleCalculator,
+    ToolbarAction::ToggleStopwatch,
+    ToolbarAction::ToggleDice,
     ToolbarAction::CycleBrush,
     ToolbarAction::CycleColor,
     ToolbarAction::Undo,
@@ -110,9 +118,9 @@ const BUTTONS: [ToolbarAction; 16] = [
 ];
 
 /// Index right before which a thin separator is drawn, to visually group
-/// tool-select (0-3) / drafting+widget tools (4-7) / brush+color (8-9) /
-/// actions (10-12).
-const SEPARATOR_BEFORE: [usize; 4] = [4, 8, 10, 13];
+/// tool-select (0-3) / drafting+widget tools (4-9) / brush+color (10-11) /
+/// actions (12-14).
+const SEPARATOR_BEFORE: [usize; 4] = [4, 10, 12, 15];
 
 /// Bottom-center floating toolbar. Screen-space, never affected by canvas
 /// pan/zoom, recomputed each frame from the current window size.
@@ -207,6 +215,8 @@ fn is_active(action: ToolbarAction, state: &ToolbarState) -> bool {
         ToolbarAction::ToggleSetSquare => state.setsquare_visible,
         ToolbarAction::ToggleProtractor => state.protractor_visible,
         ToolbarAction::ToggleCalculator => state.calculator_visible,
+        ToolbarAction::ToggleStopwatch => state.stopwatch_visible,
+        ToolbarAction::ToggleDice => state.dice_visible,
         _ => false,
     }
 }
@@ -348,6 +358,28 @@ fn draw_glyph(
                     let y = top_left.y + h * (0.62 + row as f32 * 0.3);
                     push_circle(Vec2::new(x, y), 1.6, COLOR_GLYPH, 8, out_vertices, out_indices);
                 }
+            }
+        }
+        ToolbarAction::ToggleStopwatch => {
+            // A stopwatch: circle body, a top knob, and a hand pointing to
+            // ~2 o'clock (mid-count, not 12, so it doesn't read as a plain
+            // clock).
+            push_line(center + Vec2::new(-r * 0.35, -r * 1.15), center + Vec2::new(r * 0.35, -r * 1.15), 2.5, COLOR_GLYPH, out_vertices, out_indices);
+            for i in 0..24 {
+                let theta = i as f32 / 24.0 * std::f32::consts::TAU;
+                let theta1 = (i + 1) as f32 / 24.0 * std::f32::consts::TAU;
+                let p0 = center + Vec2::new(theta.cos(), theta.sin()) * r;
+                let p1 = center + Vec2::new(theta1.cos(), theta1.sin()) * r;
+                push_line(p0, p1, 2.0, COLOR_GLYPH, out_vertices, out_indices);
+            }
+            push_line(center, center + Vec2::new(r * 0.6, -r * 0.5), 2.0, COLOR_GLYPH, out_vertices, out_indices);
+        }
+        ToolbarAction::ToggleDice => {
+            let s = r * 1.6;
+            push_rect(center - Vec2::splat(s / 2.0), Vec2::splat(s), COLOR_GLYPH, out_vertices, out_indices);
+            let pip_color = [0.15, 0.15, 0.18, 1.0];
+            for &(fx, fy) in &[(0.25, 0.25), (0.75, 0.25), (0.5, 0.5), (0.25, 0.75), (0.75, 0.75)] {
+                push_circle(center + Vec2::new((fx - 0.5) * s, (fy - 0.5) * s), 1.8, pip_color, 8, out_vertices, out_indices);
             }
         }
         ToolbarAction::CycleBackground => {
