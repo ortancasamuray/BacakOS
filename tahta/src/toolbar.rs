@@ -1,0 +1,255 @@
+//! Floating tool/brush/action bar — the *only* control surface this app
+//! needs, by design: interactive flat panels have no keyboard, so every
+//! mode change (tool, brush, color, undo, clear, dual-zone) must be
+//! reachable by tapping a button here. Buttons are sized well above the
+//! 48-64px floor for finger/chalk-stylus hit targets.
+
+use glam::Vec2;
+
+use crate::brush::BrushType;
+use crate::stroke::{push_circle, push_line, push_rect, Vertex};
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Tool {
+    Pen,
+    Hand,
+    Eraser,
+}
+
+/// Which erase behavior the Eraser tool currently uses — toggled by
+/// tapping the Eraser toolbar button again while it's already selected
+/// (the only discoverable way to reach it without a keyboard).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum EraserMode {
+    /// Rubs out only the ink within the eraser's radius (default) —
+    /// splits a stroke rather than deleting it whole.
+    Area,
+    /// Deletes an entire stroke/object if any part of it is touched.
+    Object,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum ToolbarAction {
+    SelectTool(Tool),
+    /// Ballpoint → Calligraphy → Highlighter → LaserPointer → ...
+    CycleBrush,
+    /// Steps through the fixed 5-color palette.
+    CycleColor,
+    Undo,
+    Clear,
+    ToggleZone,
+}
+
+/// What the toolbar needs to know to draw each button's current-state
+/// glyph (which tool/brush/color is active, whether dual-zone is on).
+pub struct ToolbarState {
+    pub active_tool: Tool,
+    pub brush_type: BrushType,
+    pub color: [f32; 4],
+    pub zone_enabled: bool,
+    pub eraser_mode: EraserMode,
+}
+
+const BUTTON_SIZE: f32 = 72.0;
+const BUTTON_GAP: f32 = 14.0;
+const BAR_MARGIN: f32 = 12.0;
+const BAR_BOTTOM_MARGIN: f32 = 28.0;
+
+const COLOR_BAR_BG: [f32; 4] = [0.12, 0.13, 0.17, 0.92];
+const COLOR_BUTTON_IDLE: [f32; 4] = [0.22, 0.24, 0.30, 1.0];
+const COLOR_BUTTON_ACTIVE: [f32; 4] = [0.23, 0.51, 0.96, 1.0]; // accent blue
+const COLOR_GLYPH: [f32; 4] = [0.95, 0.95, 0.97, 1.0];
+const COLOR_SEPARATOR: [f32; 4] = [1.0, 1.0, 1.0, 0.10];
+
+const BUTTONS: [ToolbarAction; 8] = [
+    ToolbarAction::SelectTool(Tool::Pen),
+    ToolbarAction::SelectTool(Tool::Hand),
+    ToolbarAction::SelectTool(Tool::Eraser),
+    ToolbarAction::CycleBrush,
+    ToolbarAction::CycleColor,
+    ToolbarAction::Undo,
+    ToolbarAction::Clear,
+    ToolbarAction::ToggleZone,
+];
+
+/// Index right before which a thin separator is drawn, to visually group
+/// tool-select (0-2) / mode (3-4) / destructive-ish actions (5-7).
+const SEPARATOR_BEFORE: [usize; 2] = [3, 5];
+
+/// Bottom-center floating toolbar. Screen-space, never affected by canvas
+/// pan/zoom, recomputed each frame from the current window size.
+pub struct Toolbar {
+    bar_rect: (Vec2, Vec2), // (top_left, size)
+    button_rects: [(Vec2, Vec2); BUTTONS.len()],
+}
+
+impl Toolbar {
+    pub fn layout(screen_size: Vec2) -> Self {
+        let content_w = BUTTON_SIZE * BUTTONS.len() as f32 + BUTTON_GAP * (BUTTONS.len() as f32 - 1.0);
+        let bar_w = content_w + BAR_MARGIN * 2.0;
+        let bar_h = BUTTON_SIZE + BAR_MARGIN * 2.0;
+        let bar_top_left = Vec2::new(
+            (screen_size.x - bar_w) / 2.0,
+            screen_size.y - bar_h - BAR_BOTTOM_MARGIN,
+        );
+
+        let mut button_rects = [(Vec2::ZERO, Vec2::ZERO); BUTTONS.len()];
+        for (i, rect) in button_rects.iter_mut().enumerate() {
+            let x = bar_top_left.x + BAR_MARGIN + i as f32 * (BUTTON_SIZE + BUTTON_GAP);
+            let y = bar_top_left.y + BAR_MARGIN;
+            *rect = (Vec2::new(x, y), Vec2::splat(BUTTON_SIZE));
+        }
+
+        Self { bar_rect: (bar_top_left, Vec2::new(bar_w, bar_h)), button_rects }
+    }
+
+    /// True if `point` lands anywhere on the toolbar's background — used to
+    /// swallow touches so they never start a stroke, even between buttons.
+    pub fn contains(&self, point: Vec2) -> bool {
+        rect_contains(self.bar_rect, point)
+    }
+
+    /// Which action (if any) `point` lands on.
+    pub fn hit_test(&self, point: Vec2) -> Option<ToolbarAction> {
+        self.button_rects
+            .iter()
+            .zip(BUTTONS)
+            .find(|(rect, _)| rect_contains(**rect, point))
+            .map(|(_, action)| action)
+    }
+
+    pub fn render(&self, state: &ToolbarState, out_vertices: &mut Vec<Vertex>, out_indices: &mut Vec<u32>) {
+        push_rect(self.bar_rect.0, self.bar_rect.1, COLOR_BAR_BG, out_vertices, out_indices);
+
+        for (i, (rect, action)) in self.button_rects.iter().zip(BUTTONS).enumerate() {
+            if SEPARATOR_BEFORE.contains(&i) {
+                let x = rect.0.x - BUTTON_GAP / 2.0;
+                push_rect(
+                    Vec2::new(x - 1.0, self.bar_rect.0.y + 10.0),
+                    Vec2::new(2.0, self.bar_rect.1.y - 20.0),
+                    COLOR_SEPARATOR,
+                    out_vertices,
+                    out_indices,
+                );
+            }
+
+            let active = is_active(action, state);
+            let color = if active { COLOR_BUTTON_ACTIVE } else { COLOR_BUTTON_IDLE };
+            push_rect(rect.0, rect.1, color, out_vertices, out_indices);
+            draw_glyph(action, *rect, state, out_vertices, out_indices);
+        }
+    }
+}
+
+fn is_active(action: ToolbarAction, state: &ToolbarState) -> bool {
+    match action {
+        ToolbarAction::SelectTool(t) => t == state.active_tool,
+        ToolbarAction::ToggleZone => state.zone_enabled,
+        _ => false,
+    }
+}
+
+fn rect_contains((top_left, size): (Vec2, Vec2), point: Vec2) -> bool {
+    point.x >= top_left.x
+        && point.x <= top_left.x + size.x
+        && point.y >= top_left.y
+        && point.y <= top_left.y + size.y
+}
+
+fn draw_glyph(
+    action: ToolbarAction,
+    (top_left, size): (Vec2, Vec2),
+    state: &ToolbarState,
+    out_vertices: &mut Vec<Vertex>,
+    out_indices: &mut Vec<u32>,
+) {
+    let center = top_left + size / 2.0;
+    let r = size.x * 0.28;
+    match action {
+        ToolbarAction::SelectTool(Tool::Pen) => {
+            let a = center + Vec2::new(-r, r);
+            let b = center + Vec2::new(r, -r);
+            push_line(a, b, 5.0, COLOR_GLYPH, out_vertices, out_indices);
+            push_circle(b, 4.0, COLOR_GLYPH, 12, out_vertices, out_indices);
+        }
+        ToolbarAction::SelectTool(Tool::Hand) => {
+            push_line(center + Vec2::new(-r, 0.0), center + Vec2::new(r, 0.0), 5.0, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(center + Vec2::new(0.0, -r), center + Vec2::new(0.0, r), 5.0, COLOR_GLYPH, out_vertices, out_indices);
+            push_circle(center, 5.0, COLOR_GLYPH, 12, out_vertices, out_indices);
+        }
+        ToolbarAction::SelectTool(Tool::Eraser) => {
+            push_rect(center - Vec2::splat(r * 0.55), Vec2::splat(r * 1.1), COLOR_GLYPH, out_vertices, out_indices);
+            match state.eraser_mode {
+                // Area mode: a dashed-looking ring (short arc segments)
+                // around the eraser block, hinting "only this radius".
+                EraserMode::Area => {
+                    for i in 0..8 {
+                        if i % 2 == 0 {
+                            continue;
+                        }
+                        let theta = i as f32 / 8.0 * std::f32::consts::TAU;
+                        let dir = Vec2::new(theta.cos(), theta.sin());
+                        push_line(center + dir * (r * 0.85), center + dir * r, 2.5, COLOR_GLYPH, out_vertices, out_indices);
+                    }
+                }
+                // Object mode: a solid outline box around the eraser
+                // block, hinting "whole object".
+                EraserMode::Object => {
+                    let outline = [COLOR_GLYPH[0], COLOR_GLYPH[1], COLOR_GLYPH[2], 0.5];
+                    let s = r * 1.7;
+                    let t = 2.5;
+                    push_rect(center + Vec2::new(-s / 2.0, -s / 2.0), Vec2::new(s, t), outline, out_vertices, out_indices);
+                    push_rect(center + Vec2::new(-s / 2.0, s / 2.0 - t), Vec2::new(s, t), outline, out_vertices, out_indices);
+                    push_rect(center + Vec2::new(-s / 2.0, -s / 2.0), Vec2::new(t, s), outline, out_vertices, out_indices);
+                    push_rect(center + Vec2::new(s / 2.0 - t, -s / 2.0), Vec2::new(t, s), outline, out_vertices, out_indices);
+                }
+            }
+        }
+        ToolbarAction::CycleBrush => draw_brush_glyph(state.brush_type, center, r, out_vertices, out_indices),
+        ToolbarAction::CycleColor => {
+            push_circle(center, r * 0.75, state.color, 20, out_vertices, out_indices);
+        }
+        ToolbarAction::Undo => {
+            // Left-pointing chevron ("<") — simplest arrow without a font.
+            push_line(center + Vec2::new(r * 0.5, -r), center + Vec2::new(-r * 0.5, 0.0), 5.0, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(center + Vec2::new(-r * 0.5, 0.0), center + Vec2::new(r * 0.5, r), 5.0, COLOR_GLYPH, out_vertices, out_indices);
+        }
+        ToolbarAction::Clear => {
+            push_line(center + Vec2::new(-r, -r), center + Vec2::new(r, r), 5.0, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(center + Vec2::new(-r, r), center + Vec2::new(r, -r), 5.0, COLOR_GLYPH, out_vertices, out_indices);
+        }
+        ToolbarAction::ToggleZone => {
+            let gap = 3.0;
+            let half_w = r * 0.85;
+            push_rect(center + Vec2::new(-half_w, -r), Vec2::new(half_w - gap, r * 2.0), COLOR_GLYPH, out_vertices, out_indices);
+            let outline_color = [COLOR_GLYPH[0], COLOR_GLYPH[1], COLOR_GLYPH[2], 0.35];
+            push_rect(center + Vec2::new(gap, -r), Vec2::new(half_w - gap, r * 2.0), outline_color, out_vertices, out_indices);
+        }
+    }
+}
+
+fn draw_brush_glyph(brush: BrushType, center: Vec2, r: f32, out_vertices: &mut Vec<Vertex>, out_indices: &mut Vec<u32>) {
+    match brush {
+        BrushType::Ballpoint => {
+            push_line(center + Vec2::new(-r, r), center + Vec2::new(r, -r), 3.0, COLOR_GLYPH, out_vertices, out_indices);
+        }
+        BrushType::Calligraphy => {
+            // A wedge: thick at one end, thin at the other, drawn as two
+            // stacked lines of different width along the same diagonal.
+            push_line(center + Vec2::new(-r, r), center, 7.0, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(center, center + Vec2::new(r, -r), 2.5, COLOR_GLYPH, out_vertices, out_indices);
+        }
+        BrushType::Highlighter => {
+            let translucent = [COLOR_GLYPH[0], COLOR_GLYPH[1], COLOR_GLYPH[2], 0.55];
+            push_rect(center - Vec2::new(r, r * 0.4), Vec2::new(r * 2.0, r * 0.8), translucent, out_vertices, out_indices);
+        }
+        BrushType::LaserPointer => {
+            push_circle(center, 4.0, COLOR_GLYPH, 12, out_vertices, out_indices);
+            for i in 0..6 {
+                let theta = i as f32 / 6.0 * std::f32::consts::TAU;
+                let dir = Vec2::new(theta.cos(), theta.sin());
+                push_line(center + dir * (r * 0.55), center + dir * r, 2.0, COLOR_GLYPH, out_vertices, out_indices);
+            }
+        }
+    }
+}
