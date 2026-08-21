@@ -15,7 +15,7 @@ use crate::board::{self, Page};
 use crate::brush::{next_palette_color, BrushType, PenSettings};
 use crate::palm;
 use crate::prediction::{TouchPredictor, TouchSample};
-use crate::stroke::{push_circle, push_rect, Stroke, Vertex};
+use crate::stroke::{push_circle, push_line, push_rect, Stroke, Vertex};
 use crate::toolbar::{EraserMode, Tool, Toolbar, ToolbarAction, ToolbarState};
 use crate::ui::{RadialAction, RadialMenu};
 
@@ -62,6 +62,9 @@ enum PointerRole {
     Panning { last_pos: Vec2 },
     /// Eraser tool: tombstones (clears) any stroke it passes near.
     Erasing,
+    /// Compass tool: drag radius previewed live in `compass_preview`,
+    /// committed as a circle stroke on release.
+    CompassDrag { center: Vec2 },
     /// Touch landed on the toolbar; consumed, never reaches the canvas.
     Toolbar,
     /// Flagged by the palm-rejection heuristic, or consumed by a
@@ -87,6 +90,8 @@ pub struct InputHandler {
     eraser_radius: f32,
     view_offset: Vec2,
     eraser_cursor: Option<Vec2>,
+    /// Live (center, radius) while a Compass drag is in progress.
+    compass_preview: Option<(Vec2, f32)>,
 
     zone_enabled: bool,
     zone_pens: [PenSettings; 2],
@@ -112,6 +117,7 @@ impl InputHandler {
             active_pen: PenSettings::ballpoint([0.92, 0.92, 0.95, 1.0]),
             view_offset: Vec2::ZERO,
             eraser_cursor: None,
+            compass_preview: None,
             zone_enabled: false,
             zone_pens: [
                 PenSettings::ballpoint([0.92, 0.92, 0.95, 1.0]),
@@ -356,6 +362,10 @@ impl InputHandler {
                 self.eraser_cursor = Some(position);
                 PointerRole::Erasing
             }
+            Tool::Compass => {
+                self.compass_preview = Some((position, 0.0));
+                PointerRole::CompassDrag { center: position }
+            }
         };
 
         self.sessions.insert(id, PointerSession { role, start_pos: position, start_time: now });
@@ -404,6 +414,9 @@ impl InputHandler {
                 self.eraser_cursor = Some(position);
                 do_erase = true;
             }
+            PointerRole::CompassDrag { center } => {
+                self.compass_preview = Some((*center, center.distance(position)));
+            }
             PointerRole::Toolbar | PointerRole::Palm => {}
         }
         if do_erase {
@@ -413,10 +426,37 @@ impl InputHandler {
 
     fn end_pointer(&mut self, id: u64) {
         if let Some(session) = self.sessions.remove(&id) {
-            if matches!(session.role, PointerRole::Erasing) {
-                self.eraser_cursor = None;
+            match session.role {
+                PointerRole::Erasing => self.eraser_cursor = None,
+                PointerRole::CompassDrag { .. } => self.commit_compass_circle(),
+                _ => {}
             }
         }
+    }
+
+    /// Turns the live compass drag into a real circle stroke, sampled as a
+    /// closed ring of points — reuses the ordinary `Stroke`/tessellation
+    /// path, so a compass circle erases, exports, and re-colors exactly
+    /// like freehand ink.
+    fn commit_compass_circle(&mut self) {
+        const MIN_RADIUS: f32 = 6.0;
+        const SAMPLES: usize = 72;
+
+        let Some((center, radius)) = self.compass_preview.take() else {
+            return;
+        };
+        if radius < MIN_RADIUS {
+            return;
+        }
+
+        let pen = self.active_pen.clone();
+        let mut stroke = Stroke::new(pen.color, pen.base_width, pen.brush_type);
+        let now = self.last_input_at.unwrap_or(0.0);
+        for i in 0..=SAMPLES {
+            let theta = i as f32 / SAMPLES as f32 * std::f32::consts::TAU;
+            stroke.push_point(center + Vec2::new(theta.cos(), theta.sin()) * radius, now);
+        }
+        self.pages[self.current_page].strokes.push(stroke);
     }
 
     /// Erases using whichever mode the Eraser tool is currently set to.
@@ -598,6 +638,19 @@ impl InputHandler {
 
         if let Some(cursor) = self.eraser_cursor {
             push_circle(cursor, self.eraser_radius, [1.0, 1.0, 1.0, 0.18], 24, &mut normal_v, &mut normal_i);
+        }
+
+        if let Some((center, radius)) = self.compass_preview {
+            const SEGMENTS: usize = 48;
+            let color = self.active_pen.color;
+            for i in 0..SEGMENTS {
+                let a0 = i as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
+                let a1 = (i + 1) as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
+                let p0 = center + Vec2::new(a0.cos(), a0.sin()) * radius;
+                let p1 = center + Vec2::new(a1.cos(), a1.sin()) * radius;
+                push_line(p0, p1, self.active_pen.base_width, color, &mut normal_v, &mut normal_i);
+            }
+            push_circle(center, 3.0, color, 10, &mut normal_v, &mut normal_i);
         }
 
         let toolbar_state = ToolbarState {
