@@ -2,9 +2,14 @@
 //! interactive flat panels.
 
 mod app;
+mod brush;
+mod input_handler;
+mod palm;
 mod prediction;
 mod renderer;
 mod stroke;
+mod toolbar;
+mod ui;
 
 use std::sync::Arc;
 

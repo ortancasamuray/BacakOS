@@ -2,6 +2,12 @@
 //! no VSync wait when the platform allows it, a single frame of latency,
 //! and dynamically-resized vertex/index buffers so a whole frame's stroke
 //! geometry can be pushed to the GPU in one write.
+//!
+//! Two pipelines share one render pass: a standard alpha-blended one for
+//! ink/UI, and a Max-blended one for the highlighter brush — Max blend
+//! means overlapping highlighter geometry (self-overlap at stroke joints,
+//! or two highlighter strokes crossing) never accumulates past one layer's
+//! opacity, so the marked text underneath never gets progressively darker.
 
 use std::sync::Arc;
 
@@ -24,20 +30,101 @@ struct Uniforms {
 /// stroke geometry grows by one vertex.
 const BUFFER_GROWTH_FACTOR: u64 = 2;
 
+/// A GPU buffer that grows (never shrinks) to fit whatever's written to it
+/// each frame — used for both the vertex and index streams, for both the
+/// normal and highlighter draw batches.
+struct DynamicBuffer {
+    buffer: wgpu::Buffer,
+    capacity_bytes: u64,
+    usage: wgpu::BufferUsages,
+    label: &'static str,
+}
+
+impl DynamicBuffer {
+    fn new(device: &wgpu::Device, label: &'static str, usage: wgpu::BufferUsages, initial_capacity_bytes: u64) -> Self {
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size: initial_capacity_bytes,
+            usage,
+            mapped_at_creation: false,
+        });
+        Self { buffer, capacity_bytes: initial_capacity_bytes, usage, label }
+    }
+
+    fn ensure_capacity(&mut self, device: &wgpu::Device, needed_bytes: u64) {
+        if needed_bytes <= self.capacity_bytes {
+            return;
+        }
+        self.capacity_bytes = needed_bytes * BUFFER_GROWTH_FACTOR;
+        self.buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(self.label),
+            size: self.capacity_bytes,
+            usage: self.usage,
+            mapped_at_creation: false,
+        });
+    }
+}
+
+/// One draw batch's GPU-side geometry buffers.
+struct Batch {
+    vertex: DynamicBuffer,
+    index: DynamicBuffer,
+}
+
+impl Batch {
+    fn new(device: &wgpu::Device, name: &'static str) -> Self {
+        Self {
+            vertex: DynamicBuffer::new(
+                device,
+                name,
+                wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                4096 * std::mem::size_of::<Vertex>() as u64,
+            ),
+            index: DynamicBuffer::new(
+                device,
+                name,
+                wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+                8192 * std::mem::size_of::<u32>() as u64,
+            ),
+        }
+    }
+
+    fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, vertices: &[Vertex], indices: &[u32]) {
+        self.vertex.ensure_capacity(device, (vertices.len() * std::mem::size_of::<Vertex>()) as u64);
+        self.index.ensure_capacity(device, (indices.len() * std::mem::size_of::<u32>()) as u64);
+        if !vertices.is_empty() {
+            queue.write_buffer(&self.vertex.buffer, 0, bytemuck::cast_slice(vertices));
+        }
+        if !indices.is_empty() {
+            queue.write_buffer(&self.index.buffer, 0, bytemuck::cast_slice(indices));
+        }
+    }
+
+    fn draw<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, pipeline: &'a wgpu::RenderPipeline, bind_group: &'a wgpu::BindGroup, index_count: u32) {
+        if index_count == 0 {
+            return;
+        }
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, bind_group, &[]);
+        pass.set_vertex_buffer(0, self.vertex.buffer.slice(..));
+        pass.set_index_buffer(self.index.buffer.slice(..), wgpu::IndexFormat::Uint32);
+        pass.draw_indexed(0..index_count, 0, 0..1);
+    }
+}
+
 pub struct Renderer {
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
-    pipeline: wgpu::RenderPipeline,
+    normal_pipeline: wgpu::RenderPipeline,
+    highlighter_pipeline: wgpu::RenderPipeline,
 
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
 
-    vertex_buffer: wgpu::Buffer,
-    vertex_capacity_bytes: u64,
-    index_buffer: wgpu::Buffer,
-    index_capacity_bytes: u64,
+    normal_batch: Batch,
+    highlighter_batch: Batch,
 }
 
 impl Renderer {
@@ -143,65 +230,67 @@ impl Renderer {
             push_constant_ranges: &[],
         });
 
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("tahta_pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: "vs_main",
-                buffers: &[Vertex::layout()],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: "fs_main",
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: surface_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                unclipped_depth: false,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-        });
+        let primitive = wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: None,
+            unclipped_depth: false,
+            polygon_mode: wgpu::PolygonMode::Fill,
+            conservative: false,
+        };
 
-        let vertex_capacity_bytes = 4096 * std::mem::size_of::<Vertex>() as u64;
-        let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tahta_vertex_buffer"),
-            size: vertex_capacity_bytes,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let make_pipeline = |label: &str, blend: wgpu::BlendState| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: "vs_main",
+                    buffers: &[Vertex::layout()],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: "fs_main",
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: surface_format,
+                        blend: Some(blend),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive,
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+            })
+        };
 
-        let index_capacity_bytes = 8192 * std::mem::size_of::<u32>() as u64;
-        let index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tahta_index_buffer"),
-            size: index_capacity_bytes,
-            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let normal_pipeline = make_pipeline("tahta_normal_pipeline", wgpu::BlendState::ALPHA_BLENDING);
+
+        let max_component = wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::One,
+            operation: wgpu::BlendOperation::Max,
+        };
+        let highlighter_pipeline = make_pipeline(
+            "tahta_highlighter_pipeline",
+            wgpu::BlendState { color: max_component, alpha: max_component },
+        );
+
+        let normal_batch = Batch::new(&device, "tahta_normal_batch");
+        let highlighter_batch = Batch::new(&device, "tahta_highlighter_batch");
 
         Self {
             surface,
             device,
             queue,
             config,
-            pipeline,
+            normal_pipeline,
+            highlighter_pipeline,
             uniform_buffer,
             uniform_bind_group,
-            vertex_buffer,
-            vertex_capacity_bytes,
-            index_buffer,
-            index_capacity_bytes,
+            normal_batch,
+            highlighter_batch,
         }
     }
 
@@ -214,37 +303,15 @@ impl Renderer {
         self.surface.configure(&self.device, &self.config);
     }
 
-    fn ensure_vertex_capacity(&mut self, needed_vertices: usize) {
-        let needed_bytes = (needed_vertices * std::mem::size_of::<Vertex>()) as u64;
-        if needed_bytes <= self.vertex_capacity_bytes {
-            return;
-        }
-        self.vertex_capacity_bytes = needed_bytes * BUFFER_GROWTH_FACTOR;
-        self.vertex_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tahta_vertex_buffer"),
-            size: self.vertex_capacity_bytes,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-    }
-
-    fn ensure_index_capacity(&mut self, needed_indices: usize) {
-        let needed_bytes = (needed_indices * std::mem::size_of::<u32>()) as u64;
-        if needed_bytes <= self.index_capacity_bytes {
-            return;
-        }
-        self.index_capacity_bytes = needed_bytes * BUFFER_GROWTH_FACTOR;
-        self.index_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tahta_index_buffer"),
-            size: self.index_capacity_bytes,
-            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-    }
-
-    /// Uploads the given frame's full vertex/index geometry (real strokes +
-    /// transient predicted geometry) and draws it in a single pass.
-    pub fn render(&mut self, vertices: &[Vertex], indices: &[u32]) -> Result<(), wgpu::SurfaceError> {
+    /// Uploads and draws one frame: `normal` covers ink/UI (standard alpha
+    /// blend, drawn first) and `highlighter` covers Highlighter-brush
+    /// strokes (Max blend, drawn on top so marker strokes never darken the
+    /// ink or each other underneath).
+    pub fn render(
+        &mut self,
+        normal: (&[Vertex], &[u32]),
+        highlighter: (&[Vertex], &[u32]),
+    ) -> Result<(), wgpu::SurfaceError> {
         let output = self.surface.get_current_texture()?;
         let view = output
             .texture
@@ -259,16 +326,8 @@ impl Renderer {
             }),
         );
 
-        self.ensure_vertex_capacity(vertices.len());
-        self.ensure_index_capacity(indices.len());
-        if !vertices.is_empty() {
-            self.queue
-                .write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(vertices));
-        }
-        if !indices.is_empty() {
-            self.queue
-                .write_buffer(&self.index_buffer, 0, bytemuck::cast_slice(indices));
-        }
+        self.normal_batch.upload(&self.device, &self.queue, normal.0, normal.1);
+        self.highlighter_batch.upload(&self.device, &self.queue, highlighter.0, highlighter.1);
 
         let mut encoder = self
             .device
@@ -297,13 +356,10 @@ impl Renderer {
                 occlusion_query_set: None,
             });
 
-            if !indices.is_empty() {
-                pass.set_pipeline(&self.pipeline);
-                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-                pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-                pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(0..indices.len() as u32, 0, 0..1);
-            }
+            // Highlighter first (Max-blended) so it sits "under" — visually
+            // behind — freshly drawn ink and UI chrome painted after it.
+            self.highlighter_batch.draw(&mut pass, &self.highlighter_pipeline, &self.uniform_bind_group, highlighter.1.len() as u32);
+            self.normal_batch.draw(&mut pass, &self.normal_pipeline, &self.uniform_bind_group, normal.1.len() as u32);
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
