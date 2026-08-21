@@ -77,6 +77,10 @@ enum PointerRole {
     SetSquareRotate,
     /// Dragging the set-square's body to reposition it.
     SetSquareMove { grab_offset: Vec2 },
+    /// Dragging the protractor's rotate handle.
+    ProtractorRotate,
+    /// Dragging the protractor's body to reposition it.
+    ProtractorMove { grab_offset: Vec2 },
     /// Touch landed on the toolbar; consumed, never reaches the canvas.
     Toolbar,
     /// Flagged by the palm-rejection heuristic, or consumed by a
@@ -106,6 +110,7 @@ pub struct InputHandler {
     compass_preview: Option<(Vec2, f32)>,
     ruler: Option<crate::ruler::Ruler>,
     setsquare: Option<crate::setsquare::SetSquare>,
+    protractor: Option<crate::protractor::Protractor>,
 
     zone_enabled: bool,
     zone_pens: [PenSettings; 2],
@@ -134,6 +139,7 @@ impl InputHandler {
             compass_preview: None,
             ruler: None,
             setsquare: None,
+            protractor: None,
             zone_enabled: false,
             zone_pens: [
                 PenSettings::ballpoint([0.92, 0.92, 0.95, 1.0]),
@@ -197,8 +203,9 @@ impl InputHandler {
     }
 
     /// The nearest drafting-tool edge within snapping range of `position`,
-    /// if any — checks the ruler and the set-square and picks whichever
-    /// edge is actually closer when both are visible and in range.
+    /// if any — checks the ruler, the set-square and the protractor's
+    /// baseline, and picks whichever edge is actually closer when more
+    /// than one is visible and in range.
     fn find_edge_snap(&self, position: Vec2) -> Option<(Vec2, Vec2)> {
         let ruler_edge = self
             .ruler
@@ -210,14 +217,17 @@ impl InputHandler {
             .as_ref()
             .filter(|s| s.distance_to_edge(position) <= crate::setsquare::EDGE_SNAP_DISTANCE)
             .map(|s| (s.nearest_edge(position), s.distance_to_edge(position)));
+        let protractor_edge = self
+            .protractor
+            .as_ref()
+            .filter(|p| p.distance_to_edge(position) <= crate::protractor::EDGE_SNAP_DISTANCE)
+            .map(|p| (p.nearest_edge(position), p.distance_to_edge(position)));
 
-        match (ruler_edge, setsquare_edge) {
-            (Some((edge, d1)), Some((_, d2))) if d1 <= d2 => Some(edge),
-            (Some(_), Some((edge, _))) => Some(edge),
-            (Some((edge, _)), None) => Some(edge),
-            (None, Some((edge, _))) => Some(edge),
-            (None, None) => None,
-        }
+        [ruler_edge, setsquare_edge, protractor_edge]
+            .into_iter()
+            .flatten()
+            .min_by(|(_, d1), (_, d2)| d1.partial_cmp(d2).unwrap())
+            .map(|(edge, _)| edge)
     }
 
     // --- Per-frame maintenance ---------------------------------------------
@@ -304,6 +314,12 @@ impl InputHandler {
                 self.setsquare = match self.setsquare {
                     Some(_) => None,
                     None => Some(crate::setsquare::SetSquare::new(self.screen_size / 2.0)),
+                };
+            }
+            ToolbarAction::ToggleProtractor => {
+                self.protractor = match self.protractor {
+                    Some(_) => None,
+                    None => Some(crate::protractor::Protractor::new(self.screen_size / 2.0)),
                 };
             }
             ToolbarAction::CycleBackground => {
@@ -399,6 +415,19 @@ impl InputHandler {
             if setsquare.is_on_body(position) && setsquare.distance_to_edge(position) > crate::setsquare::EDGE_SNAP_DISTANCE {
                 let grab_offset = position - setsquare.right_angle;
                 self.sessions.insert(id, PointerSession { role: PointerRole::SetSquareMove { grab_offset }, start_pos: position, start_time: now });
+                return;
+            }
+        }
+
+        // Same handle/body-grab priority for the protractor.
+        if let Some(protractor) = &self.protractor {
+            if protractor.is_on_handle(position) {
+                self.sessions.insert(id, PointerSession { role: PointerRole::ProtractorRotate, start_pos: position, start_time: now });
+                return;
+            }
+            if protractor.is_on_body(position) && protractor.distance_to_edge(position) > crate::protractor::EDGE_SNAP_DISTANCE {
+                let grab_offset = position - protractor.center;
+                self.sessions.insert(id, PointerSession { role: PointerRole::ProtractorMove { grab_offset }, start_pos: position, start_time: now });
                 return;
             }
         }
@@ -528,6 +557,17 @@ impl InputHandler {
                 let grab_offset = *grab_offset;
                 if let Some(setsquare) = &mut self.setsquare {
                     setsquare.drag_to(position, grab_offset);
+                }
+            }
+            PointerRole::ProtractorRotate => {
+                if let Some(protractor) = &mut self.protractor {
+                    protractor.rotate_toward(position);
+                }
+            }
+            PointerRole::ProtractorMove { grab_offset } => {
+                let grab_offset = *grab_offset;
+                if let Some(protractor) = &mut self.protractor {
+                    protractor.drag_to(position, grab_offset);
                 }
             }
             PointerRole::Toolbar | PointerRole::Palm => {}
@@ -772,6 +812,9 @@ impl InputHandler {
         if let Some(setsquare) = &self.setsquare {
             setsquare.render(&mut normal_v, &mut normal_i);
         }
+        if let Some(protractor) = &self.protractor {
+            protractor.render(&mut normal_v, &mut normal_i);
+        }
 
         let toolbar_state = ToolbarState {
             active_tool: self.active_tool,
@@ -785,6 +828,7 @@ impl InputHandler {
             page_count: self.pages.len(),
             ruler_visible: self.ruler.is_some(),
             setsquare_visible: self.setsquare.is_some(),
+            protractor_visible: self.protractor.is_some(),
         };
         self.toolbar.render(&toolbar_state, &mut normal_v, &mut normal_i);
 

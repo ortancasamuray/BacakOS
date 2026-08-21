@@ -10,6 +10,7 @@ mod input_handler;
 mod palm;
 mod pdf;
 mod prediction;
+mod protractor;
 mod renderer;
 mod ruler;
 mod setsquare;
