@@ -95,6 +95,14 @@ enum PointerRole {
     /// Touch landed on a die or the roll button; already applied on
     /// touch-down.
     DicePress,
+    /// Dragging the spotlight's rim handle to resize it.
+    SpotlightResize,
+    /// Dragging the spotlight's bright window to reposition it.
+    SpotlightMove { grab_offset: Vec2 },
+    /// Dragging the magnifier's rim handle to resize it.
+    MagnifierResize,
+    /// Dragging the magnifier lens to reposition it.
+    MagnifierMove { grab_offset: Vec2 },
     /// Touch landed on the toolbar; consumed, never reaches the canvas.
     Toolbar,
     /// Flagged by the palm-rejection heuristic, or consumed by a
@@ -128,6 +136,8 @@ pub struct InputHandler {
     calculator: Option<crate::calculator::Calculator>,
     stopwatch: Option<crate::stopwatch::Stopwatch>,
     dice: Option<crate::dice::Dice>,
+    spotlight: Option<crate::spotlight::Spotlight>,
+    magnifier: Option<crate::magnifier::Magnifier>,
 
     zone_enabled: bool,
     zone_pens: [PenSettings; 2],
@@ -160,6 +170,8 @@ impl InputHandler {
             calculator: None,
             stopwatch: None,
             dice: None,
+            spotlight: None,
+            magnifier: None,
             zone_enabled: false,
             zone_pens: [
                 PenSettings::ballpoint([0.92, 0.92, 0.95, 1.0]),
@@ -363,6 +375,18 @@ impl InputHandler {
                     }
                 };
             }
+            ToolbarAction::ToggleSpotlight => {
+                self.spotlight = match self.spotlight {
+                    Some(_) => None,
+                    None => Some(crate::spotlight::Spotlight::new(self.screen_size / 2.0)),
+                };
+            }
+            ToolbarAction::ToggleMagnifier => {
+                self.magnifier = match self.magnifier {
+                    Some(_) => None,
+                    None => Some(crate::magnifier::Magnifier::new(self.screen_size / 2.0)),
+                };
+            }
             ToolbarAction::CycleBackground => {
                 let page = &mut self.pages[self.current_page];
                 let (bg, grid) = board::next_preset((page.background, page.grid));
@@ -514,6 +538,35 @@ impl InputHandler {
             if protractor.is_on_body(position) && protractor.distance_to_edge(position) > crate::protractor::EDGE_SNAP_DISTANCE {
                 let grab_offset = position - protractor.center;
                 self.sessions.insert(id, PointerSession { role: PointerRole::ProtractorMove { grab_offset }, start_pos: position, start_time: now });
+                return;
+            }
+        }
+
+        // Same handle/body-grab priority for the spotlight — like the
+        // drafting overlays above (and unlike the calculator/stopwatch/
+        // dice panels), everything outside its handle/bright window still
+        // falls through to drawing/erasing below.
+        if let Some(spotlight) = &self.spotlight {
+            if spotlight.is_on_handle(position) {
+                self.sessions.insert(id, PointerSession { role: PointerRole::SpotlightResize, start_pos: position, start_time: now });
+                return;
+            }
+            if spotlight.is_on_body(position) {
+                let grab_offset = position - spotlight.center;
+                self.sessions.insert(id, PointerSession { role: PointerRole::SpotlightMove { grab_offset }, start_pos: position, start_time: now });
+                return;
+            }
+        }
+
+        // Same for the magnifier.
+        if let Some(magnifier) = &self.magnifier {
+            if magnifier.is_on_handle(position) {
+                self.sessions.insert(id, PointerSession { role: PointerRole::MagnifierResize, start_pos: position, start_time: now });
+                return;
+            }
+            if magnifier.is_on_body(position) {
+                let grab_offset = position - magnifier.center;
+                self.sessions.insert(id, PointerSession { role: PointerRole::MagnifierMove { grab_offset }, start_pos: position, start_time: now });
                 return;
             }
         }
@@ -672,6 +725,28 @@ impl InputHandler {
                 let grab_offset = *grab_offset;
                 if let Some(dice) = &mut self.dice {
                     dice.drag_to(position, grab_offset);
+                }
+            }
+            PointerRole::SpotlightResize => {
+                if let Some(spotlight) = &mut self.spotlight {
+                    spotlight.resize_to(position);
+                }
+            }
+            PointerRole::SpotlightMove { grab_offset } => {
+                let grab_offset = *grab_offset;
+                if let Some(spotlight) = &mut self.spotlight {
+                    spotlight.drag_to(position, grab_offset);
+                }
+            }
+            PointerRole::MagnifierResize => {
+                if let Some(magnifier) = &mut self.magnifier {
+                    magnifier.resize_to(position);
+                }
+            }
+            PointerRole::MagnifierMove { grab_offset } => {
+                let grab_offset = *grab_offset;
+                if let Some(magnifier) = &mut self.magnifier {
+                    magnifier.drag_to(position, grab_offset);
                 }
             }
             PointerRole::Toolbar
@@ -923,6 +998,12 @@ impl InputHandler {
         if let Some(protractor) = &self.protractor {
             protractor.render(&mut normal_v, &mut normal_i);
         }
+        if let Some(magnifier) = &self.magnifier {
+            magnifier.render(page, self.view_offset, now, &mut normal_v, &mut normal_i);
+        }
+        if let Some(spotlight) = &self.spotlight {
+            spotlight.render(self.screen_size, &mut normal_v, &mut normal_i);
+        }
 
         let toolbar_state = ToolbarState {
             active_tool: self.active_tool,
@@ -940,6 +1021,8 @@ impl InputHandler {
             calculator_visible: self.calculator.is_some(),
             stopwatch_visible: self.stopwatch.is_some(),
             dice_visible: self.dice.is_some(),
+            spotlight_visible: self.spotlight.is_some(),
+            magnifier_visible: self.magnifier.is_some(),
         };
         self.toolbar.render(&toolbar_state, &mut normal_v, &mut normal_i);
 
