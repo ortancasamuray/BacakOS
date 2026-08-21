@@ -4,11 +4,13 @@
 mod app;
 mod board;
 mod brush;
+mod digits;
 mod input_handler;
 mod palm;
 mod pdf;
 mod prediction;
 mod renderer;
+mod ruler;
 mod stroke;
 mod toolbar;
 mod ui;
