@@ -9,13 +9,16 @@
 //! or two highlighter strokes crossing) never accumulates past one layer's
 //! opacity, so the marked text underneath never gets progressively darker.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
+use glam::Vec2;
 use wgpu::util::DeviceExt;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
+use crate::board::PdfImage;
 use crate::stroke::Vertex;
 
 #[repr(C)]
@@ -23,6 +26,25 @@ use crate::stroke::Vertex;
 struct Uniforms {
     screen_size: [f32; 2],
     _padding: [f32; 2],
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+struct TexVertex {
+    position: [f32; 2],
+    uv: [f32; 2],
+}
+
+impl TexVertex {
+    const ATTRIBS: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2];
+
+    fn layout() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<TexVertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &Self::ATTRIBS,
+        }
+    }
 }
 
 /// Growth factor applied when a dynamic buffer needs to be reallocated, to
@@ -119,12 +141,21 @@ pub struct Renderer {
     config: wgpu::SurfaceConfiguration,
     normal_pipeline: wgpu::RenderPipeline,
     highlighter_pipeline: wgpu::RenderPipeline,
+    page_pipeline: wgpu::RenderPipeline,
 
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
 
     normal_batch: Batch,
     highlighter_batch: Batch,
+
+    page_texture_bgl: wgpu::BindGroupLayout,
+    page_sampler: wgpu::Sampler,
+    /// One GPU texture per distinct PDF page seen so far, keyed by
+    /// `PdfImage::id` — paging back and forth never re-uploads.
+    page_textures: HashMap<u64, (wgpu::Texture, wgpu::BindGroup)>,
+    page_quad_vertex: wgpu::Buffer,
+    page_quad_index: wgpu::Buffer,
 }
 
 impl Renderer {
@@ -280,6 +311,76 @@ impl Renderer {
         let normal_batch = Batch::new(&device, "tahta_normal_batch");
         let highlighter_batch = Batch::new(&device, "tahta_highlighter_batch");
 
+        let page_texture_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("tahta_page_texture_bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+
+        let page_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("tahta_page_pipeline_layout"),
+            bind_group_layouts: &[&uniform_bind_group_layout, &page_texture_bgl],
+            push_constant_ranges: &[],
+        });
+
+        let page_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("tahta_page_pipeline"),
+            layout: Some(&page_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_tex",
+                buffers: &[TexVertex::layout()],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_tex",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive,
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        });
+
+        let page_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("tahta_page_sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
+        let page_quad_vertex = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("tahta_page_quad_vertex"),
+            size: 4 * std::mem::size_of::<TexVertex>() as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let page_quad_index = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("tahta_page_quad_index"),
+            contents: bytemuck::cast_slice(&[0u32, 1, 2, 2, 1, 3]),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+
         Self {
             surface,
             device,
@@ -287,11 +388,75 @@ impl Renderer {
             config,
             normal_pipeline,
             highlighter_pipeline,
+            page_pipeline,
             uniform_buffer,
             uniform_bind_group,
             normal_batch,
             highlighter_batch,
+            page_texture_bgl,
+            page_sampler,
+            page_textures: HashMap::new(),
+            page_quad_vertex,
+            page_quad_index,
         }
+    }
+
+    /// Uploads `image` to the GPU the first time it's seen; subsequent
+    /// calls with the same `PdfImage::id` reuse the cached texture.
+    fn ensure_page_texture(&mut self, image: &PdfImage) -> &wgpu::BindGroup {
+        if !self.page_textures.contains_key(&image.id) {
+            let size = wgpu::Extent3d { width: image.width, height: image.height, depth_or_array_layers: 1 };
+            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("tahta_page_texture"),
+                size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            self.queue.write_texture(
+                wgpu::ImageCopyTexture {
+                    texture: &texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &image.rgba,
+                wgpu::ImageDataLayout {
+                    offset: 0,
+                    bytes_per_row: Some(4 * image.width),
+                    rows_per_image: Some(image.height),
+                },
+                size,
+            );
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("tahta_page_bind_group"),
+                layout: &self.page_texture_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.page_sampler) },
+                ],
+            });
+            self.page_textures.insert(image.id, (texture, bind_group));
+        }
+        &self.page_textures[&image.id].1
+    }
+
+    /// Largest centered rect of `image`'s aspect ratio that fits within
+    /// `screen_size` (letterboxed), in screen-space pixels.
+    fn letterbox_rect(image: &PdfImage, screen_size: Vec2) -> (Vec2, Vec2) {
+        let image_aspect = image.width as f32 / image.height as f32;
+        let screen_aspect = screen_size.x / screen_size.y;
+        let size = if image_aspect > screen_aspect {
+            Vec2::new(screen_size.x, screen_size.x / image_aspect)
+        } else {
+            Vec2::new(screen_size.y * image_aspect, screen_size.y)
+        };
+        let top_left = (screen_size - size) / 2.0;
+        (top_left, size)
     }
 
     pub fn resize(&mut self, new_size: PhysicalSize<u32>) {
@@ -311,6 +476,7 @@ impl Renderer {
         &mut self,
         normal: (&[Vertex], &[u32]),
         highlighter: (&[Vertex], &[u32]),
+        page_image: Option<&PdfImage>,
     ) -> Result<(), wgpu::SurfaceError> {
         let output = self.surface.get_current_texture()?;
         let view = output
@@ -328,6 +494,19 @@ impl Renderer {
 
         self.normal_batch.upload(&self.device, &self.queue, normal.0, normal.1);
         self.highlighter_batch.upload(&self.device, &self.queue, highlighter.0, highlighter.1);
+
+        if let Some(image) = page_image {
+            self.ensure_page_texture(image);
+            let screen_size = Vec2::new(self.config.width as f32, self.config.height as f32);
+            let (top_left, size) = Self::letterbox_rect(image, screen_size);
+            let verts = [
+                TexVertex { position: [top_left.x, top_left.y], uv: [0.0, 0.0] },
+                TexVertex { position: [top_left.x, top_left.y + size.y], uv: [0.0, 1.0] },
+                TexVertex { position: [top_left.x + size.x, top_left.y], uv: [1.0, 0.0] },
+                TexVertex { position: [top_left.x + size.x, top_left.y + size.y], uv: [1.0, 1.0] },
+            ];
+            self.queue.write_buffer(&self.page_quad_vertex, 0, bytemuck::cast_slice(&verts));
+        }
 
         let mut encoder = self
             .device
@@ -356,7 +535,18 @@ impl Renderer {
                 occlusion_query_set: None,
             });
 
-            // Highlighter first (Max-blended) so it sits "under" — visually
+            // Page image first (if any) so ink/UI drawn after it sits on top.
+            if let Some(image) = page_image {
+                let bind_group = &self.page_textures[&image.id].1;
+                pass.set_pipeline(&self.page_pipeline);
+                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_bind_group(1, bind_group, &[]);
+                pass.set_vertex_buffer(0, self.page_quad_vertex.slice(..));
+                pass.set_index_buffer(self.page_quad_index.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..6, 0, 0..1);
+            }
+
+            // Highlighter next (Max-blended) so it sits "under" — visually
             // behind — freshly drawn ink and UI chrome painted after it.
             self.highlighter_batch.draw(&mut pass, &self.highlighter_pipeline, &self.uniform_bind_group, highlighter.1.len() as u32);
             self.normal_batch.draw(&mut pass, &self.normal_pipeline, &self.uniform_bind_group, normal.1.len() as u32);
