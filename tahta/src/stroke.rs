@@ -384,6 +384,23 @@ fn push_dot(
     ]);
 }
 
+/// A single filled triangle in screen-space, for drafting-tool overlays
+/// like the set-square ("gönye").
+pub fn push_triangle(
+    a: Vec2,
+    b: Vec2,
+    c: Vec2,
+    color: [f32; 4],
+    out_vertices: &mut Vec<Vertex>,
+    out_indices: &mut Vec<u32>,
+) {
+    let base = out_vertices.len() as u32;
+    out_vertices.push(Vertex { position: a.into(), color });
+    out_vertices.push(Vertex { position: b.into(), color });
+    out_vertices.push(Vertex { position: c.into(), color });
+    out_indices.extend_from_slice(&[base, base + 1, base + 2]);
+}
+
 /// Axis-aligned filled rectangle in screen-space pixels, for UI chrome
 /// (toolbar buttons, dividers) that shares the same render pass as strokes.
 pub fn push_rect(

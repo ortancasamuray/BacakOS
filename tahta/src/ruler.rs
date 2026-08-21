@@ -7,6 +7,7 @@
 use glam::Vec2;
 
 use crate::digits::push_number;
+use crate::geom::distance_to_segment;
 use crate::stroke::{push_circle, push_line, Vertex};
 
 const LENGTH: f32 = 640.0;
@@ -141,18 +142,4 @@ impl Ruler {
         let label_pos = self.center + Vec2::new(-14.0, -THICKNESS / 2.0 - 26.0);
         push_number(&label, label_pos, Vec2::new(10.0, 16.0), 2.5, COLOR_EDGE, out_vertices, out_indices);
     }
-}
-
-fn distance_to_segment(p: Vec2, a: Vec2, b: Vec2) -> f32 {
-    p.distance(project_onto_segment(p, a, b))
-}
-
-/// Perpendicular projection of `p` onto segment `a..b`, clamped to the
-/// segment's ends. Public so `input_handler` can re-snap a Pen stroke's
-/// points to a ruler edge on every move, not just at touch-down.
-pub fn project_onto_segment(p: Vec2, a: Vec2, b: Vec2) -> Vec2 {
-    let ab = b - a;
-    let len_sq = ab.length_squared().max(1e-6);
-    let t = ((p - a).dot(ab) / len_sq).clamp(0.0, 1.0);
-    a + ab * t
 }
