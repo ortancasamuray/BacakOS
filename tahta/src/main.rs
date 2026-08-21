@@ -2,6 +2,7 @@
 //! interactive flat panels.
 
 mod app;
+mod board;
 mod brush;
 mod input_handler;
 mod palm;
