@@ -103,6 +103,10 @@ enum PointerRole {
     MagnifierResize,
     /// Dragging the magnifier lens to reposition it.
     MagnifierMove { grab_offset: Vec2 },
+    /// Dragging the text box panel by its header.
+    TextBoxMove { grab_offset: Vec2 },
+    /// Touch landed on a text box key; already applied on touch-down.
+    TextBoxPress,
     /// Touch landed on the toolbar; consumed, never reaches the canvas.
     Toolbar,
     /// Flagged by the palm-rejection heuristic, or consumed by a
@@ -138,6 +142,7 @@ pub struct InputHandler {
     dice: Option<crate::dice::Dice>,
     spotlight: Option<crate::spotlight::Spotlight>,
     magnifier: Option<crate::magnifier::Magnifier>,
+    textbox: Option<crate::textbox::TextBox>,
 
     zone_enabled: bool,
     zone_pens: [PenSettings; 2],
@@ -172,6 +177,7 @@ impl InputHandler {
             dice: None,
             spotlight: None,
             magnifier: None,
+            textbox: None,
             zone_enabled: false,
             zone_pens: [
                 PenSettings::ballpoint([0.92, 0.92, 0.95, 1.0]),
@@ -387,6 +393,12 @@ impl InputHandler {
                     None => Some(crate::magnifier::Magnifier::new(self.screen_size / 2.0)),
                 };
             }
+            ToolbarAction::ToggleTextBox => {
+                self.textbox = match self.textbox {
+                    Some(_) => None,
+                    None => Some(crate::textbox::TextBox::new(self.screen_size / 2.0 - Vec2::new(310.0, 240.0))),
+                };
+            }
             ToolbarAction::CycleBackground => {
                 let page = &mut self.pages[self.current_page];
                 let (bg, grid) = board::next_preset((page.background, page.grid));
@@ -496,6 +508,20 @@ impl InputHandler {
             if dice.contains(position) {
                 dice.press_at(position, now);
                 self.sessions.insert(id, PointerSession { role: PointerRole::DicePress, start_pos: position, start_time: now });
+                return;
+            }
+        }
+
+        // Same UI-panel priority for the text box.
+        if let Some(textbox) = &mut self.textbox {
+            if textbox.is_on_header(position) {
+                let grab_offset = position - textbox.position;
+                self.sessions.insert(id, PointerSession { role: PointerRole::TextBoxMove { grab_offset }, start_pos: position, start_time: now });
+                return;
+            }
+            if textbox.contains(position) {
+                textbox.press_at(position);
+                self.sessions.insert(id, PointerSession { role: PointerRole::TextBoxPress, start_pos: position, start_time: now });
                 return;
             }
         }
@@ -749,11 +775,18 @@ impl InputHandler {
                     magnifier.drag_to(position, grab_offset);
                 }
             }
+            PointerRole::TextBoxMove { grab_offset } => {
+                let grab_offset = *grab_offset;
+                if let Some(textbox) = &mut self.textbox {
+                    textbox.drag_to(position, grab_offset);
+                }
+            }
             PointerRole::Toolbar
             | PointerRole::Palm
             | PointerRole::CalculatorPress
             | PointerRole::StopwatchPress
-            | PointerRole::DicePress => {}
+            | PointerRole::DicePress
+            | PointerRole::TextBoxPress => {}
         }
         if do_erase {
             self.erase_at(position, self.eraser_radius);
@@ -1023,6 +1056,7 @@ impl InputHandler {
             dice_visible: self.dice.is_some(),
             spotlight_visible: self.spotlight.is_some(),
             magnifier_visible: self.magnifier.is_some(),
+            textbox_visible: self.textbox.is_some(),
         };
         self.toolbar.render(&toolbar_state, &mut normal_v, &mut normal_i);
 
@@ -1034,6 +1068,9 @@ impl InputHandler {
         }
         if let Some(dice) = &self.dice {
             dice.render(&mut normal_v, &mut normal_i);
+        }
+        if let Some(textbox) = &self.textbox {
+            textbox.render(&mut normal_v, &mut normal_i);
         }
 
         if let Some(menu) = &self.radial_menu {

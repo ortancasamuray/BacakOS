@@ -58,6 +58,8 @@ pub enum ToolbarAction {
     ToggleSpotlight,
     /// Shows/hides the draggable, resizable magnifier lens.
     ToggleMagnifier,
+    /// Shows/hides the draggable text box panel (on-screen keyboard + live text).
+    ToggleTextBox,
     /// Steps through the curated background+grid presets.
     CycleBackground,
     PrevPage,
@@ -84,6 +86,7 @@ pub struct ToolbarState {
     pub dice_visible: bool,
     pub spotlight_visible: bool,
     pub magnifier_visible: bool,
+    pub textbox_visible: bool,
 }
 
 // Scaled down toward the dock's ~36px icon / ~10px gap proportions
@@ -102,7 +105,7 @@ const COLOR_BUTTON_ACTIVE: [f32; 4] = [0.23, 0.51, 0.96, 1.0]; // accent blue
 const COLOR_GLYPH: [f32; 4] = [0.95, 0.95, 0.97, 1.0];
 const COLOR_SEPARATOR: [f32; 4] = [1.0, 1.0, 1.0, 0.10];
 
-const BUTTONS: [ToolbarAction; 20] = [
+const BUTTONS: [ToolbarAction; 21] = [
     ToolbarAction::SelectTool(Tool::Pen),
     ToolbarAction::SelectTool(Tool::Hand),
     ToolbarAction::SelectTool(Tool::Eraser),
@@ -115,6 +118,7 @@ const BUTTONS: [ToolbarAction; 20] = [
     ToolbarAction::ToggleDice,
     ToolbarAction::ToggleSpotlight,
     ToolbarAction::ToggleMagnifier,
+    ToolbarAction::ToggleTextBox,
     ToolbarAction::CycleBrush,
     ToolbarAction::CycleColor,
     ToolbarAction::Undo,
@@ -126,9 +130,9 @@ const BUTTONS: [ToolbarAction; 20] = [
 ];
 
 /// Index right before which a thin separator is drawn, to visually group
-/// tool-select (0-3) / drafting+widget tools (4-11) / brush+color (12-13) /
-/// actions (14-16).
-const SEPARATOR_BEFORE: [usize; 4] = [4, 12, 14, 17];
+/// tool-select (0-3) / drafting+widget tools (4-12) / brush+color (13-14) /
+/// actions (15-17).
+const SEPARATOR_BEFORE: [usize; 4] = [4, 13, 15, 18];
 
 /// Bottom-center floating toolbar. Screen-space, never affected by canvas
 /// pan/zoom, recomputed each frame from the current window size.
@@ -227,6 +231,7 @@ fn is_active(action: ToolbarAction, state: &ToolbarState) -> bool {
         ToolbarAction::ToggleDice => state.dice_visible,
         ToolbarAction::ToggleSpotlight => state.spotlight_visible,
         ToolbarAction::ToggleMagnifier => state.magnifier_visible,
+        ToolbarAction::ToggleTextBox => state.textbox_visible,
         _ => false,
     }
 }
@@ -425,6 +430,12 @@ fn draw_glyph(
                 out_vertices,
                 out_indices,
             );
+        }
+        ToolbarAction::ToggleTextBox => {
+            // A bold "A" — the universal text-tool glyph.
+            push_line(center + Vec2::new(0.0, -r), center + Vec2::new(-r * 0.8, r), 3.0, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(center + Vec2::new(0.0, -r), center + Vec2::new(r * 0.8, r), 3.0, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(center + Vec2::new(-r * 0.4, r * 0.15), center + Vec2::new(r * 0.4, r * 0.15), 2.5, COLOR_GLYPH, out_vertices, out_indices);
         }
         ToolbarAction::CycleBackground => {
             push_rect(center - Vec2::splat(r), Vec2::splat(r * 2.0), state.background.color(), out_vertices, out_indices);
