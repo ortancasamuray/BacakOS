@@ -79,15 +79,21 @@ impl App {
         self.input.key_input(event, now);
     }
 
+    pub fn load_pdf(&mut self, path: &str) -> anyhow::Result<()> {
+        self.input.load_pdf(path)?;
+        self.window.request_redraw();
+        Ok(())
+    }
+
     pub fn render(&mut self) {
         let now = self.now_secs();
         self.input.tick(now);
 
-        let (normal_v, normal_i, highlight_v, highlight_i) = self.input.collect_geometry(now);
+        let (normal_v, normal_i, highlight_v, highlight_i, page_image) = self.input.collect_geometry(now);
 
         match self
             .renderer
-            .render((&normal_v, &normal_i), (&highlight_v, &highlight_i))
+            .render((&normal_v, &normal_i), (&highlight_v, &highlight_i), page_image.as_deref())
         {
             Ok(()) => {}
             Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {

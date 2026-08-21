@@ -6,6 +6,7 @@ mod board;
 mod brush;
 mod input_handler;
 mod palm;
+mod pdf;
 mod prediction;
 mod renderer;
 mod stroke;
@@ -46,6 +47,15 @@ fn main() {
 
     let renderer = pollster::block_on(Renderer::new(window.clone()));
     let mut app = App::new(renderer, window.clone());
+
+    // Opened "with" tahta from the file manager (Exec=tahta %f), or run
+    // directly from a terminal with a path — either way, load it as a
+    // fresh set of annotatable pages.
+    if let Some(path) = std::env::args().nth(1) {
+        if let Err(e) = app.load_pdf(&path) {
+            log::error!("PDF açılamadı ({path}): {e:#}");
+        }
+    }
 
     event_loop
         .run(move |event, elwt| {
