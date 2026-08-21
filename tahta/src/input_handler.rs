@@ -10,6 +10,7 @@ use glam::Vec2;
 use winit::event::KeyEvent;
 use winit::keyboard::{Key, NamedKey};
 
+use crate::board::{self, Page};
 use crate::brush::{next_palette_color, BrushType, PenSettings};
 use crate::palm;
 use crate::prediction::{TouchPredictor, TouchSample};
@@ -21,7 +22,7 @@ use crate::ui::{RadialAction, RadialMenu};
 /// latency. 10-25ms covers one to a few frames at 60-120Hz.
 const LOOKAHEAD_MS: f32 = 16.0;
 
-const ERASER_RADIUS: f32 = 24.0;
+const DEFAULT_ERASER_RADIUS: f32 = 24.0;
 /// Best-effort "palm eraser": since this input stack can't measure contact
 /// width (see `palm` module docs), a detected palm cluster erases a
 /// generous radius around itself rather than just suppressing ink — an
@@ -74,13 +75,15 @@ struct PointerSession {
 }
 
 pub struct InputHandler {
-    strokes: Vec<Stroke>,
+    pages: Vec<Page>,
+    current_page: usize,
     sessions: HashMap<u64, PointerSession>,
     last_mouse_pos: Vec2,
 
     active_tool: Tool,
     active_pen: PenSettings,
     eraser_mode: EraserMode,
+    eraser_radius: f32,
     view_offset: Vec2,
     eraser_cursor: Option<Vec2>,
 
@@ -98,11 +101,13 @@ pub struct InputHandler {
 impl InputHandler {
     pub fn new(screen_size: Vec2) -> Self {
         Self {
-            strokes: Vec::new(),
+            pages: vec![Page::new()],
+            current_page: 0,
             sessions: HashMap::new(),
             last_mouse_pos: Vec2::ZERO,
             active_tool: Tool::Pen,
             eraser_mode: EraserMode::Area,
+            eraser_radius: DEFAULT_ERASER_RADIUS,
             active_pen: PenSettings::ballpoint([0.92, 0.92, 0.95, 1.0]),
             view_offset: Vec2::ZERO,
             eraser_cursor: None,
@@ -159,23 +164,37 @@ impl InputHandler {
     /// Call once per frame before rendering: prunes expired LaserPointer
     /// points so the fade keeps animating even without new input.
     pub fn tick(&mut self, now: f64) {
-        for stroke in &mut self.strokes {
+        for stroke in &mut self.pages[self.current_page].strokes {
             if stroke.brush_type == BrushType::LaserPointer {
                 stroke.prune_expired(now);
             }
         }
     }
 
-    /// Looks for an already-active Pen-drawing touch close enough in time
-    /// and space to `position`/`now` to treat this new touch as the second
-    /// half of a two-finger tap. Returns its session id.
+    /// Looks for an already-active Pen/Eraser touch close enough in time and
+    /// space to `position`/`now` to treat this new touch as the second half
+    /// of a two-finger tap. Returns its session id.
     fn find_two_finger_tap_partner(&self, position: Vec2, now: f64) -> Option<u64> {
         self.sessions.iter().find_map(|(&id, s)| {
-            let is_drawing = matches!(s.role, PointerRole::Drawing { .. });
+            let is_interactive = matches!(s.role, PointerRole::Drawing { .. } | PointerRole::Erasing);
             let close_in_time = (now - s.start_time).abs() <= TWO_FINGER_TAP_WINDOW_SECS;
             let close_in_space = s.start_pos.distance(position) <= TWO_FINGER_TAP_DISTANCE;
-            (is_drawing && close_in_time && close_in_space).then_some(id)
+            (is_interactive && close_in_time && close_in_space).then_some(id)
         })
+    }
+
+    /// Neutralizes a touch that turned out to be half of a gesture rather
+    /// than a real stroke/erase: tombstones any stroke it started, marks it
+    /// inert until lift.
+    fn cancel_touch_as_gesture(&mut self, id: u64) {
+        if let Some(session) = self.sessions.get_mut(&id) {
+            if let PointerRole::Drawing { stroke_index, .. } = session.role {
+                if let Some(stroke) = self.pages[self.current_page].strokes.get_mut(stroke_index) {
+                    stroke.clear();
+                }
+            }
+            session.role = PointerRole::Palm;
+        }
     }
 
     fn open_radial_menu_at(&mut self, at: Vec2) {
@@ -210,21 +229,45 @@ impl InputHandler {
                 self.set_color(next_color);
             }
             ToolbarAction::Undo => {
-                self.strokes.pop();
+                self.pages[self.current_page].strokes.pop();
             }
-            ToolbarAction::Clear => self.strokes.clear(),
+            ToolbarAction::Clear => self.pages[self.current_page].strokes.clear(),
             ToolbarAction::ToggleZone => self.zone_enabled = !self.zone_enabled,
+            ToolbarAction::CycleBackground => {
+                let page = &mut self.pages[self.current_page];
+                let (bg, grid) = board::next_preset((page.background, page.grid));
+                page.background = bg;
+                page.grid = grid;
+            }
+            ToolbarAction::PrevPage => {
+                self.current_page = self.current_page.saturating_sub(1);
+            }
+            ToolbarAction::NextPage => {
+                self.current_page += 1;
+                if self.current_page >= self.pages.len() {
+                    self.pages.push(Page::new());
+                }
+            }
         }
     }
 
     fn apply_radial_action(&mut self, action: RadialAction, zone: Zone) {
         match action {
             RadialAction::Color(c) => {
-                let brush = self.pen_for(zone).brush_type;
-                *self.pen_for_mut(zone) = PenSettings::for_brush(brush, c);
+                if self.active_tool == Tool::Pen {
+                    let brush = self.pen_for(zone).brush_type;
+                    *self.pen_for_mut(zone) = PenSettings::for_brush(brush, c);
+                }
             }
             RadialAction::Width(w) => {
-                self.pen_for_mut(zone).base_width = w;
+                // Reused for eraser sizing too — the same 3 preset widths
+                // scaled up read naturally as small/medium/large eraser
+                // radii, without needing a separate size picker.
+                if self.active_tool == Tool::Eraser {
+                    self.eraser_radius = w * 3.0;
+                } else {
+                    self.pen_for_mut(zone).base_width = w;
+                }
             }
             RadialAction::Eraser => {
                 self.active_tool = Tool::Eraser;
@@ -260,30 +303,31 @@ impl InputHandler {
 
         let zone = self.zone_of(position);
 
+        // Two-finger tap (Pen or Eraser context) opens the radial menu —
+        // checked before tool-specific routing since it applies to both.
+        if matches!(self.active_tool, Tool::Pen | Tool::Eraser) {
+            if let Some(partner_id) = self.find_two_finger_tap_partner(position, now) {
+                let partner_pos = self.sessions.get(&partner_id).map(|s| s.start_pos).unwrap_or(position);
+                self.cancel_touch_as_gesture(partner_id);
+                self.open_radial_menu_at((position + partner_pos) / 2.0);
+                self.sessions.insert(id, PointerSession { role: PointerRole::Palm, start_pos: position, start_time: now });
+                return;
+            }
+        }
+
         let role = match self.active_tool {
             Tool::Pen => {
-                if let Some(partner_id) = self.find_two_finger_tap_partner(position, now) {
-                    let partner_pos = self.sessions.get(&partner_id).map(|s| s.start_pos).unwrap_or(position);
-                    if let Some(session) = self.sessions.get_mut(&partner_id) {
-                        if let PointerRole::Drawing { stroke_index, .. } = session.role {
-                            if let Some(stroke) = self.strokes.get_mut(stroke_index) {
-                                stroke.clear();
-                            }
-                        }
-                        session.role = PointerRole::Palm;
-                    }
-                    self.open_radial_menu_at((position + partner_pos) / 2.0);
-                    PointerRole::Palm
-                } else if palm::is_probable_palm(position, now, self.active_pen_touch_starts()) {
+                if palm::is_probable_palm(position, now, self.active_pen_touch_starts()) {
                     self.demote_cluster_to_palm(position);
                     self.erase_area(position, PALM_ERASE_RADIUS);
                     PointerRole::Palm
                 } else {
                     let pen = self.pen_for(zone).clone();
-                    let stroke_index = self.strokes.len();
+                    let page = &mut self.pages[self.current_page];
+                    let stroke_index = page.strokes.len();
                     let mut stroke = Stroke::new(pen.color, pen.base_width, pen.brush_type);
                     stroke.push_point(position, now);
-                    self.strokes.push(stroke);
+                    page.strokes.push(stroke);
 
                     let mut predictor = TouchPredictor::new(LOOKAHEAD_MS);
                     predictor.push_sample(TouchSample { position, timestamp: now });
@@ -293,7 +337,7 @@ impl InputHandler {
             }
             Tool::Hand => PointerRole::Panning { last_pos: position },
             Tool::Eraser => {
-                self.erase_at(position, ERASER_RADIUS);
+                self.erase_at(position, self.eraser_radius);
                 self.eraser_cursor = Some(position);
                 PointerRole::Erasing
             }
@@ -307,12 +351,13 @@ impl InputHandler {
     /// very-fresh nearby stroke — safer to under-draw than to keep a
     /// scribble from what was actually part of the same palm contact.
     fn demote_cluster_to_palm(&mut self, position: Vec2) {
+        let strokes = &mut self.pages[self.current_page].strokes;
         for session in self.sessions.values_mut() {
             if let PointerRole::Drawing { stroke_index, .. } = session.role {
                 if session.start_pos.distance(position) <= PALM_CLUSTER_DEMOTE_RADIUS
-                    && self.strokes[stroke_index].points.len() <= 3
+                    && strokes[stroke_index].points.len() <= 3
                 {
-                    self.strokes[stroke_index].clear();
+                    strokes[stroke_index].clear();
                     session.role = PointerRole::Palm;
                 }
             }
@@ -326,9 +371,10 @@ impl InputHandler {
             return;
         };
 
+        let mut do_erase = false;
         match &mut session.role {
             PointerRole::Drawing { stroke_index, predictor } => {
-                let Some(stroke) = self.strokes.get_mut(*stroke_index) else {
+                let Some(stroke) = self.pages[self.current_page].strokes.get_mut(*stroke_index) else {
                     session.role = PointerRole::Palm; // stroke was undone from under us
                     return;
                 };
@@ -341,9 +387,12 @@ impl InputHandler {
             }
             PointerRole::Erasing => {
                 self.eraser_cursor = Some(position);
-                self.erase_at(position, ERASER_RADIUS);
+                do_erase = true;
             }
             PointerRole::Toolbar | PointerRole::Palm => {}
+        }
+        if do_erase {
+            self.erase_at(position, self.eraser_radius);
         }
     }
 
@@ -369,20 +418,23 @@ impl InputHandler {
     /// mode, since a resting palm shouldn't be able to wipe out an entire
     /// unrelated stroke it barely grazes.
     fn erase_area(&mut self, position: Vec2, radius: f32) {
+        let view_offset = self.view_offset;
+        let strokes = &mut self.pages[self.current_page].strokes;
         let mut new_strokes = Vec::new();
-        for stroke in &mut self.strokes {
+        for stroke in strokes.iter_mut() {
             if stroke.points.is_empty() {
                 continue;
             }
-            new_strokes.extend(stroke.erase_near(position, radius, self.view_offset));
+            new_strokes.extend(stroke.erase_near(position, radius, view_offset));
         }
-        self.strokes.extend(new_strokes);
+        strokes.extend(new_strokes);
     }
 
     /// Deletes an entire stroke if any part of it falls within `radius`.
     fn erase_object(&mut self, position: Vec2, radius: f32) {
-        for stroke in &mut self.strokes {
-            if !stroke.points.is_empty() && stroke.hit_test(position, radius, self.view_offset) {
+        let view_offset = self.view_offset;
+        for stroke in &mut self.pages[self.current_page].strokes {
+            if !stroke.points.is_empty() && stroke.hit_test(position, radius, view_offset) {
                 stroke.clear();
             }
         }
@@ -432,7 +484,7 @@ impl InputHandler {
                 "3" => self.set_color([0.25, 0.55, 0.95, 1.0]),
                 "4" => self.set_color([0.30, 0.85, 0.35, 1.0]),
                 "5" => self.set_color([0.98, 0.78, 0.15, 1.0]),
-                "c" | "C" => self.strokes.clear(),
+                "c" | "C" => self.pages[self.current_page].strokes.clear(),
                 "p" | "P" => self.active_tool = Tool::Pen,
                 "h" | "H" => self.active_tool = Tool::Hand,
                 "e" | "E" => self.active_tool = Tool::Eraser,
@@ -450,7 +502,7 @@ impl InputHandler {
                 _ => {}
             },
             Key::Named(NamedKey::Backspace) => {
-                self.strokes.pop();
+                self.pages[self.current_page].strokes.pop();
             }
             _ => {}
         }
@@ -492,7 +544,10 @@ impl InputHandler {
         let mut highlight_v = Vec::new();
         let mut highlight_i = Vec::new();
 
-        for (index, stroke) in self.strokes.iter().enumerate() {
+        let page = &self.pages[self.current_page];
+        board::render_background(page, self.screen_size, self.view_offset, &mut normal_v, &mut normal_i);
+
+        for (index, stroke) in page.strokes.iter().enumerate() {
             if stroke.is_empty() {
                 continue;
             }
@@ -527,7 +582,7 @@ impl InputHandler {
         }
 
         if let Some(cursor) = self.eraser_cursor {
-            push_circle(cursor, ERASER_RADIUS, [1.0, 1.0, 1.0, 0.18], 24, &mut normal_v, &mut normal_i);
+            push_circle(cursor, self.eraser_radius, [1.0, 1.0, 1.0, 0.18], 24, &mut normal_v, &mut normal_i);
         }
 
         let toolbar_state = ToolbarState {
@@ -536,6 +591,10 @@ impl InputHandler {
             color: self.active_pen.color,
             zone_enabled: self.zone_enabled,
             eraser_mode: self.eraser_mode,
+            background: page.background,
+            grid: page.grid,
+            page_index: self.current_page,
+            page_count: self.pages.len(),
         };
         self.toolbar.render(&toolbar_state, &mut normal_v, &mut normal_i);
 
