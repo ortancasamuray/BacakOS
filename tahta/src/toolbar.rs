@@ -15,6 +15,9 @@ pub enum Tool {
     Pen,
     Hand,
     Eraser,
+    /// Drag from center outward; releases a perfect circle stroke sized to
+    /// the drag radius — see `input_handler`'s `compass_preview`.
+    Compass,
 }
 
 /// Which erase behavior the Eraser tool currently uses — toggled by
@@ -75,10 +78,11 @@ const COLOR_BUTTON_ACTIVE: [f32; 4] = [0.23, 0.51, 0.96, 1.0]; // accent blue
 const COLOR_GLYPH: [f32; 4] = [0.95, 0.95, 0.97, 1.0];
 const COLOR_SEPARATOR: [f32; 4] = [1.0, 1.0, 1.0, 0.10];
 
-const BUTTONS: [ToolbarAction; 11] = [
+const BUTTONS: [ToolbarAction; 12] = [
     ToolbarAction::SelectTool(Tool::Pen),
     ToolbarAction::SelectTool(Tool::Hand),
     ToolbarAction::SelectTool(Tool::Eraser),
+    ToolbarAction::SelectTool(Tool::Compass),
     ToolbarAction::CycleBrush,
     ToolbarAction::CycleColor,
     ToolbarAction::Undo,
@@ -90,8 +94,8 @@ const BUTTONS: [ToolbarAction; 11] = [
 ];
 
 /// Index right before which a thin separator is drawn, to visually group
-/// tool-select (0-2) / mode (3-4) / destructive-ish actions (5-7).
-const SEPARATOR_BEFORE: [usize; 3] = [3, 5, 8];
+/// tool-select (0-3) / brush+color (4-5) / actions (6-9).
+const SEPARATOR_BEFORE: [usize; 3] = [4, 6, 9];
 
 /// Bottom-center floating toolbar. Screen-space, never affected by canvas
 /// pan/zoom, recomputed each frame from the current window size.
@@ -241,6 +245,17 @@ fn draw_glyph(
                     push_rect(center + Vec2::new(s / 2.0 - t, -s / 2.0), Vec2::new(t, s), outline, out_vertices, out_indices);
                 }
             }
+        }
+        ToolbarAction::SelectTool(Tool::Compass) => {
+            // A drafting compass: two legs meeting at a pivot dot, one leg
+            // tipped with a small point.
+            let pivot = center + Vec2::new(0.0, -r * 0.8);
+            let leg_a_end = center + Vec2::new(-r * 0.7, r * 0.8);
+            let leg_b_end = center + Vec2::new(r * 0.7, r * 0.8);
+            push_line(pivot, leg_a_end, 3.5, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(pivot, leg_b_end, 3.5, COLOR_GLYPH, out_vertices, out_indices);
+            push_circle(pivot, 3.0, COLOR_GLYPH, 10, out_vertices, out_indices);
+            push_circle(leg_a_end, 2.0, COLOR_GLYPH, 8, out_vertices, out_indices);
         }
         ToolbarAction::CycleBrush => draw_brush_glyph(state.brush_type, center, r, out_vertices, out_indices),
         ToolbarAction::CycleColor => {
