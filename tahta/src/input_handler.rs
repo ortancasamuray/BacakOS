@@ -57,7 +57,10 @@ pub enum Zone {
 
 enum PointerRole {
     /// Actively extending a stroke. `stroke_index` indexes `strokes`.
-    Drawing { stroke_index: usize, predictor: TouchPredictor },
+    /// `edge_snap`, when set (touch started near the ruler's edge), is the
+    /// `(a, b)` edge line every point gets projected onto before being
+    /// pushed — see `ruler::Ruler::snap_to_edge`.
+    Drawing { stroke_index: usize, predictor: TouchPredictor, edge_snap: Option<(Vec2, Vec2)> },
     /// Hand tool: drags `view_offset`.
     Panning { last_pos: Vec2 },
     /// Eraser tool: tombstones (clears) any stroke it passes near.
@@ -65,6 +68,10 @@ enum PointerRole {
     /// Compass tool: drag radius previewed live in `compass_preview`,
     /// committed as a circle stroke on release.
     CompassDrag { center: Vec2 },
+    /// Dragging the ruler's rotate handle.
+    RulerRotate,
+    /// Dragging the ruler's body to reposition it.
+    RulerMove { grab_offset: Vec2 },
     /// Touch landed on the toolbar; consumed, never reaches the canvas.
     Toolbar,
     /// Flagged by the palm-rejection heuristic, or consumed by a
@@ -92,6 +99,7 @@ pub struct InputHandler {
     eraser_cursor: Option<Vec2>,
     /// Live (center, radius) while a Compass drag is in progress.
     compass_preview: Option<(Vec2, f32)>,
+    ruler: Option<crate::ruler::Ruler>,
 
     zone_enabled: bool,
     zone_pens: [PenSettings; 2],
@@ -118,6 +126,7 @@ impl InputHandler {
             view_offset: Vec2::ZERO,
             eraser_cursor: None,
             compass_preview: None,
+            ruler: None,
             zone_enabled: false,
             zone_pens: [
                 PenSettings::ballpoint([0.92, 0.92, 0.95, 1.0]),
@@ -254,6 +263,12 @@ impl InputHandler {
             }
             ToolbarAction::Clear => self.pages[self.current_page].strokes.clear(),
             ToolbarAction::ToggleZone => self.zone_enabled = !self.zone_enabled,
+            ToolbarAction::ToggleRuler => {
+                self.ruler = match self.ruler {
+                    Some(_) => None,
+                    None => Some(crate::ruler::Ruler::new(self.screen_size / 2.0)),
+                };
+            }
             ToolbarAction::CycleBackground => {
                 let page = &mut self.pages[self.current_page];
                 let (bg, grid) = board::next_preset((page.background, page.grid));
@@ -322,6 +337,22 @@ impl InputHandler {
             return;
         }
 
+        // Grabbing the ruler's handle (rotate) or body (move) takes
+        // priority over drawing — checked before edge-snap below, since
+        // the handle/body zones and the snap zone don't overlap in
+        // practice but handle/body is the more deliberate gesture.
+        if let Some(ruler) = &self.ruler {
+            if ruler.is_on_handle(position) {
+                self.sessions.insert(id, PointerSession { role: PointerRole::RulerRotate, start_pos: position, start_time: now });
+                return;
+            }
+            if ruler.is_on_body(position) && ruler.distance_to_edge(position) > crate::ruler::EDGE_SNAP_DISTANCE {
+                let grab_offset = position - ruler.center;
+                self.sessions.insert(id, PointerSession { role: PointerRole::RulerMove { grab_offset }, start_pos: position, start_time: now });
+                return;
+            }
+        }
+
         let zone = self.zone_of(position);
 
         // Two-finger tap (Pen or Eraser context) opens the radial menu —
@@ -343,17 +374,27 @@ impl InputHandler {
                     self.erase_area(position, PALM_ERASE_RADIUS);
                     PointerRole::Palm
                 } else {
+                    let edge_snap = self
+                        .ruler
+                        .as_ref()
+                        .filter(|r| r.distance_to_edge(position) <= crate::ruler::EDGE_SNAP_DISTANCE)
+                        .map(|r| r.nearest_edge(position));
+                    let start = match edge_snap {
+                        Some((a, b)) => crate::ruler::project_onto_segment(position, a, b),
+                        None => position,
+                    };
+
                     let pen = self.pen_for(zone).clone();
                     let page = &mut self.pages[self.current_page];
                     let stroke_index = page.strokes.len();
                     let mut stroke = Stroke::new(pen.color, pen.base_width, pen.brush_type);
-                    stroke.push_point(position, now);
+                    stroke.push_point(start, now);
                     page.strokes.push(stroke);
 
                     let mut predictor = TouchPredictor::new(LOOKAHEAD_MS);
-                    predictor.push_sample(TouchSample { position, timestamp: now });
+                    predictor.push_sample(TouchSample { position: start, timestamp: now });
 
-                    PointerRole::Drawing { stroke_index, predictor }
+                    PointerRole::Drawing { stroke_index, predictor, edge_snap }
                 }
             }
             Tool::Hand => PointerRole::Panning { last_pos: position },
@@ -398,13 +439,17 @@ impl InputHandler {
 
         let mut do_erase = false;
         match &mut session.role {
-            PointerRole::Drawing { stroke_index, predictor } => {
+            PointerRole::Drawing { stroke_index, predictor, edge_snap } => {
+                let point = match edge_snap {
+                    Some((a, b)) => crate::ruler::project_onto_segment(position, *a, *b),
+                    None => position,
+                };
                 let Some(stroke) = self.pages[self.current_page].strokes.get_mut(*stroke_index) else {
                     session.role = PointerRole::Palm; // stroke was undone from under us
                     return;
                 };
-                stroke.push_point(position, now);
-                predictor.push_sample(TouchSample { position, timestamp: now });
+                stroke.push_point(point, now);
+                predictor.push_sample(TouchSample { position: point, timestamp: now });
             }
             PointerRole::Panning { last_pos } => {
                 self.view_offset += position - *last_pos;
@@ -416,6 +461,17 @@ impl InputHandler {
             }
             PointerRole::CompassDrag { center } => {
                 self.compass_preview = Some((*center, center.distance(position)));
+            }
+            PointerRole::RulerRotate => {
+                if let Some(ruler) = &mut self.ruler {
+                    ruler.rotate_toward(position);
+                }
+            }
+            PointerRole::RulerMove { grab_offset } => {
+                let grab_offset = *grab_offset;
+                if let Some(ruler) = &mut self.ruler {
+                    ruler.drag_to(position, grab_offset);
+                }
             }
             PointerRole::Toolbar | PointerRole::Palm => {}
         }
@@ -611,7 +667,7 @@ impl InputHandler {
                 .sessions
                 .values()
                 .find_map(|s| match &s.role {
-                    PointerRole::Drawing { stroke_index, predictor } if *stroke_index == index => {
+                    PointerRole::Drawing { stroke_index, predictor, .. } if *stroke_index == index => {
                         Some(predictor.predict())
                     }
                     _ => None,
@@ -653,6 +709,10 @@ impl InputHandler {
             push_circle(center, 3.0, color, 10, &mut normal_v, &mut normal_i);
         }
 
+        if let Some(ruler) = &self.ruler {
+            ruler.render(&mut normal_v, &mut normal_i);
+        }
+
         let toolbar_state = ToolbarState {
             active_tool: self.active_tool,
             brush_type: self.active_pen.brush_type,
@@ -663,6 +723,7 @@ impl InputHandler {
             grid: page.grid,
             page_index: self.current_page,
             page_count: self.pages.len(),
+            ruler_visible: self.ruler.is_some(),
         };
         self.toolbar.render(&toolbar_state, &mut normal_v, &mut normal_i);
 
