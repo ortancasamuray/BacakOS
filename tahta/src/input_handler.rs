@@ -5,6 +5,7 @@
 //! actually do" is decided.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use glam::Vec2;
 use winit::event::KeyEvent;
@@ -126,6 +127,20 @@ impl InputHandler {
     pub fn resize(&mut self, screen_size: Vec2) {
         self.screen_size = screen_size;
         self.toolbar = Toolbar::layout(screen_size);
+    }
+
+    /// Replaces the whole board with one page per page of the PDF at
+    /// `path` — matches how `bacak-belge` opens a fresh document rather
+    /// than merging into whatever was already on the board.
+    pub fn load_pdf(&mut self, path: &str) -> anyhow::Result<()> {
+        let images = crate::pdf::load_pdf_pages(path)?;
+        self.pages = images.into_iter().map(Page::from_pdf_image).collect();
+        if self.pages.is_empty() {
+            self.pages.push(Page::new());
+        }
+        self.current_page = 0;
+        self.view_offset = Vec2::ZERO;
+        Ok(())
     }
 
     fn zone_of(&self, pos: Vec2) -> Zone {
@@ -538,7 +553,7 @@ impl InputHandler {
     pub fn collect_geometry(
         &self,
         now: f64,
-    ) -> (Vec<Vertex>, Vec<u32>, Vec<Vertex>, Vec<u32>) {
+    ) -> (Vec<Vertex>, Vec<u32>, Vec<Vertex>, Vec<u32>, Option<Arc<board::PdfImage>>) {
         let mut normal_v = Vec::new();
         let mut normal_i = Vec::new();
         let mut highlight_v = Vec::new();
@@ -603,6 +618,6 @@ impl InputHandler {
             menu.render(None, &mut normal_v, &mut normal_i);
         }
 
-        (normal_v, normal_i, highlight_v, highlight_i)
+        (normal_v, normal_i, highlight_v, highlight_i, page.pdf_image.clone())
     }
 }

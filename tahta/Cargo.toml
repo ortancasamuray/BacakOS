@@ -18,6 +18,8 @@ bytemuck = { version = "1.16", features = ["derive"] }
 pollster = "0.3"
 log = "0.4"
 env_logger = "0.11"
+mupdf = "0.4"
+anyhow = "1"
 
 [profile.release]
 opt-level = 3
@@ -31,7 +33,7 @@ copyright  = "2026, Bacak Desktop Project"
 section    = "graphics"
 priority   = "optional"
 extended-description = "BacakOS için GPU hızlandırmalı, düşük gecikmeli dijital beyaz tahta uygulaması. Dokunmatik okul tahtaları (Interactive Flat Panels) için tasarlandı."
-depends    = "$auto, libwayland-client0, libwayland-egl1, libxkbcommon0"
+depends    = "$auto, libwayland-client0, libwayland-egl1, libxkbcommon0, libmupdf25.1"
 assets = [
     ["target/release/tahta", "usr/bin/", "755"],
     ["desktop/tahta.desktop", "usr/share/applications/", "644"],
