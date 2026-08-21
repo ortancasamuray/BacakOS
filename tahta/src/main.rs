@@ -13,6 +13,7 @@ mod input_handler;
 mod magnifier;
 mod palm;
 mod pdf;
+mod pdf_export;
 mod prediction;
 mod protractor;
 mod renderer;

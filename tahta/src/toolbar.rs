@@ -64,6 +64,9 @@ pub enum ToolbarAction {
     CycleBackground,
     PrevPage,
     NextPage,
+    /// Writes every page's ink to a multi-page PDF file — a one-shot
+    /// action like Undo/Clear, not a toggle.
+    ExportPdf,
 }
 
 /// What the toolbar needs to know to draw each button's current-state
@@ -113,7 +116,7 @@ const COLOR_BUTTON_ACTIVE: [f32; 4] = [0.23, 0.51, 0.96, 1.0]; // accent blue
 const COLOR_GLYPH: [f32; 4] = [0.95, 0.95, 0.97, 1.0];
 const COLOR_SEPARATOR: [f32; 4] = [1.0, 1.0, 1.0, 0.10];
 
-const BUTTONS: [ToolbarAction; 21] = [
+const BUTTONS: [ToolbarAction; 22] = [
     ToolbarAction::SelectTool(Tool::Pen),
     ToolbarAction::SelectTool(Tool::Hand),
     ToolbarAction::SelectTool(Tool::Eraser),
@@ -133,6 +136,7 @@ const BUTTONS: [ToolbarAction; 21] = [
     ToolbarAction::Clear,
     ToolbarAction::ToggleZone,
     ToolbarAction::CycleBackground,
+    ToolbarAction::ExportPdf,
     ToolbarAction::PrevPage,
     ToolbarAction::NextPage,
 ];
@@ -140,7 +144,7 @@ const BUTTONS: [ToolbarAction; 21] = [
 /// Local (within-row) index right before which a thin separator is drawn.
 /// Row 0 (13 buttons): tool-select (0-3) | drafting+widget tools (4-12).
 const SEPARATOR_BEFORE_ROW0: [usize; 1] = [4];
-/// Row 1 (8 buttons): brush+color (0-1) | undo/clear/zone (2-4) | background+page-nav (5-7).
+/// Row 1 (9 buttons): brush+color (0-1) | undo/clear/zone (2-4) | background+export+page-nav (5-8).
 const SEPARATOR_BEFORE_ROW1: [usize; 2] = [2, 5];
 
 /// Bottom-center floating toolbar. Screen-space, never affected by canvas
@@ -467,6 +471,22 @@ fn draw_glyph(
             push_line(center + Vec2::new(0.0, -r), center + Vec2::new(-r * 0.8, r), 3.0, COLOR_GLYPH, out_vertices, out_indices);
             push_line(center + Vec2::new(0.0, -r), center + Vec2::new(r * 0.8, r), 3.0, COLOR_GLYPH, out_vertices, out_indices);
             push_line(center + Vec2::new(-r * 0.4, r * 0.15), center + Vec2::new(r * 0.4, r * 0.15), 2.5, COLOR_GLYPH, out_vertices, out_indices);
+        }
+        ToolbarAction::ExportPdf => {
+            // A little page outline with a downward export arrow.
+            let w = r * 1.3;
+            let h = r * 1.7;
+            let top_left = center + Vec2::new(-w / 2.0, -h / 2.0 - r * 0.15);
+            let t = 2.0;
+            push_rect(top_left, Vec2::new(w, t), COLOR_GLYPH, out_vertices, out_indices);
+            push_rect(top_left + Vec2::new(0.0, h - t), Vec2::new(w, t), COLOR_GLYPH, out_vertices, out_indices);
+            push_rect(top_left, Vec2::new(t, h), COLOR_GLYPH, out_vertices, out_indices);
+            push_rect(top_left + Vec2::new(w - t, 0.0), Vec2::new(t, h), COLOR_GLYPH, out_vertices, out_indices);
+            let arrow_top = center + Vec2::new(0.0, -r * 0.15);
+            let arrow_bottom = center + Vec2::new(0.0, r * 0.55);
+            push_line(arrow_top, arrow_bottom, 2.5, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(arrow_bottom, arrow_bottom + Vec2::new(-r * 0.3, -r * 0.3), 2.5, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(arrow_bottom, arrow_bottom + Vec2::new(r * 0.3, -r * 0.3), 2.5, COLOR_GLYPH, out_vertices, out_indices);
         }
         ToolbarAction::CycleBackground => {
             push_rect(center - Vec2::splat(r), Vec2::splat(r * 2.0), state.background.color(), out_vertices, out_indices);

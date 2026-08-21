@@ -48,7 +48,7 @@ impl BoardBackground {
     }
 
     /// Grid line color needs to contrast the background, not a fixed tone.
-    fn grid_color(self) -> [f32; 4] {
+    pub fn grid_color(self) -> [f32; 4] {
         match self {
             BoardBackground::White => [0.0, 0.0, 0.0, 0.08],
             _ => [1.0, 1.0, 1.0, 0.10],
@@ -63,7 +63,7 @@ pub enum GridPattern {
     Checkered,
 }
 
-const GRID_SPACING: f32 = 48.0;
+pub const GRID_SPACING: f32 = 48.0;
 
 /// Curated background+grid combinations for the toolbar's single cycle
 /// button — the full cross product (4 backgrounds x 3 patterns) is more
