@@ -44,6 +44,8 @@ pub enum ToolbarAction {
     ToggleZone,
     /// Shows/hides the draggable, rotatable straightedge overlay.
     ToggleRuler,
+    /// Shows/hides the draggable, rotatable set-square overlay.
+    ToggleSetSquare,
     /// Steps through the curated background+grid presets.
     CycleBackground,
     PrevPage,
@@ -63,6 +65,7 @@ pub struct ToolbarState {
     pub page_index: usize,
     pub page_count: usize,
     pub ruler_visible: bool,
+    pub setsquare_visible: bool,
 }
 
 // Scaled down toward the dock's ~36px icon / ~10px gap proportions
@@ -81,12 +84,13 @@ const COLOR_BUTTON_ACTIVE: [f32; 4] = [0.23, 0.51, 0.96, 1.0]; // accent blue
 const COLOR_GLYPH: [f32; 4] = [0.95, 0.95, 0.97, 1.0];
 const COLOR_SEPARATOR: [f32; 4] = [1.0, 1.0, 1.0, 0.10];
 
-const BUTTONS: [ToolbarAction; 13] = [
+const BUTTONS: [ToolbarAction; 14] = [
     ToolbarAction::SelectTool(Tool::Pen),
     ToolbarAction::SelectTool(Tool::Hand),
     ToolbarAction::SelectTool(Tool::Eraser),
     ToolbarAction::SelectTool(Tool::Compass),
     ToolbarAction::ToggleRuler,
+    ToolbarAction::ToggleSetSquare,
     ToolbarAction::CycleBrush,
     ToolbarAction::CycleColor,
     ToolbarAction::Undo,
@@ -98,8 +102,9 @@ const BUTTONS: [ToolbarAction; 13] = [
 ];
 
 /// Index right before which a thin separator is drawn, to visually group
-/// tool-select (0-3) / brush+color (4-5) / actions (6-9).
-const SEPARATOR_BEFORE: [usize; 3] = [5, 7, 10];
+/// tool-select (0-3) / drafting tools (4-5) / brush+color (6-7) / actions
+/// (8-10).
+const SEPARATOR_BEFORE: [usize; 4] = [4, 6, 8, 11];
 
 /// Bottom-center floating toolbar. Screen-space, never affected by canvas
 /// pan/zoom, recomputed each frame from the current window size.
@@ -191,6 +196,7 @@ fn is_active(action: ToolbarAction, state: &ToolbarState) -> bool {
         ToolbarAction::SelectTool(t) => t == state.active_tool,
         ToolbarAction::ToggleZone => state.zone_enabled,
         ToolbarAction::ToggleRuler => state.ruler_visible,
+        ToolbarAction::ToggleSetSquare => state.setsquare_visible,
         _ => false,
     }
 }
@@ -292,6 +298,15 @@ fn draw_glyph(
                 let x = center.x - w / 2.0 + w * (i as f32 + 1.0) / 5.0;
                 push_line(Vec2::new(x, center.y - h / 2.0), Vec2::new(x, center.y), 1.5, tick_color, out_vertices, out_indices);
             }
+        }
+        ToolbarAction::ToggleSetSquare => {
+            // A little right triangle.
+            let a = center + Vec2::new(-r, r);
+            let b = center + Vec2::new(r, r);
+            let c = center + Vec2::new(-r, -r);
+            push_line(a, b, 3.0, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(a, c, 3.0, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(b, c, 3.0, COLOR_GLYPH, out_vertices, out_indices);
         }
         ToolbarAction::CycleBackground => {
             push_rect(center - Vec2::splat(r), Vec2::splat(r * 2.0), state.background.color(), out_vertices, out_indices);

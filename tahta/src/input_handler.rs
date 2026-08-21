@@ -57,9 +57,10 @@ pub enum Zone {
 
 enum PointerRole {
     /// Actively extending a stroke. `stroke_index` indexes `strokes`.
-    /// `edge_snap`, when set (touch started near the ruler's edge), is the
-    /// `(a, b)` edge line every point gets projected onto before being
-    /// pushed — see `ruler::Ruler::snap_to_edge`.
+    /// `edge_snap`, when set (touch started near a drafting tool's edge),
+    /// is the `(a, b)` edge line every point gets projected onto before
+    /// being pushed — see `ruler::Ruler::nearest_edge` /
+    /// `setsquare::SetSquare::nearest_edge`.
     Drawing { stroke_index: usize, predictor: TouchPredictor, edge_snap: Option<(Vec2, Vec2)> },
     /// Hand tool: drags `view_offset`.
     Panning { last_pos: Vec2 },
@@ -72,6 +73,10 @@ enum PointerRole {
     RulerRotate,
     /// Dragging the ruler's body to reposition it.
     RulerMove { grab_offset: Vec2 },
+    /// Dragging the set-square's rotate handle.
+    SetSquareRotate,
+    /// Dragging the set-square's body to reposition it.
+    SetSquareMove { grab_offset: Vec2 },
     /// Touch landed on the toolbar; consumed, never reaches the canvas.
     Toolbar,
     /// Flagged by the palm-rejection heuristic, or consumed by a
@@ -100,6 +105,7 @@ pub struct InputHandler {
     /// Live (center, radius) while a Compass drag is in progress.
     compass_preview: Option<(Vec2, f32)>,
     ruler: Option<crate::ruler::Ruler>,
+    setsquare: Option<crate::setsquare::SetSquare>,
 
     zone_enabled: bool,
     zone_pens: [PenSettings; 2],
@@ -127,6 +133,7 @@ impl InputHandler {
             eraser_cursor: None,
             compass_preview: None,
             ruler: None,
+            setsquare: None,
             zone_enabled: false,
             zone_pens: [
                 PenSettings::ballpoint([0.92, 0.92, 0.95, 1.0]),
@@ -187,6 +194,30 @@ impl InputHandler {
             .values()
             .filter(|s| matches!(s.role, PointerRole::Drawing { .. }))
             .map(|s| (s.start_pos, s.start_time))
+    }
+
+    /// The nearest drafting-tool edge within snapping range of `position`,
+    /// if any — checks the ruler and the set-square and picks whichever
+    /// edge is actually closer when both are visible and in range.
+    fn find_edge_snap(&self, position: Vec2) -> Option<(Vec2, Vec2)> {
+        let ruler_edge = self
+            .ruler
+            .as_ref()
+            .filter(|r| r.distance_to_edge(position) <= crate::ruler::EDGE_SNAP_DISTANCE)
+            .map(|r| (r.nearest_edge(position), r.distance_to_edge(position)));
+        let setsquare_edge = self
+            .setsquare
+            .as_ref()
+            .filter(|s| s.distance_to_edge(position) <= crate::setsquare::EDGE_SNAP_DISTANCE)
+            .map(|s| (s.nearest_edge(position), s.distance_to_edge(position)));
+
+        match (ruler_edge, setsquare_edge) {
+            (Some((edge, d1)), Some((_, d2))) if d1 <= d2 => Some(edge),
+            (Some(_), Some((edge, _))) => Some(edge),
+            (Some((edge, _)), None) => Some(edge),
+            (None, Some((edge, _))) => Some(edge),
+            (None, None) => None,
+        }
     }
 
     // --- Per-frame maintenance ---------------------------------------------
@@ -267,6 +298,12 @@ impl InputHandler {
                 self.ruler = match self.ruler {
                     Some(_) => None,
                     None => Some(crate::ruler::Ruler::new(self.screen_size / 2.0)),
+                };
+            }
+            ToolbarAction::ToggleSetSquare => {
+                self.setsquare = match self.setsquare {
+                    Some(_) => None,
+                    None => Some(crate::setsquare::SetSquare::new(self.screen_size / 2.0)),
                 };
             }
             ToolbarAction::CycleBackground => {
@@ -353,6 +390,19 @@ impl InputHandler {
             }
         }
 
+        // Same handle/body-grab priority for the set-square.
+        if let Some(setsquare) = &self.setsquare {
+            if setsquare.is_on_handle(position) {
+                self.sessions.insert(id, PointerSession { role: PointerRole::SetSquareRotate, start_pos: position, start_time: now });
+                return;
+            }
+            if setsquare.is_on_body(position) && setsquare.distance_to_edge(position) > crate::setsquare::EDGE_SNAP_DISTANCE {
+                let grab_offset = position - setsquare.right_angle;
+                self.sessions.insert(id, PointerSession { role: PointerRole::SetSquareMove { grab_offset }, start_pos: position, start_time: now });
+                return;
+            }
+        }
+
         let zone = self.zone_of(position);
 
         // Two-finger tap (Pen or Eraser context) opens the radial menu —
@@ -374,13 +424,9 @@ impl InputHandler {
                     self.erase_area(position, PALM_ERASE_RADIUS);
                     PointerRole::Palm
                 } else {
-                    let edge_snap = self
-                        .ruler
-                        .as_ref()
-                        .filter(|r| r.distance_to_edge(position) <= crate::ruler::EDGE_SNAP_DISTANCE)
-                        .map(|r| r.nearest_edge(position));
+                    let edge_snap = self.find_edge_snap(position);
                     let start = match edge_snap {
-                        Some((a, b)) => crate::ruler::project_onto_segment(position, a, b),
+                        Some((a, b)) => crate::geom::project_onto_segment(position, a, b),
                         None => position,
                     };
 
@@ -441,7 +487,7 @@ impl InputHandler {
         match &mut session.role {
             PointerRole::Drawing { stroke_index, predictor, edge_snap } => {
                 let point = match edge_snap {
-                    Some((a, b)) => crate::ruler::project_onto_segment(position, *a, *b),
+                    Some((a, b)) => crate::geom::project_onto_segment(position, *a, *b),
                     None => position,
                 };
                 let Some(stroke) = self.pages[self.current_page].strokes.get_mut(*stroke_index) else {
@@ -471,6 +517,17 @@ impl InputHandler {
                 let grab_offset = *grab_offset;
                 if let Some(ruler) = &mut self.ruler {
                     ruler.drag_to(position, grab_offset);
+                }
+            }
+            PointerRole::SetSquareRotate => {
+                if let Some(setsquare) = &mut self.setsquare {
+                    setsquare.rotate_toward(position);
+                }
+            }
+            PointerRole::SetSquareMove { grab_offset } => {
+                let grab_offset = *grab_offset;
+                if let Some(setsquare) = &mut self.setsquare {
+                    setsquare.drag_to(position, grab_offset);
                 }
             }
             PointerRole::Toolbar | PointerRole::Palm => {}
@@ -712,6 +769,9 @@ impl InputHandler {
         if let Some(ruler) = &self.ruler {
             ruler.render(&mut normal_v, &mut normal_i);
         }
+        if let Some(setsquare) = &self.setsquare {
+            setsquare.render(&mut normal_v, &mut normal_i);
+        }
 
         let toolbar_state = ToolbarState {
             active_tool: self.active_tool,
@@ -724,6 +784,7 @@ impl InputHandler {
             page_index: self.current_page,
             page_count: self.pages.len(),
             ruler_visible: self.ruler.is_some(),
+            setsquare_visible: self.setsquare.is_some(),
         };
         self.toolbar.render(&toolbar_state, &mut normal_v, &mut normal_i);
 
