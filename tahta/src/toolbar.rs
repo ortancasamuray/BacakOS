@@ -98,6 +98,14 @@ const BUTTON_SIZE: f32 = 56.0;
 const BUTTON_GAP: f32 = 10.0;
 const BAR_MARGIN: f32 = 10.0;
 const BAR_BOTTOM_MARGIN: f32 = 24.0;
+/// Vertical gap between the two button rows.
+const ROW_GAP: f32 = 8.0;
+/// How many of `BUTTONS`, from the start, sit on the first row — tool
+/// select + every drafting/widget toggle. The rest (brush/color/actions/
+/// page-nav) sit on the second row. Split here, rather than one long row,
+/// once 21 buttons stopped fitting an 1280px-wide panel without either
+/// shrinking below the 48-64px touch-target floor or running off-screen.
+const ROW_SPLIT: usize = 13;
 
 const COLOR_BAR_BG: [f32; 4] = [0.12, 0.13, 0.17, 0.92];
 const COLOR_BUTTON_IDLE: [f32; 4] = [0.22, 0.24, 0.30, 1.0];
@@ -129,10 +137,11 @@ const BUTTONS: [ToolbarAction; 21] = [
     ToolbarAction::NextPage,
 ];
 
-/// Index right before which a thin separator is drawn, to visually group
-/// tool-select (0-3) / drafting+widget tools (4-12) / brush+color (13-14) /
-/// actions (15-17).
-const SEPARATOR_BEFORE: [usize; 4] = [4, 13, 15, 18];
+/// Local (within-row) index right before which a thin separator is drawn.
+/// Row 0 (13 buttons): tool-select (0-3) | drafting+widget tools (4-12).
+const SEPARATOR_BEFORE_ROW0: [usize; 1] = [4];
+/// Row 1 (8 buttons): brush+color (0-1) | undo/clear/zone (2-4) | background+page-nav (5-7).
+const SEPARATOR_BEFORE_ROW1: [usize; 2] = [2, 5];
 
 /// Bottom-center floating toolbar. Screen-space, never affected by canvas
 /// pan/zoom, recomputed each frame from the current window size.
@@ -143,19 +152,32 @@ pub struct Toolbar {
 
 impl Toolbar {
     pub fn layout(screen_size: Vec2) -> Self {
-        let content_w = BUTTON_SIZE * BUTTONS.len() as f32 + BUTTON_GAP * (BUTTONS.len() as f32 - 1.0);
-        let bar_w = content_w + BAR_MARGIN * 2.0;
-        let bar_h = BUTTON_SIZE + BAR_MARGIN * 2.0;
+        let row0_w = row_content_width(ROW_SPLIT);
+        let row1_w = row_content_width(BUTTONS.len() - ROW_SPLIT);
+        let bar_content_w = row0_w.max(row1_w);
+        let bar_w = bar_content_w + BAR_MARGIN * 2.0;
+        let bar_h = BUTTON_SIZE * 2.0 + ROW_GAP + BAR_MARGIN * 2.0;
         let bar_top_left = Vec2::new(
             (screen_size.x - bar_w) / 2.0,
             screen_size.y - bar_h - BAR_BOTTOM_MARGIN,
         );
 
+        // Each row is centered within the shared bar width independently,
+        // so the shorter second row reads as intentionally centered rather
+        // than left-aligned and trailing off.
+        let row0_x0 = bar_top_left.x + (bar_w - row0_w) / 2.0;
+        let row1_x0 = bar_top_left.x + (bar_w - row1_w) / 2.0;
+        let row0_y = bar_top_left.y + BAR_MARGIN;
+        let row1_y = row0_y + BUTTON_SIZE + ROW_GAP;
+
         let mut button_rects = [(Vec2::ZERO, Vec2::ZERO); BUTTONS.len()];
-        for (i, rect) in button_rects.iter_mut().enumerate() {
-            let x = bar_top_left.x + BAR_MARGIN + i as f32 * (BUTTON_SIZE + BUTTON_GAP);
-            let y = bar_top_left.y + BAR_MARGIN;
-            *rect = (Vec2::new(x, y), Vec2::splat(BUTTON_SIZE));
+        for i in 0..ROW_SPLIT {
+            let x = row0_x0 + i as f32 * (BUTTON_SIZE + BUTTON_GAP);
+            button_rects[i] = (Vec2::new(x, row0_y), Vec2::splat(BUTTON_SIZE));
+        }
+        for (local, i) in (ROW_SPLIT..BUTTONS.len()).enumerate() {
+            let x = row1_x0 + local as f32 * (BUTTON_SIZE + BUTTON_GAP);
+            button_rects[i] = (Vec2::new(x, row1_y), Vec2::splat(BUTTON_SIZE));
         }
 
         Self { bar_rect: (bar_top_left, Vec2::new(bar_w, bar_h)), button_rects }
@@ -180,11 +202,16 @@ impl Toolbar {
         push_rect(self.bar_rect.0, self.bar_rect.1, COLOR_BAR_BG, out_vertices, out_indices);
 
         for (i, (rect, action)) in self.button_rects.iter().zip(BUTTONS).enumerate() {
-            if SEPARATOR_BEFORE.contains(&i) {
+            let needs_separator = if i < ROW_SPLIT {
+                SEPARATOR_BEFORE_ROW0.contains(&i)
+            } else {
+                SEPARATOR_BEFORE_ROW1.contains(&(i - ROW_SPLIT))
+            };
+            if needs_separator {
                 let x = rect.0.x - BUTTON_GAP / 2.0;
                 push_rect(
-                    Vec2::new(x - 1.0, self.bar_rect.0.y + 10.0),
-                    Vec2::new(2.0, self.bar_rect.1.y - 20.0),
+                    Vec2::new(x - 1.0, rect.0.y + 10.0),
+                    Vec2::new(2.0, BUTTON_SIZE - 20.0),
                     COLOR_SEPARATOR,
                     out_vertices,
                     out_indices,
@@ -234,6 +261,10 @@ fn is_active(action: ToolbarAction, state: &ToolbarState) -> bool {
         ToolbarAction::ToggleTextBox => state.textbox_visible,
         _ => false,
     }
+}
+
+fn row_content_width(count: usize) -> f32 {
+    BUTTON_SIZE * count as f32 + BUTTON_GAP * (count as f32 - 1.0)
 }
 
 fn rect_contains((top_left, size): (Vec2, Vec2), point: Vec2) -> bool {
