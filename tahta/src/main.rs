@@ -4,6 +4,7 @@
 mod app;
 mod board;
 mod brush;
+mod calculator;
 mod digits;
 mod geom;
 mod input_handler;

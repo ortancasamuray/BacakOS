@@ -48,6 +48,8 @@ pub enum ToolbarAction {
     ToggleSetSquare,
     /// Shows/hides the draggable, rotatable protractor overlay.
     ToggleProtractor,
+    /// Shows/hides the draggable calculator panel.
+    ToggleCalculator,
     /// Steps through the curated background+grid presets.
     CycleBackground,
     PrevPage,
@@ -69,6 +71,7 @@ pub struct ToolbarState {
     pub ruler_visible: bool,
     pub setsquare_visible: bool,
     pub protractor_visible: bool,
+    pub calculator_visible: bool,
 }
 
 // Scaled down toward the dock's ~36px icon / ~10px gap proportions
@@ -87,7 +90,7 @@ const COLOR_BUTTON_ACTIVE: [f32; 4] = [0.23, 0.51, 0.96, 1.0]; // accent blue
 const COLOR_GLYPH: [f32; 4] = [0.95, 0.95, 0.97, 1.0];
 const COLOR_SEPARATOR: [f32; 4] = [1.0, 1.0, 1.0, 0.10];
 
-const BUTTONS: [ToolbarAction; 15] = [
+const BUTTONS: [ToolbarAction; 16] = [
     ToolbarAction::SelectTool(Tool::Pen),
     ToolbarAction::SelectTool(Tool::Hand),
     ToolbarAction::SelectTool(Tool::Eraser),
@@ -95,6 +98,7 @@ const BUTTONS: [ToolbarAction; 15] = [
     ToolbarAction::ToggleRuler,
     ToolbarAction::ToggleSetSquare,
     ToolbarAction::ToggleProtractor,
+    ToolbarAction::ToggleCalculator,
     ToolbarAction::CycleBrush,
     ToolbarAction::CycleColor,
     ToolbarAction::Undo,
@@ -106,9 +110,9 @@ const BUTTONS: [ToolbarAction; 15] = [
 ];
 
 /// Index right before which a thin separator is drawn, to visually group
-/// tool-select (0-3) / drafting tools (4-6) / brush+color (7-8) / actions
-/// (9-11).
-const SEPARATOR_BEFORE: [usize; 4] = [4, 7, 9, 12];
+/// tool-select (0-3) / drafting+widget tools (4-7) / brush+color (8-9) /
+/// actions (10-12).
+const SEPARATOR_BEFORE: [usize; 4] = [4, 8, 10, 13];
 
 /// Bottom-center floating toolbar. Screen-space, never affected by canvas
 /// pan/zoom, recomputed each frame from the current window size.
@@ -202,6 +206,7 @@ fn is_active(action: ToolbarAction, state: &ToolbarState) -> bool {
         ToolbarAction::ToggleRuler => state.ruler_visible,
         ToolbarAction::ToggleSetSquare => state.setsquare_visible,
         ToolbarAction::ToggleProtractor => state.protractor_visible,
+        ToolbarAction::ToggleCalculator => state.calculator_visible,
         _ => false,
     }
 }
@@ -324,6 +329,26 @@ fn draw_glyph(
                 push_line(p0, p1, 3.0, COLOR_GLYPH, out_vertices, out_indices);
             }
             push_line(center + Vec2::new(-r, 0.0), center + Vec2::new(r, 0.0), 3.0, COLOR_GLYPH, out_vertices, out_indices);
+        }
+        ToolbarAction::ToggleCalculator => {
+            // A little calculator body: outline, a display line near the
+            // top, and a 2x2 grid of key dots below.
+            let w = r * 1.5;
+            let h = r * 1.9;
+            let top_left = center - Vec2::new(w / 2.0, h / 2.0);
+            let t = 2.0;
+            push_rect(top_left, Vec2::new(w, t), COLOR_GLYPH, out_vertices, out_indices);
+            push_rect(top_left + Vec2::new(0.0, h - t), Vec2::new(w, t), COLOR_GLYPH, out_vertices, out_indices);
+            push_rect(top_left, Vec2::new(t, h), COLOR_GLYPH, out_vertices, out_indices);
+            push_rect(top_left + Vec2::new(w - t, 0.0), Vec2::new(t, h), COLOR_GLYPH, out_vertices, out_indices);
+            push_rect(top_left + Vec2::new(t, t * 1.5), Vec2::new(w - t * 2.0, h * 0.22), [0.55, 0.95, 0.65, 0.9], out_vertices, out_indices);
+            for row in 0..2 {
+                for col in 0..2 {
+                    let x = top_left.x + w * (0.28 + col as f32 * 0.44);
+                    let y = top_left.y + h * (0.62 + row as f32 * 0.3);
+                    push_circle(Vec2::new(x, y), 1.6, COLOR_GLYPH, 8, out_vertices, out_indices);
+                }
+            }
         }
         ToolbarAction::CycleBackground => {
             push_rect(center - Vec2::splat(r), Vec2::splat(r * 2.0), state.background.color(), out_vertices, out_indices);

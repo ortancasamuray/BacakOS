@@ -81,6 +81,11 @@ enum PointerRole {
     ProtractorRotate,
     /// Dragging the protractor's body to reposition it.
     ProtractorMove { grab_offset: Vec2 },
+    /// Dragging the calculator panel by its header.
+    CalculatorMove { grab_offset: Vec2 },
+    /// Touch landed on a calculator key; already applied on touch-down,
+    /// nothing more happens until lift (no drag-to-repeat).
+    CalculatorPress,
     /// Touch landed on the toolbar; consumed, never reaches the canvas.
     Toolbar,
     /// Flagged by the palm-rejection heuristic, or consumed by a
@@ -111,6 +116,7 @@ pub struct InputHandler {
     ruler: Option<crate::ruler::Ruler>,
     setsquare: Option<crate::setsquare::SetSquare>,
     protractor: Option<crate::protractor::Protractor>,
+    calculator: Option<crate::calculator::Calculator>,
 
     zone_enabled: bool,
     zone_pens: [PenSettings; 2],
@@ -140,6 +146,7 @@ impl InputHandler {
             ruler: None,
             setsquare: None,
             protractor: None,
+            calculator: None,
             zone_enabled: false,
             zone_pens: [
                 PenSettings::ballpoint([0.92, 0.92, 0.95, 1.0]),
@@ -322,6 +329,12 @@ impl InputHandler {
                     None => Some(crate::protractor::Protractor::new(self.screen_size / 2.0)),
                 };
             }
+            ToolbarAction::ToggleCalculator => {
+                self.calculator = match self.calculator {
+                    Some(_) => None,
+                    None => Some(crate::calculator::Calculator::new(self.screen_size / 2.0 - Vec2::new(140.0, 200.0))),
+                };
+            }
             ToolbarAction::CycleBackground => {
                 let page = &mut self.pages[self.current_page];
                 let (bg, grid) = board::next_preset((page.background, page.grid));
@@ -388,6 +401,23 @@ impl InputHandler {
             }
             self.sessions.insert(id, PointerSession { role: PointerRole::Toolbar, start_pos: position, start_time: now });
             return;
+        }
+
+        // The calculator panel is UI chrome like the toolbar: its header
+        // drags the whole thing, any other point on it is a key-press,
+        // and either way the touch is fully consumed here — never reaches
+        // the canvas or a drafting tool's edge-snap zone underneath.
+        if let Some(calculator) = &mut self.calculator {
+            if calculator.is_on_header(position) {
+                let grab_offset = position - calculator.position;
+                self.sessions.insert(id, PointerSession { role: PointerRole::CalculatorMove { grab_offset }, start_pos: position, start_time: now });
+                return;
+            }
+            if calculator.contains(position) {
+                calculator.press_at(position);
+                self.sessions.insert(id, PointerSession { role: PointerRole::CalculatorPress, start_pos: position, start_time: now });
+                return;
+            }
         }
 
         // Grabbing the ruler's handle (rotate) or body (move) takes
@@ -570,7 +600,13 @@ impl InputHandler {
                     protractor.drag_to(position, grab_offset);
                 }
             }
-            PointerRole::Toolbar | PointerRole::Palm => {}
+            PointerRole::CalculatorMove { grab_offset } => {
+                let grab_offset = *grab_offset;
+                if let Some(calculator) = &mut self.calculator {
+                    calculator.drag_to(position, grab_offset);
+                }
+            }
+            PointerRole::Toolbar | PointerRole::Palm | PointerRole::CalculatorPress => {}
         }
         if do_erase {
             self.erase_at(position, self.eraser_radius);
@@ -829,8 +865,13 @@ impl InputHandler {
             ruler_visible: self.ruler.is_some(),
             setsquare_visible: self.setsquare.is_some(),
             protractor_visible: self.protractor.is_some(),
+            calculator_visible: self.calculator.is_some(),
         };
         self.toolbar.render(&toolbar_state, &mut normal_v, &mut normal_i);
+
+        if let Some(calculator) = &self.calculator {
+            calculator.render(&mut normal_v, &mut normal_i);
+        }
 
         if let Some(menu) = &self.radial_menu {
             // No live drag-hover any more (tap-to-select, see module docs).
