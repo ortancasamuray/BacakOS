@@ -25,6 +25,7 @@ mod stroke;
 mod textbox;
 mod toolbar;
 mod ui;
+mod urlbar;
 mod webengine;
 
 use std::sync::Arc;
