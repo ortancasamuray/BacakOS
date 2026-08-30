@@ -34,16 +34,22 @@ const PALM_CLUSTER_DEMOTE_RADIUS: f32 = 90.0;
 const DIVIDER_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 0.12];
 const DIVIDER_WIDTH: f32 = 2.0;
 
-/// Two Pen touches landing within this many seconds of each other, and
-/// this close together, are treated as a deliberate two-finger tap that
-/// opens the radial menu — NOT a single-finger long-press. The compositor
-/// has its own single-finger long-press → text-selection gesture
-/// (`selection_recognizer`, armed whenever exactly one finger is down) and
-/// fires it in parallel with whatever the client does with that same
-/// touch, so a long-press-triggered menu here would always collide with
-/// it. Two fingers never arm the compositor's single-touch recognizer.
-const TWO_FINGER_TAP_WINDOW_SECS: f64 = 0.25;
-const TWO_FINGER_TAP_DISTANCE: f32 = 220.0;
+/// Two Pen taps landing within this many seconds of each other, and this
+/// close together, are treated as a deliberate double-tap that opens the
+/// radial menu — NOT a single-finger long-press. The compositor has its
+/// own single-finger long-press → text-selection gesture
+/// (`selection_recognizer`, armed whenever exactly one finger is down,
+/// fired in parallel with whatever the client does with that same touch)
+/// and a hold-triggered menu here would always collide with it. A quick
+/// tap-release-tap never arms that recognizer (it requires a *hold*), so
+/// double-tap is the safe equivalent — previously this was a two-finger
+/// tap for the same reason, before the radial menu's trigger moved to
+/// something reachable one-handed with the pen.
+const DOUBLE_TAP_WINDOW_SECS: f64 = 0.35;
+const DOUBLE_TAP_DISTANCE: f32 = 60.0;
+/// How far a tap's points may wander from its start and still count as a
+/// "tap" rather than a real stroke, for double-tap purposes.
+const DOUBLE_TAP_MAX_MOVEMENT: f32 = 16.0;
 
 /// Sentinel pointer id for the mouse, kept out of the touch id space.
 const MOUSE_POINTER_ID: u64 = u64::MAX;
@@ -153,6 +159,17 @@ pub struct InputHandler {
     zone_pens: [PenSettings; 2],
 
     radial_menu: Option<RadialMenu>,
+    /// The last Pen touch that looked like a tap (not a real stroke):
+    /// `(position, end_time, stroke_index)`. Checked on the next press to
+    /// recognize a double-tap — see `DOUBLE_TAP_WINDOW_SECS` docs.
+    /// `stroke_index` is the tiny dot it left, removed if promoted to a
+    /// double-tap so opening the menu doesn't also leave a stray mark.
+    last_tap: Option<(Vec2, f64, Option<usize>)>,
+    /// Whether the toolbar draws/accepts input at all — the radial menu
+    /// covers color/width/eraser, so a teacher can hide the toolbar
+    /// entirely for more canvas; toggled from a wedge in that same menu
+    /// (`RadialAction::ToggleToolbar`) so it's still reachable while hidden.
+    pub toolbar_visible: bool,
 
     toolbar: Toolbar,
     screen_size: Vec2,
@@ -194,6 +211,8 @@ impl InputHandler {
                 PenSettings::ballpoint([0.25, 0.55, 0.95, 1.0]),
             ],
             radial_menu: None,
+            last_tap: None,
+            toolbar_visible: true,
             toolbar: Toolbar::layout(screen_size),
             screen_size,
             last_input_at: None,
@@ -303,32 +322,6 @@ impl InputHandler {
             if stroke.brush_type == BrushType::LaserPointer {
                 stroke.prune_expired(now);
             }
-        }
-    }
-
-    /// Looks for an already-active Pen/Eraser touch close enough in time and
-    /// space to `position`/`now` to treat this new touch as the second half
-    /// of a two-finger tap. Returns its session id.
-    fn find_two_finger_tap_partner(&self, position: Vec2, now: f64) -> Option<u64> {
-        self.sessions.iter().find_map(|(&id, s)| {
-            let is_interactive = matches!(s.role, PointerRole::Drawing { .. } | PointerRole::Erasing);
-            let close_in_time = (now - s.start_time).abs() <= TWO_FINGER_TAP_WINDOW_SECS;
-            let close_in_space = s.start_pos.distance(position) <= TWO_FINGER_TAP_DISTANCE;
-            (is_interactive && close_in_time && close_in_space).then_some(id)
-        })
-    }
-
-    /// Neutralizes a touch that turned out to be half of a gesture rather
-    /// than a real stroke/erase: tombstones any stroke it started, marks it
-    /// inert until lift.
-    fn cancel_touch_as_gesture(&mut self, id: u64) {
-        if let Some(session) = self.sessions.get_mut(&id) {
-            if let PointerRole::Drawing { stroke_index, .. } = session.role {
-                if let Some(stroke) = self.pages[self.current_page].strokes.get_mut(stroke_index) {
-                    stroke.clear();
-                }
-            }
-            session.role = PointerRole::Palm;
         }
     }
 
@@ -481,6 +474,9 @@ impl InputHandler {
             RadialAction::Eraser => {
                 self.active_tool = Tool::Eraser;
             }
+            RadialAction::ToggleToolbar => {
+                self.toolbar_visible = !self.toolbar_visible;
+            }
         }
     }
 
@@ -502,7 +498,7 @@ impl InputHandler {
             return;
         }
 
-        if self.toolbar.contains(position) {
+        if self.toolbar_visible && self.toolbar.contains(position) {
             if let Some(action) = self.toolbar.hit_test(position) {
                 self.apply_toolbar_action(action, self.zone_of(position));
             }
@@ -642,15 +638,26 @@ impl InputHandler {
 
         let zone = self.zone_of(position);
 
-        // Two-finger tap (Pen or Eraser context) opens the radial menu —
-        // checked before tool-specific routing since it applies to both.
-        if matches!(self.active_tool, Tool::Pen | Tool::Eraser) {
-            if let Some(partner_id) = self.find_two_finger_tap_partner(position, now) {
-                let partner_pos = self.sessions.get(&partner_id).map(|s| s.start_pos).unwrap_or(position);
-                self.cancel_touch_as_gesture(partner_id);
-                self.open_radial_menu_at((position + partner_pos) / 2.0);
-                self.sessions.insert(id, PointerSession { role: PointerRole::Palm, start_pos: position, start_time: now });
-                return;
+        // A quick double-tap with the Pen opens the radial menu right at
+        // the tap point — see `DOUBLE_TAP_WINDOW_SECS` docs for why this,
+        // not a long-press, is the trigger.
+        if self.active_tool == Tool::Pen {
+            if let Some((tap_pos, tap_time, stroke_idx)) = self.last_tap.take() {
+                let close_in_time = (now - tap_time).abs() <= DOUBLE_TAP_WINDOW_SECS;
+                let close_in_space = tap_pos.distance(position) <= DOUBLE_TAP_DISTANCE;
+                if close_in_time && close_in_space {
+                    // Remove the first tap's tiny dot so opening the menu
+                    // doesn't also leave a stray mark on the page.
+                    if let Some(idx) = stroke_idx {
+                        let strokes = &mut self.pages[self.current_page].strokes;
+                        if strokes.len() == idx + 1 {
+                            strokes.pop();
+                        }
+                    }
+                    self.open_radial_menu_at(position);
+                    self.sessions.insert(id, PointerSession { role: PointerRole::Palm, start_pos: position, start_time: now });
+                    return;
+                }
             }
         }
 
@@ -836,11 +843,26 @@ impl InputHandler {
         }
     }
 
-    fn end_pointer(&mut self, id: u64) {
+    fn end_pointer(&mut self, id: u64, now: f64) {
         if let Some(session) = self.sessions.remove(&id) {
             match session.role {
                 PointerRole::Erasing => self.eraser_cursor = None,
                 PointerRole::CompassDrag { .. } => self.commit_compass_circle(),
+                PointerRole::Drawing { stroke_index, .. } => {
+                    // A stroke that barely moved is a tap — remember it so
+                    // the *next* press can recognize a double-tap (see
+                    // `DOUBLE_TAP_WINDOW_SECS` docs). A real stroke instead
+                    // breaks any pending double-tap chain.
+                    let is_tap = self.pages[self.current_page]
+                        .strokes
+                        .get(stroke_index)
+                        .map(|s| {
+                            let p0 = s.points.first().copied().unwrap_or(session.start_pos);
+                            s.points.iter().map(|p| p.distance(p0)).fold(0.0f32, f32::max) <= DOUBLE_TAP_MAX_MOVEMENT
+                        })
+                        .unwrap_or(false);
+                    self.last_tap = is_tap.then_some((session.start_pos, now, Some(stroke_index)));
+                }
                 _ => {}
             }
         }
@@ -920,8 +942,8 @@ impl InputHandler {
         self.begin_pointer(MOUSE_POINTER_ID, self.last_mouse_pos, now);
     }
 
-    pub fn mouse_released(&mut self) {
-        self.end_pointer(MOUSE_POINTER_ID);
+    pub fn mouse_released(&mut self, now: f64) {
+        self.end_pointer(MOUSE_POINTER_ID, now);
     }
 
     // --- Touch -------------------------------------------------------------
@@ -934,8 +956,8 @@ impl InputHandler {
         self.move_pointer(id, pos, now);
     }
 
-    pub fn touch_ended(&mut self, id: u64) {
-        self.end_pointer(id);
+    pub fn touch_ended(&mut self, id: u64, now: f64) {
+        self.end_pointer(id, now);
     }
 
     // --- Keyboard ----------------------------------------------------------
@@ -1106,7 +1128,9 @@ impl InputHandler {
             textbox_visible: self.textbox.is_some(),
             browser_visible: self.browser_visible,
         };
-        self.toolbar.render(&toolbar_state, &mut normal_v, &mut normal_i);
+        if self.toolbar_visible {
+            self.toolbar.render(&toolbar_state, &mut normal_v, &mut normal_i);
+        }
 
         if let Some(calculator) = &self.calculator {
             calculator.render(&mut normal_v, &mut normal_i);
