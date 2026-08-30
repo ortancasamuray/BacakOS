@@ -60,6 +60,9 @@ pub enum ToolbarAction {
     ToggleMagnifier,
     /// Shows/hides the draggable text box panel (on-screen keyboard + live text).
     ToggleTextBox,
+    /// Shows/hides the embedded web browser panel (a real Servo webview,
+    /// not our own drawn geometry — see `webengine` module docs).
+    ToggleBrowser,
     /// Steps through the curated background+grid presets.
     CycleBackground,
     PrevPage,
@@ -90,6 +93,7 @@ pub struct ToolbarState {
     pub spotlight_visible: bool,
     pub magnifier_visible: bool,
     pub textbox_visible: bool,
+    pub browser_visible: bool,
 }
 
 // Scaled down toward the dock's ~36px icon / ~10px gap proportions
@@ -108,7 +112,7 @@ const ROW_GAP: f32 = 8.0;
 /// page-nav) sit on the second row. Split here, rather than one long row,
 /// once 21 buttons stopped fitting an 1280px-wide panel without either
 /// shrinking below the 48-64px touch-target floor or running off-screen.
-const ROW_SPLIT: usize = 13;
+const ROW_SPLIT: usize = 14;
 
 const COLOR_BAR_BG: [f32; 4] = [0.12, 0.13, 0.17, 0.92];
 const COLOR_BUTTON_IDLE: [f32; 4] = [0.22, 0.24, 0.30, 1.0];
@@ -116,7 +120,7 @@ const COLOR_BUTTON_ACTIVE: [f32; 4] = [0.23, 0.51, 0.96, 1.0]; // accent blue
 const COLOR_GLYPH: [f32; 4] = [0.95, 0.95, 0.97, 1.0];
 const COLOR_SEPARATOR: [f32; 4] = [1.0, 1.0, 1.0, 0.10];
 
-const BUTTONS: [ToolbarAction; 22] = [
+const BUTTONS: [ToolbarAction; 23] = [
     ToolbarAction::SelectTool(Tool::Pen),
     ToolbarAction::SelectTool(Tool::Hand),
     ToolbarAction::SelectTool(Tool::Eraser),
@@ -130,6 +134,7 @@ const BUTTONS: [ToolbarAction; 22] = [
     ToolbarAction::ToggleSpotlight,
     ToolbarAction::ToggleMagnifier,
     ToolbarAction::ToggleTextBox,
+    ToolbarAction::ToggleBrowser,
     ToolbarAction::CycleBrush,
     ToolbarAction::CycleColor,
     ToolbarAction::Undo,
@@ -263,6 +268,7 @@ fn is_active(action: ToolbarAction, state: &ToolbarState) -> bool {
         ToolbarAction::ToggleSpotlight => state.spotlight_visible,
         ToolbarAction::ToggleMagnifier => state.magnifier_visible,
         ToolbarAction::ToggleTextBox => state.textbox_visible,
+        ToolbarAction::ToggleBrowser => state.browser_visible,
         _ => false,
     }
 }
@@ -471,6 +477,21 @@ fn draw_glyph(
             push_line(center + Vec2::new(0.0, -r), center + Vec2::new(-r * 0.8, r), 3.0, COLOR_GLYPH, out_vertices, out_indices);
             push_line(center + Vec2::new(0.0, -r), center + Vec2::new(r * 0.8, r), 3.0, COLOR_GLYPH, out_vertices, out_indices);
             push_line(center + Vec2::new(-r * 0.4, r * 0.15), center + Vec2::new(r * 0.4, r * 0.15), 2.5, COLOR_GLYPH, out_vertices, out_indices);
+        }
+        ToolbarAction::ToggleBrowser => {
+            // A globe: circle outline + one vertical + two horizontal
+            // "meridian/parallel" lines, the universal browser glyph.
+            const STEPS: usize = 20;
+            for i in 0..STEPS {
+                let t0 = i as f32 / STEPS as f32 * std::f32::consts::TAU;
+                let t1 = (i + 1) as f32 / STEPS as f32 * std::f32::consts::TAU;
+                let p0 = center + Vec2::new(t0.cos(), t0.sin()) * r;
+                let p1 = center + Vec2::new(t1.cos(), t1.sin()) * r;
+                push_line(p0, p1, 2.0, COLOR_GLYPH, out_vertices, out_indices);
+            }
+            push_line(center + Vec2::new(0.0, -r), center + Vec2::new(0.0, r), 2.0, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(center + Vec2::new(-r * 0.7, -r * 0.4), center + Vec2::new(r * 0.7, -r * 0.4), 1.5, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(center + Vec2::new(-r * 0.7, r * 0.4), center + Vec2::new(r * 0.7, r * 0.4), 1.5, COLOR_GLYPH, out_vertices, out_indices);
         }
         ToolbarAction::ExportPdf => {
             // A little page outline with a downward export arrow.
