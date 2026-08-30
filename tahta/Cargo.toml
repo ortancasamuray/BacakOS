@@ -18,8 +18,12 @@ bytemuck = { version = "1.16", features = ["derive"] }
 pollster = "0.3"
 log = "0.4"
 env_logger = "0.11"
-mupdf = "0.4"
+mupdf = { version = "0.4", default-features = false, features = ["js", "xps", "svg", "cbz", "img", "html", "epub", "tesseract", "sys-lib-harfbuzz", "sys-lib-freetype"] }
 anyhow = "1"
+servo = { version = "0.5.0", default-features = false, features = ["baked-in-resources", "clipboard", "js_jit"] }
+dpi = "0.1"
+euclid = "0.22"
+url = "2"
 
 [profile.release]
 opt-level = 3
