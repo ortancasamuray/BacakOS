@@ -88,6 +88,7 @@ struct PanelState {
     needs_paint: Cell<bool>,
     current_cursor: Cell<Cursor>,
     load_status: Cell<LoadStatus>,
+    current_url: RefCell<Option<String>>,
 }
 
 struct PanelDelegate {
@@ -105,6 +106,10 @@ impl WebViewDelegate for PanelDelegate {
 
     fn notify_load_status_changed(&self, _webview: WebView, status: LoadStatus) {
         self.state.load_status.set(status);
+    }
+
+    fn notify_url_changed(&self, _webview: WebView, url: Url) {
+        *self.state.current_url.borrow_mut() = Some(url.to_string());
     }
 
     fn request_navigation(&self, _webview: WebView, navigation_request: NavigationRequest) {
@@ -133,6 +138,7 @@ impl WebPanel {
             needs_paint: Cell::new(false),
             current_cursor: Cell::new(Cursor::Default),
             load_status: Cell::new(LoadStatus::Started),
+            current_url: RefCell::new(Url::parse(url).ok().map(|u| u.to_string())),
         });
         let delegate = Rc::new(PanelDelegate { state: Rc::clone(&state) });
 
@@ -149,6 +155,28 @@ impl WebPanel {
         if let Ok(parsed) = Url::parse(url) {
             self.webview.load(parsed);
         }
+    }
+
+    /// Current page URL as last reported by the delegate — what the
+    /// address bar should show when the user isn't actively editing it.
+    pub fn url(&self) -> Option<String> {
+        self.state.current_url.borrow().clone()
+    }
+
+    pub fn go_back(&self) {
+        let _ = self.webview.go_back(1);
+    }
+
+    pub fn go_forward(&self) {
+        let _ = self.webview.go_forward(1);
+    }
+
+    pub fn can_go_back(&self) -> bool {
+        self.webview.can_go_back()
+    }
+
+    pub fn can_go_forward(&self) -> bool {
+        self.webview.can_go_forward()
     }
 
     /// If Servo painted a new frame since the last call, reads it out and

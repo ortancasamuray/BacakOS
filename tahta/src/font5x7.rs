@@ -54,6 +54,11 @@ fn glyph_rows(ch: char) -> Option<[u8; 7]> {
         'X' => [0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001],
         'Y' => [0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100],
         'Z' => [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111],
+        // Added for the browser address bar (urlbar.rs) — domains/URLs need
+        // a dot and hyphen; same "single glyph, minimal ink" philosophy as
+        // the rest of this font.
+        '.' => [0, 0, 0, 0, 0, 0, 0b00100],
+        '-' => [0, 0, 0, 0b11111, 0, 0, 0],
         // Turkish letters: base glyph (diacritic added separately in push_char).
         'Ç' => glyph_rows('C')?,
         'Ğ' => glyph_rows('G')?,
