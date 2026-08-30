@@ -25,6 +25,7 @@ mod stroke;
 mod textbox;
 mod toolbar;
 mod ui;
+mod webengine;
 
 use std::sync::Arc;
 
@@ -98,6 +99,7 @@ fn main() {
                         TouchPhase::Moved => app.touch_moved(id, location),
                         TouchPhase::Ended | TouchPhase::Cancelled => app.touch_ended(id),
                     },
+                    WindowEvent::ModifiersChanged(modifiers) => app.modifiers_changed(modifiers.state()),
                     WindowEvent::KeyboardInput { event, .. } => app.key_input(&event),
                     WindowEvent::RedrawRequested => app.render(),
                     _ => {}

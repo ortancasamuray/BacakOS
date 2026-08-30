@@ -143,6 +143,11 @@ pub struct InputHandler {
     spotlight: Option<crate::spotlight::Spotlight>,
     magnifier: Option<crate::magnifier::Magnifier>,
     textbox: Option<crate::textbox::TextBox>,
+    /// Whether the embedded browser panel should be shown. The real
+    /// `webengine::WebPanel` lives in `app.rs` (it needs to hand its
+    /// frames to the wgpu renderer directly) — this is just the on/off
+    /// state and fixed bounds for it.
+    pub browser_visible: bool,
 
     zone_enabled: bool,
     zone_pens: [PenSettings; 2],
@@ -182,6 +187,7 @@ impl InputHandler {
             spotlight: None,
             magnifier: None,
             textbox: None,
+            browser_visible: false,
             zone_enabled: false,
             zone_pens: [
                 PenSettings::ballpoint([0.92, 0.92, 0.95, 1.0]),
@@ -198,6 +204,21 @@ impl InputHandler {
     pub fn resize(&mut self, screen_size: Vec2) {
         self.screen_size = screen_size;
         self.toolbar = Toolbar::layout(screen_size);
+    }
+
+    /// Fixed (not yet draggable — matches this app's other panels'
+    /// starting scope) on-screen rect for the embedded browser panel:
+    /// centered, leaving room above the toolbar.
+    pub fn browser_bounds(&self) -> (Vec2, Vec2) {
+        let margin_top = 40.0;
+        let margin_bottom = 210.0; // clears the two-row toolbar + margin
+        let margin_side = 60.0;
+        let top_left = Vec2::new(margin_side, margin_top);
+        let size = Vec2::new(
+            (self.screen_size.x - margin_side * 2.0).max(200.0),
+            (self.screen_size.y - margin_top - margin_bottom).max(200.0),
+        );
+        (top_left, size)
     }
 
     /// Replaces the whole board with one page per page of the PDF at
@@ -403,6 +424,9 @@ impl InputHandler {
                     Some(_) => None,
                     None => Some(crate::textbox::TextBox::new(self.screen_size / 2.0 - Vec2::new(310.0, 240.0))),
                 };
+            }
+            ToolbarAction::ToggleBrowser => {
+                self.browser_visible = !self.browser_visible;
             }
             ToolbarAction::CycleBackground => {
                 let page = &mut self.pages[self.current_page];
@@ -1080,6 +1104,7 @@ impl InputHandler {
             spotlight_visible: self.spotlight.is_some(),
             magnifier_visible: self.magnifier.is_some(),
             textbox_visible: self.textbox.is_some(),
+            browser_visible: self.browser_visible,
         };
         self.toolbar.render(&toolbar_state, &mut normal_v, &mut normal_i);
 
