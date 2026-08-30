@@ -990,6 +990,19 @@ impl InputHandler {
         let page = &self.pages[self.current_page];
         board::render_background(page, self.screen_size, self.view_offset, &mut normal_v, &mut normal_i);
 
+        // Draw straightedge widgets before ink so strokes snapped to their
+        // edges are never hidden underneath the widget body (see
+        // project_tahta_whiteboard memory: visual-only overlap, not a bug).
+        if let Some(ruler) = &self.ruler {
+            ruler.render(&mut normal_v, &mut normal_i);
+        }
+        if let Some(setsquare) = &self.setsquare {
+            setsquare.render(&mut normal_v, &mut normal_i);
+        }
+        if let Some(protractor) = &self.protractor {
+            protractor.render(&mut normal_v, &mut normal_i);
+        }
+
         for (index, stroke) in page.strokes.iter().enumerate() {
             if stroke.is_empty() {
                 continue;
@@ -1041,15 +1054,6 @@ impl InputHandler {
             push_circle(center, 3.0, color, 10, &mut normal_v, &mut normal_i);
         }
 
-        if let Some(ruler) = &self.ruler {
-            ruler.render(&mut normal_v, &mut normal_i);
-        }
-        if let Some(setsquare) = &self.setsquare {
-            setsquare.render(&mut normal_v, &mut normal_i);
-        }
-        if let Some(protractor) = &self.protractor {
-            protractor.render(&mut normal_v, &mut normal_i);
-        }
         if let Some(magnifier) = &self.magnifier {
             magnifier.render(page, self.view_offset, now, &mut normal_v, &mut normal_i);
         }
