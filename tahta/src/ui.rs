@@ -8,7 +8,7 @@
 
 use glam::Vec2;
 
-use crate::stroke::{push_ring_wedge, Vertex};
+use crate::stroke::{push_ring_wedge, push_rect, Vertex};
 
 const INNER_RADIUS: f32 = 42.0;
 const OUTER_RADIUS: f32 = 132.0;
@@ -35,6 +35,10 @@ pub enum RadialAction {
     Color([f32; 4]),
     Width(f32),
     Eraser,
+    /// Shows/hides the fixed toolbar — with color/width/eraser reachable
+    /// here instead, a teacher can hide it entirely for more canvas and
+    /// still always reach this same menu to bring it back.
+    ToggleToolbar,
 }
 
 struct Item {
@@ -57,6 +61,7 @@ impl RadialMenu {
             items.push(Item { action: RadialAction::Width(w), swatch_color: [0.85, 0.85, 0.88, 1.0] });
         }
         items.push(Item { action: RadialAction::Eraser, swatch_color: [0.9, 0.9, 0.92, 1.0] });
+        items.push(Item { action: RadialAction::ToggleToolbar, swatch_color: [0.45, 0.48, 0.56, 1.0] });
         Self { center, items }
     }
 
@@ -108,6 +113,13 @@ impl RadialMenu {
             let mid_r = (INNER_RADIUS + OUTER_RADIUS) / 2.0;
             let dot_center = self.center + Vec2::new(mid_angle.cos(), mid_angle.sin()) * mid_r;
             crate::stroke::push_circle(dot_center, 14.0, item.swatch_color, 16, out_vertices, out_indices);
+            if item.action == RadialAction::ToggleToolbar {
+                // Two small bars over the swatch — "show/hide the
+                // toolbar", distinct from the plain eraser dot.
+                let bar_color = [0.12, 0.13, 0.17, 1.0];
+                push_rect(dot_center + Vec2::new(-6.0, -5.0), Vec2::new(12.0, 3.0), bar_color, out_vertices, out_indices);
+                push_rect(dot_center + Vec2::new(-6.0, 2.0), Vec2::new(12.0, 3.0), bar_color, out_vertices, out_indices);
+            }
         }
     }
 }

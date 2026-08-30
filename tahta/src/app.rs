@@ -195,7 +195,8 @@ impl App {
             }
             return;
         }
-        self.input.mouse_released();
+        let now = self.now_secs();
+        self.input.mouse_released(now);
     }
 
     pub fn touch_started(&mut self, id: u64, location: PhysicalPosition<f64>) {
@@ -243,7 +244,8 @@ impl App {
         if let Some(panel) = &self.web_panel {
             panel.touch(id, (0.0, 0.0), TouchPhase::Ended);
         }
-        self.input.touch_ended(id);
+        let now = self.now_secs();
+        self.input.touch_ended(id, now);
     }
 
     pub fn modifiers_changed(&mut self, modifiers: ModifiersState) {
