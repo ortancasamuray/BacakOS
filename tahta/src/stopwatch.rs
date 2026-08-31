@@ -1,9 +1,7 @@
 //! Draggable floating stopwatch panel ("Kronometre") — start/pause/reset,
 //! same UI-panel pattern as `calculator::Calculator` (swallows touches
-//! completely, no drawing interaction). The display is raw elapsed
-//! seconds with one decimal (e.g. `125.3`), not `MM:SS` — `digits.rs` has
-//! no `:` glyph, and a `.`-separated `2.05` would misread as a decimal
-//! number, so this sidesteps that rather than inventing a new separator.
+//! completely, no drawing interaction). The display is `MM:SS.T`
+//! (`digits.rs` has a `:` glyph now).
 
 use glam::Vec2;
 
@@ -113,8 +111,14 @@ impl Stopwatch {
         let (disp_pos, disp_size) = self.display_rect();
         push_rect(disp_pos, disp_size, COLOR_DISPLAY_BG, out_vertices, out_indices);
         let elapsed = self.current_elapsed(now).clamp(0.0, MAX_ELAPSED);
-        let text = format!("{elapsed:.1}");
-        let digit_size = Vec2::new(disp_size.y * 0.28, disp_size.y * 0.5);
+        let minutes = (elapsed / 60.0) as u32;
+        let seconds = elapsed - minutes as f64 * 60.0;
+        let text = format!("{minutes:02}:{seconds:04.1}");
+        // Always 7 chars ("MM:SS.T") — size digits to fit the panel exactly
+        // rather than a fixed size that would overflow it.
+        let digit_h = disp_size.y * 0.5;
+        let digit_w = ((disp_size.x - 16.0) / (text.chars().count() as f32 * 1.35)).min(disp_size.y * 0.28);
+        let digit_size = Vec2::new(digit_w, digit_h);
         let text_width = text.chars().count() as f32 * digit_size.x * 1.35;
         let right_edge = disp_pos.x + disp_size.x - 10.0;
         let text_x = (right_edge - text_width).max(disp_pos.x + 8.0);

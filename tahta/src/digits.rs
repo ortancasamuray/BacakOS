@@ -1,7 +1,7 @@
 //! Minimal 7-segment-style numeric renderer — not a font, just enough to
 //! draw measurements (ruler length, protractor angle, a future calculator
-//! display) without a glyph atlas. Supports digits, '.', '-', and a small
-//! circle for '°'.
+//! display) without a glyph atlas. Supports digits, '.', ':', '-', and a
+//! small circle for '°'.
 
 use glam::Vec2;
 
@@ -49,6 +49,11 @@ fn push_char(ch: char, top_left: Vec2, size: Vec2, thickness: f32, color: [f32; 
         }
         '.' => {
             push_circle(top_left + Vec2::new(0.0, size.y), thickness * 0.7, color, 8, out_vertices, out_indices);
+            size.x * 0.4
+        }
+        ':' => {
+            push_circle(top_left + Vec2::new(0.0, size.y * 0.3), thickness * 0.7, color, 8, out_vertices, out_indices);
+            push_circle(top_left + Vec2::new(0.0, size.y * 0.7), thickness * 0.7, color, 8, out_vertices, out_indices);
             size.x * 0.4
         }
         '-' => {
