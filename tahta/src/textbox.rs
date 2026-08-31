@@ -3,13 +3,13 @@
 //! `calculator::Calculator` (swallows touches completely). Interactive
 //! flat panels have no physical keyboard, so unlike a desktop app this
 //! can't rely on the OS to supply one: the keyboard is drawn and hit-
-//! tested by tahta itself, uppercase-only (`font5x7` only defines capitals
-//! — halves the glyph table without losing legibility on a big panel) and
+//! tested by tahta itself. A Shift key toggles between upper/lowercase
+//! (default: uppercase, matching the keyboard's printed key labels)
 //! including the six Turkish letters outside plain ASCII.
 
 use glam::Vec2;
 
-use crate::font5x7::push_char;
+use crate::font5x7::{push_char, to_lower_tr};
 use crate::stroke::{push_circle, push_line, push_rect, Vertex};
 
 const BTN: f32 = 52.0;
@@ -34,6 +34,7 @@ enum Key {
     Space,
     Backspace,
     Clear,
+    Shift,
 }
 
 /// One keyboard row as `(key, width_in_units)` pairs — a unit is one
@@ -60,7 +61,7 @@ const ROW_Z: Row = &[
 const ROW_TR: Row = &[
     (Key::Char('Ç'), 1.0), (Key::Char('Ğ'), 1.0), (Key::Char('İ'), 1.0), (Key::Char('Ö'), 1.0), (Key::Char('Ş'), 1.0), (Key::Char('Ü'), 1.0),
 ];
-const ROW_ACTIONS: Row = &[(Key::Space, 4.0), (Key::Backspace, 3.0), (Key::Clear, 3.0)];
+const ROW_ACTIONS: Row = &[(Key::Shift, 2.0), (Key::Space, 4.0), (Key::Backspace, 2.0), (Key::Clear, 2.0)];
 
 const ROWS: &[Row] = &[ROW_DIGITS, ROW_Q, ROW_A, ROW_Z, ROW_TR, ROW_ACTIONS];
 const MAX_UNITS: f32 = 10.0; // widest row (digits/QWERTY), everything else lines up against it
@@ -68,11 +69,14 @@ const MAX_UNITS: f32 = 10.0; // widest row (digits/QWERTY), everything else line
 pub struct TextBox {
     pub position: Vec2,
     text: String,
+    /// Uppercase by default (matches the keys' printed labels); Shift
+    /// toggles it off to type lowercase.
+    caps: bool,
 }
 
 impl TextBox {
     pub fn new(position: Vec2) -> Self {
-        Self { position, text: String::new() }
+        Self { position, text: String::new(), caps: true }
     }
 
     fn panel_width(&self) -> f32 {
@@ -139,7 +143,7 @@ impl TextBox {
         match key {
             Key::Char(c) => {
                 if self.text.chars().count() < MAX_CHARS {
-                    self.text.push(c);
+                    self.text.push(if self.caps { c } else { to_lower_tr(c) });
                 }
             }
             Key::Space => {
@@ -151,6 +155,7 @@ impl TextBox {
                 self.text.pop();
             }
             Key::Clear => self.text.clear(),
+            Key::Shift => self.caps = !self.caps,
         }
     }
 
@@ -186,22 +191,25 @@ impl TextBox {
                 let color = match key {
                     Key::Space | Key::Backspace => COLOR_KEY_SPECIAL,
                     Key::Clear => COLOR_KEY_CLEAR,
+                    Key::Shift if self.caps => COLOR_KEY_SPECIAL,
+                    Key::Shift => COLOR_KEY_IDLE,
                     Key::Char(_) => COLOR_KEY_IDLE,
                 };
                 push_rect(pos, size, color, out_vertices, out_indices);
-                draw_key_glyph(key, pos, size, out_vertices, out_indices);
+                draw_key_glyph(key, pos, size, self.caps, out_vertices, out_indices);
             }
         }
     }
 }
 
-fn draw_key_glyph(key: Key, top_left: Vec2, size: Vec2, out_vertices: &mut Vec<Vertex>, out_indices: &mut Vec<u32>) {
+fn draw_key_glyph(key: Key, top_left: Vec2, size: Vec2, caps: bool, out_vertices: &mut Vec<Vertex>, out_indices: &mut Vec<u32>) {
     let center = top_left + size / 2.0;
     match key {
         Key::Char(c) => {
             let cell = Vec2::new(size.x * 0.36, size.y * 0.6);
             let pos = center - cell / 2.0;
-            push_char(c, pos, cell, COLOR_GLYPH, out_vertices, out_indices);
+            let shown = if caps { c } else { to_lower_tr(c) };
+            push_char(shown, pos, cell, COLOR_GLYPH, out_vertices, out_indices);
         }
         Key::Space => {
             push_line(center + Vec2::new(-size.x * 0.28, 0.0), center + Vec2::new(size.x * 0.28, 0.0), 4.0, COLOR_GLYPH, out_vertices, out_indices);
@@ -226,6 +234,15 @@ fn draw_key_glyph(key: Key, top_left: Vec2, size: Vec2, out_vertices: &mut Vec<V
                 push_line(p0, p1, 2.5, COLOR_GLYPH, out_vertices, out_indices);
             }
             push_line(center + Vec2::new(-r * 0.7, -r * 0.7), center + Vec2::new(r * 0.7, r * 0.7), 2.5, COLOR_GLYPH, out_vertices, out_indices);
+        }
+        Key::Shift => {
+            // Upward arrow — classic shift/caps icon.
+            let w = size.x * 0.22;
+            let stem_top = center + Vec2::new(0.0, -size.y * 0.22);
+            let stem_bottom = center + Vec2::new(0.0, size.y * 0.22);
+            push_line(stem_top, stem_bottom, 4.0, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(stem_top, stem_top + Vec2::new(-w, w), 4.0, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(stem_top, stem_top + Vec2::new(w, w), 4.0, COLOR_GLYPH, out_vertices, out_indices);
         }
     }
 }
