@@ -98,11 +98,11 @@ pub struct ToolbarState {
 
 // Scaled down toward the dock's ~36px icon / ~10px gap proportions
 // (`bacak-compositor/src/state.rs::dock_tiles_for`, dock_height=56 ->
-// tile≈35.84px, gap≈10.08px) while staying at the 48-64px floor a touch/
-// chalk-stylus target needs — going all the way to the dock's mouse-first
-// 36px would be too small to reliably tap on a large panel.
-const BUTTON_SIZE: f32 = 56.0;
-const BUTTON_GAP: f32 = 10.0;
+// tile≈35.84px, gap≈10.08px) while staying close to a touch/chalk-stylus
+// target size — going all the way to the dock's mouse-first 36px would be
+// too small to reliably tap on a large panel.
+const BUTTON_SIZE: f32 = 44.0;
+const BUTTON_GAP: f32 = 8.0;
 const BAR_MARGIN: f32 = 10.0;
 const BAR_BOTTOM_MARGIN: f32 = 24.0;
 /// Gap between the bar and a group's flyout, and between the flyout and
