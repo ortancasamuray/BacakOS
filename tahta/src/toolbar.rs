@@ -105,118 +105,175 @@ const BUTTON_SIZE: f32 = 56.0;
 const BUTTON_GAP: f32 = 10.0;
 const BAR_MARGIN: f32 = 10.0;
 const BAR_BOTTOM_MARGIN: f32 = 24.0;
-/// Vertical gap between the two button rows.
-const ROW_GAP: f32 = 8.0;
-/// How many of `BUTTONS`, from the start, sit on the first row — tool
-/// select + every drafting/widget toggle. The rest (brush/color/actions/
-/// page-nav) sit on the second row. Split here, rather than one long row,
-/// once 21 buttons stopped fitting an 1280px-wide panel without either
-/// shrinking below the 48-64px touch-target floor or running off-screen.
-const ROW_SPLIT: usize = 14;
+/// Gap between the bar and a group's flyout, and between the flyout and
+/// the buttons it contains.
+const FLYOUT_GAP: f32 = 8.0;
 
 const COLOR_BAR_BG: [f32; 4] = [0.12, 0.13, 0.17, 0.92];
 const COLOR_BUTTON_IDLE: [f32; 4] = [0.22, 0.24, 0.30, 1.0];
 const COLOR_BUTTON_ACTIVE: [f32; 4] = [0.23, 0.51, 0.96, 1.0]; // accent blue
 const COLOR_GLYPH: [f32; 4] = [0.95, 0.95, 0.97, 1.0];
 const COLOR_SEPARATOR: [f32; 4] = [1.0, 1.0, 1.0, 0.10];
+const COLOR_EXPAND_BADGE: [f32; 4] = [0.95, 0.95, 0.97, 0.9];
 
-const BUTTONS: [ToolbarAction; 23] = [
-    ToolbarAction::SelectTool(Tool::Pen),
-    ToolbarAction::SelectTool(Tool::Hand),
-    ToolbarAction::SelectTool(Tool::Eraser),
-    ToolbarAction::SelectTool(Tool::Compass),
-    ToolbarAction::ToggleRuler,
-    ToolbarAction::ToggleSetSquare,
-    ToolbarAction::ToggleProtractor,
-    ToolbarAction::ToggleCalculator,
-    ToolbarAction::ToggleStopwatch,
-    ToolbarAction::ToggleDice,
-    ToolbarAction::ToggleSpotlight,
-    ToolbarAction::ToggleMagnifier,
-    ToolbarAction::ToggleTextBox,
-    ToolbarAction::ToggleBrowser,
-    ToolbarAction::CycleBrush,
-    ToolbarAction::CycleColor,
-    ToolbarAction::Undo,
-    ToolbarAction::Clear,
-    ToolbarAction::ToggleZone,
-    ToolbarAction::CycleBackground,
-    ToolbarAction::ExportPdf,
-    ToolbarAction::PrevPage,
-    ToolbarAction::NextPage,
+/// One toolbar slot: either applies its action directly, or (a `Group`)
+/// opens a small flyout of related actions above the bar when tapped —
+/// this is what keeps the bar itself down to a single row of ~14 slots
+/// instead of 23 flat buttons across two rows.
+enum Entry {
+    Direct(ToolbarAction),
+    /// Trigger button reuses the first action's glyph plus a small
+    /// "expand" badge, and reads as active if any child action is active
+    /// (so e.g. the drafting-tools group highlights when the ruler is
+    /// out, even collapsed).
+    Group(&'static [ToolbarAction]),
+}
+
+const ENTRIES: &[Entry] = &[
+    Entry::Direct(ToolbarAction::SelectTool(Tool::Pen)),
+    Entry::Direct(ToolbarAction::SelectTool(Tool::Hand)),
+    Entry::Direct(ToolbarAction::SelectTool(Tool::Eraser)),
+    Entry::Direct(ToolbarAction::SelectTool(Tool::Compass)),
+    Entry::Direct(ToolbarAction::CycleBrush),
+    Entry::Direct(ToolbarAction::CycleColor),
+    Entry::Direct(ToolbarAction::Undo),
+    Entry::Direct(ToolbarAction::Clear),
+    Entry::Group(&[ToolbarAction::ToggleRuler, ToolbarAction::ToggleSetSquare, ToolbarAction::ToggleProtractor]),
+    Entry::Group(&[ToolbarAction::ToggleCalculator, ToolbarAction::ToggleStopwatch, ToolbarAction::ToggleDice]),
+    Entry::Group(&[ToolbarAction::ToggleSpotlight, ToolbarAction::ToggleMagnifier]),
+    Entry::Direct(ToolbarAction::ToggleTextBox),
+    Entry::Direct(ToolbarAction::ToggleBrowser),
+    Entry::Group(&[
+        ToolbarAction::ToggleZone,
+        ToolbarAction::CycleBackground,
+        ToolbarAction::ExportPdf,
+        ToolbarAction::PrevPage,
+        ToolbarAction::NextPage,
+    ]),
 ];
 
-/// Local (within-row) index right before which a thin separator is drawn.
-/// Row 0 (13 buttons): tool-select (0-3) | drafting+widget tools (4-12).
-const SEPARATOR_BEFORE_ROW0: [usize; 1] = [4];
-/// Row 1 (9 buttons): brush+color (0-1) | undo/clear/zone (2-4) | background+export+page-nav (5-8).
-const SEPARATOR_BEFORE_ROW1: [usize; 2] = [2, 5];
+/// Local index right before which a thin separator is drawn: tool-select
+/// (0-3) | brush/color/undo/clear (4-7) | drafting/widget/view groups
+/// (8-10) | text/browser (11-12) | page group (13).
+const SEPARATOR_BEFORE: [usize; 4] = [4, 8, 11, 13];
 
 /// Bottom-center floating toolbar. Screen-space, never affected by canvas
-/// pan/zoom, recomputed each frame from the current window size.
+/// pan/zoom, recomputed each frame from the current window size (though
+/// `open_group` — see below — only ever changes from a tap, not a resize).
 pub struct Toolbar {
     bar_rect: (Vec2, Vec2), // (top_left, size)
-    button_rects: [(Vec2, Vec2); BUTTONS.len()],
+    button_rects: Vec<(Vec2, Vec2)>,
+    /// Index into `ENTRIES` of the currently-open group flyout, if any.
+    /// The one piece of state `Toolbar` carries across frames — everything
+    /// else here is recomputed from scratch by `layout()`.
+    open_group: Option<usize>,
 }
 
 impl Toolbar {
     pub fn layout(screen_size: Vec2) -> Self {
-        let row0_w = row_content_width(ROW_SPLIT);
-        let row1_w = row_content_width(BUTTONS.len() - ROW_SPLIT);
-        let bar_content_w = row0_w.max(row1_w);
-        let bar_w = bar_content_w + BAR_MARGIN * 2.0;
-        let bar_h = BUTTON_SIZE * 2.0 + ROW_GAP + BAR_MARGIN * 2.0;
+        let bar_w = row_content_width(ENTRIES.len()) + BAR_MARGIN * 2.0;
+        let bar_h = BUTTON_SIZE + BAR_MARGIN * 2.0;
         let bar_top_left = Vec2::new(
             (screen_size.x - bar_w) / 2.0,
             screen_size.y - bar_h - BAR_BOTTOM_MARGIN,
         );
+        let row_y = bar_top_left.y + BAR_MARGIN;
 
-        // Each row is centered within the shared bar width independently,
-        // so the shorter second row reads as intentionally centered rather
-        // than left-aligned and trailing off.
-        let row0_x0 = bar_top_left.x + (bar_w - row0_w) / 2.0;
-        let row1_x0 = bar_top_left.x + (bar_w - row1_w) / 2.0;
-        let row0_y = bar_top_left.y + BAR_MARGIN;
-        let row1_y = row0_y + BUTTON_SIZE + ROW_GAP;
+        let button_rects = (0..ENTRIES.len())
+            .map(|i| {
+                let x = bar_top_left.x + BAR_MARGIN + i as f32 * (BUTTON_SIZE + BUTTON_GAP);
+                (Vec2::new(x, row_y), Vec2::splat(BUTTON_SIZE))
+            })
+            .collect();
 
-        let mut button_rects = [(Vec2::ZERO, Vec2::ZERO); BUTTONS.len()];
-        for i in 0..ROW_SPLIT {
-            let x = row0_x0 + i as f32 * (BUTTON_SIZE + BUTTON_GAP);
-            button_rects[i] = (Vec2::new(x, row0_y), Vec2::splat(BUTTON_SIZE));
-        }
-        for (local, i) in (ROW_SPLIT..BUTTONS.len()).enumerate() {
-            let x = row1_x0 + local as f32 * (BUTTON_SIZE + BUTTON_GAP);
-            button_rects[i] = (Vec2::new(x, row1_y), Vec2::splat(BUTTON_SIZE));
-        }
-
-        Self { bar_rect: (bar_top_left, Vec2::new(bar_w, bar_h)), button_rects }
+        Self { bar_rect: (bar_top_left, Vec2::new(bar_w, bar_h)), button_rects, open_group: None }
     }
 
-    /// True if `point` lands anywhere on the toolbar's background — used to
-    /// swallow touches so they never start a stroke, even between buttons.
+    /// True if `point` lands anywhere on the toolbar's background, or on
+    /// the open group's flyout — used to swallow touches so they never
+    /// start a stroke, even between buttons.
     pub fn contains(&self, point: Vec2) -> bool {
-        rect_contains(self.bar_rect, point)
+        if rect_contains(self.bar_rect, point) {
+            return true;
+        }
+        self.open_group.is_some_and(|gi| rect_contains(self.flyout_rect(gi), point))
     }
 
-    /// Which action (if any) `point` lands on.
-    pub fn hit_test(&self, point: Vec2) -> Option<ToolbarAction> {
-        self.button_rects
-            .iter()
-            .zip(BUTTONS)
-            .find(|(rect, _)| rect_contains(**rect, point))
-            .map(|(_, action)| action)
+    /// True while a group's flyout is open — `input_handler` uses this to
+    /// close it on any touch that lands outside `contains()` entirely
+    /// (tapping the canvas elsewhere dismisses an open flyout).
+    pub fn has_open_group(&self) -> bool {
+        self.open_group.is_some()
+    }
+
+    pub fn close_group(&mut self) {
+        self.open_group = None;
+    }
+
+    /// Which action (if any) `point` picks. Tapping a `Group` trigger
+    /// toggles its flyout open/closed instead of returning an action;
+    /// tapping a child inside an open flyout returns that action and
+    /// closes the flyout; tapping bar padding or a different trigger
+    /// closes whatever was open.
+    pub fn hit_test(&mut self, point: Vec2) -> Option<ToolbarAction> {
+        if let Some(gi) = self.open_group {
+            if let Entry::Group(actions) = &ENTRIES[gi] {
+                for (rect, action) in self.flyout_child_rects(gi).into_iter().zip(*actions) {
+                    if rect_contains(rect, point) {
+                        self.open_group = None;
+                        return Some(*action);
+                    }
+                }
+            }
+        }
+
+        for (i, rect) in self.button_rects.iter().enumerate() {
+            if rect_contains(*rect, point) {
+                return match &ENTRIES[i] {
+                    Entry::Direct(action) => {
+                        self.open_group = None;
+                        Some(*action)
+                    }
+                    Entry::Group(_) => {
+                        self.open_group = if self.open_group == Some(i) { None } else { Some(i) };
+                        None
+                    }
+                };
+            }
+        }
+
+        self.open_group = None;
+        None
+    }
+
+    /// Flyout panel rect for group `gi`, centered above its trigger button.
+    fn flyout_rect(&self, gi: usize) -> (Vec2, Vec2) {
+        let Entry::Group(actions) = &ENTRIES[gi] else { return (Vec2::ZERO, Vec2::ZERO) };
+        let (trigger_pos, trigger_size) = self.button_rects[gi];
+        let w = row_content_width(actions.len()) + BAR_MARGIN * 2.0;
+        let h = BUTTON_SIZE + BAR_MARGIN * 2.0;
+        let cx = trigger_pos.x + trigger_size.x / 2.0;
+        let top_left = Vec2::new(cx - w / 2.0, self.bar_rect.0.y - FLYOUT_GAP - h);
+        (top_left, Vec2::new(w, h))
+    }
+
+    fn flyout_child_rects(&self, gi: usize) -> Vec<(Vec2, Vec2)> {
+        let Entry::Group(actions) = &ENTRIES[gi] else { return Vec::new() };
+        let (flyout_pos, _) = self.flyout_rect(gi);
+        let y = flyout_pos.y + BAR_MARGIN;
+        (0..actions.len())
+            .map(|i| {
+                let x = flyout_pos.x + BAR_MARGIN + i as f32 * (BUTTON_SIZE + BUTTON_GAP);
+                (Vec2::new(x, y), Vec2::splat(BUTTON_SIZE))
+            })
+            .collect()
     }
 
     pub fn render(&self, state: &ToolbarState, out_vertices: &mut Vec<Vertex>, out_indices: &mut Vec<u32>) {
         push_rect(self.bar_rect.0, self.bar_rect.1, COLOR_BAR_BG, out_vertices, out_indices);
 
-        for (i, (rect, action)) in self.button_rects.iter().zip(BUTTONS).enumerate() {
-            let needs_separator = if i < ROW_SPLIT {
-                SEPARATOR_BEFORE_ROW0.contains(&i)
-            } else {
-                SEPARATOR_BEFORE_ROW1.contains(&(i - ROW_SPLIT))
-            };
-            if needs_separator {
+        for (i, rect) in self.button_rects.iter().enumerate() {
+            if SEPARATOR_BEFORE.contains(&i) {
                 let x = rect.0.x - BUTTON_GAP / 2.0;
                 push_rect(
                     Vec2::new(x - 1.0, rect.0.y + 10.0),
@@ -227,10 +284,35 @@ impl Toolbar {
                 );
             }
 
-            let active = is_active(action, state);
+            let (active, glyph_action) = match &ENTRIES[i] {
+                Entry::Direct(action) => (is_active(*action, state), *action),
+                Entry::Group(actions) => {
+                    (self.open_group == Some(i) || actions.iter().any(|a| is_active(*a, state)), actions[0])
+                }
+            };
             let color = if active { COLOR_BUTTON_ACTIVE } else { COLOR_BUTTON_IDLE };
             push_rect(rect.0, rect.1, color, out_vertices, out_indices);
-            draw_glyph(action, *rect, state, out_vertices, out_indices);
+            draw_glyph(glyph_action, *rect, state, out_vertices, out_indices);
+            if matches!(ENTRIES[i], Entry::Group(_)) {
+                // Small triangle bottom-right of a group trigger, marking
+                // it as "taps open more options" rather than a direct action.
+                let corner = rect.0 + rect.1 - Vec2::splat(9.0);
+                push_line(corner, corner + Vec2::new(7.0, 0.0), 2.5, COLOR_EXPAND_BADGE, out_vertices, out_indices);
+                push_line(corner, corner + Vec2::new(0.0, 7.0), 2.5, COLOR_EXPAND_BADGE, out_vertices, out_indices);
+                push_line(corner + Vec2::new(7.0, 0.0), corner + Vec2::new(0.0, 7.0), 2.5, COLOR_EXPAND_BADGE, out_vertices, out_indices);
+            }
+        }
+
+        if let Some(gi) = self.open_group {
+            if let Entry::Group(actions) = &ENTRIES[gi] {
+                let flyout = self.flyout_rect(gi);
+                push_rect(flyout.0, flyout.1, COLOR_BAR_BG, out_vertices, out_indices);
+                for (rect, action) in self.flyout_child_rects(gi).into_iter().zip(*actions) {
+                    let color = if is_active(*action, state) { COLOR_BUTTON_ACTIVE } else { COLOR_BUTTON_IDLE };
+                    push_rect(rect.0, rect.1, color, out_vertices, out_indices);
+                    draw_glyph(*action, rect, state, out_vertices, out_indices);
+                }
+            }
         }
 
         self.render_page_dots(state, out_vertices, out_indices);

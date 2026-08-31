@@ -498,12 +498,22 @@ impl InputHandler {
             return;
         }
 
-        if self.toolbar_visible && self.toolbar.contains(position) {
-            if let Some(action) = self.toolbar.hit_test(position) {
-                self.apply_toolbar_action(action, self.zone_of(position));
+        if self.toolbar_visible {
+            if self.toolbar.contains(position) {
+                if let Some(action) = self.toolbar.hit_test(position) {
+                    self.apply_toolbar_action(action, self.zone_of(position));
+                }
+                self.sessions.insert(id, PointerSession { role: PointerRole::Toolbar, start_pos: position, start_time: now });
+                return;
             }
-            self.sessions.insert(id, PointerSession { role: PointerRole::Toolbar, start_pos: position, start_time: now });
-            return;
+            // A group flyout is modal-ish but not fully: a touch that
+            // lands elsewhere (the canvas, another panel) still does
+            // whatever it would normally do — it just also dismisses the
+            // now-stale flyout first, since it can never be reached from
+            // there again this touch.
+            if self.toolbar.has_open_group() {
+                self.toolbar.close_group();
+            }
         }
 
         // The calculator panel is UI chrome like the toolbar: its header
