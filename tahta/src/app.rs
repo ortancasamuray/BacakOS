@@ -48,6 +48,10 @@ pub struct App {
     /// (lazily-initialized) engine/panel on the on-transition, not every
     /// frame while it's already open.
     browser_was_visible: bool,
+    /// When on, touches over the page draw ink (see `browser_region`)
+    /// instead of reaching Servo — toggled from the address bar's pen
+    /// button (`UrlBarHit::ToggleDraw`).
+    browser_draw_mode: bool,
     last_mouse_pos: Vec2,
     /// winit delivers modifier state as a separate event from the key
     /// press/release itself — tracked here so `key_input` can attach it
@@ -68,6 +72,7 @@ impl App {
             web_panel: None,
             url_bar: UrlBar::new(BROWSER_HOME),
             browser_was_visible: false,
+            browser_draw_mode: false,
             last_mouse_pos: Vec2::ZERO,
             modifiers: ModifiersState::empty(),
         }
@@ -100,7 +105,10 @@ impl App {
             && pos.x <= c_top_left.x + c_size.x
             && pos.y <= c_top_left.y + c_size.y
         {
-            return BrowserRegion::Content;
+            // Draw mode: the page area behaves like ordinary canvas (ink
+            // lands in `input`'s current page/tool) instead of routing to
+            // Servo — see `urlbar.rs`'s module docs.
+            return if self.browser_draw_mode { BrowserRegion::Outside } else { BrowserRegion::Content };
         }
         BrowserRegion::Outside
     }
@@ -139,6 +147,9 @@ impl App {
                 if let Some(panel) = &self.web_panel {
                     panel.navigate(&resolve_input(&text));
                 }
+            }
+            UrlBarHit::ToggleDraw => {
+                self.browser_draw_mode = !self.browser_draw_mode;
             }
             UrlBarHit::None => {}
         }
@@ -311,9 +322,12 @@ impl App {
                 }
             }
         }
-        if !visible && self.browser_was_visible && self.url_bar.editing {
-            self.url_bar.cancel_editing();
-            self.window.set_ime_allowed(false);
+        if !visible && self.browser_was_visible {
+            if self.url_bar.editing {
+                self.url_bar.cancel_editing();
+                self.window.set_ime_allowed(false);
+            }
+            self.browser_draw_mode = false;
         }
         self.browser_was_visible = visible;
 
@@ -357,7 +371,7 @@ impl App {
             let (panel_top_left, panel_size) = self.input.browser_bounds();
             let can_back = self.web_panel.as_ref().map(|p| p.can_go_back()).unwrap_or(false);
             let can_forward = self.web_panel.as_ref().map(|p| p.can_go_forward()).unwrap_or(false);
-            self.url_bar.render(panel_top_left, panel_size.x, can_back, can_forward, &mut normal_v, &mut normal_i);
+            self.url_bar.render(panel_top_left, panel_size.x, can_back, can_forward, self.browser_draw_mode, &mut normal_v, &mut normal_i);
         }
 
         match self.renderer.render(
