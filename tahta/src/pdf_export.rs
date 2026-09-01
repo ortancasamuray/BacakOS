@@ -16,7 +16,6 @@
 //! imported PDF export onto a blank page instead of the original scan.
 
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use glam::Vec2;
 
@@ -30,8 +29,7 @@ use crate::brush::BrushType;
 pub fn export_to_pdf(pages: &[Page], page_size: Vec2) -> anyhow::Result<PathBuf> {
     let dir = export_dir();
     std::fs::create_dir_all(&dir)?;
-    let epoch = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-    let path = dir.join(format!("tahta-{epoch}.pdf"));
+    let path = dir.join(format!("tahta-{}.pdf", local_timestamp()));
 
     let bytes = build_pdf(pages, page_size);
     std::fs::write(&path, bytes)?;
@@ -43,6 +41,27 @@ fn export_dir() -> PathBuf {
     let belgeler = PathBuf::from(&home).join("Belgeler");
     let base = if belgeler.is_dir() { belgeler } else { PathBuf::from(home) };
     base.join("tahta-pdf")
+}
+
+/// `YYYY-MM-DD_HH-MM-SS` in the system's local timezone — no date/time
+/// crate in this dependency set, so this goes through libc's
+/// `localtime_r` directly (already a transitive dependency of the rest of
+/// the stack, so this adds no real build cost).
+fn local_timestamp() -> String {
+    unsafe {
+        let t = libc::time(std::ptr::null_mut());
+        let mut tm: libc::tm = std::mem::zeroed();
+        libc::localtime_r(&t, &mut tm);
+        format!(
+            "{:04}-{:02}-{:02}_{:02}-{:02}-{:02}",
+            tm.tm_year + 1900,
+            tm.tm_mon + 1,
+            tm.tm_mday,
+            tm.tm_hour,
+            tm.tm_min,
+            tm.tm_sec,
+        )
+    }
 }
 
 fn build_pdf(pages: &[Page], page_size: Vec2) -> Vec<u8> {
