@@ -70,6 +70,9 @@ pub enum ToolbarAction {
     /// Writes every page's ink to a multi-page PDF file — a one-shot
     /// action like Undo/Clear, not a toggle.
     ExportPdf,
+    /// Minimizes the (fullscreen) window back to the desktop — a one-shot
+    /// action, not a toggle. See `App::minimize_to_desktop`.
+    MinimizeToDesktop,
 }
 
 /// What the toolbar needs to know to draw each button's current-state
@@ -104,7 +107,13 @@ pub struct ToolbarState {
 const BUTTON_SIZE: f32 = 44.0;
 const BUTTON_GAP: f32 = 8.0;
 const BAR_MARGIN: f32 = 10.0;
-const BAR_BOTTOM_MARGIN: f32 = 24.0;
+/// Now that `main.rs` opens the window fullscreen, this bar's own
+/// bottom-center anchor lands almost exactly on top of bacakos's system
+/// dock (`compositor.json`'s `dock_height: 56`, always visible —
+/// `dock_autohide` is off) — the dock is a compositor-level overlay
+/// tahta has no way to query, so this just clears a fixed, generously
+/// padded band above it rather than computing an exact value.
+const BAR_BOTTOM_MARGIN: f32 = 80.0;
 /// Gap between the bar and a group's flyout, and between the flyout and
 /// the buttons it contains.
 const FLYOUT_GAP: f32 = 8.0;
@@ -150,12 +159,13 @@ const ENTRIES: &[Entry] = &[
         ToolbarAction::PrevPage,
         ToolbarAction::NextPage,
     ]),
+    Entry::Direct(ToolbarAction::MinimizeToDesktop),
 ];
 
 /// Local index right before which a thin separator is drawn: tool-select
 /// (0-3) | brush/color/undo/clear (4-7) | drafting/widget/view groups
-/// (8-10) | text/browser (11-12) | page group (13).
-const SEPARATOR_BEFORE: [usize; 4] = [4, 8, 11, 13];
+/// (8-10) | text/browser (11-12) | page group (13) | minimize (14).
+const SEPARATOR_BEFORE: [usize; 5] = [4, 8, 11, 13, 14];
 
 /// Bottom-center floating toolbar. Screen-space, never affected by canvas
 /// pan/zoom, recomputed each frame from the current window size (though
@@ -619,6 +629,13 @@ fn draw_glyph(
             push_line(center + Vec2::new(-r * 0.4, -r), center + Vec2::new(r * 0.4, 0.0), 5.0, COLOR_GLYPH, out_vertices, out_indices);
             push_line(center + Vec2::new(r * 0.4, 0.0), center + Vec2::new(-r * 0.4, r), 5.0, COLOR_GLYPH, out_vertices, out_indices);
             push_line(center + Vec2::new(-r * 0.55, -r), center + Vec2::new(-r * 0.55, r), 3.0, COLOR_GLYPH, out_vertices, out_indices);
+        }
+        ToolbarAction::MinimizeToDesktop => {
+            // Classic "minimize" glyph: a downward chevron over a
+            // baseline, reading as "send this window down and away".
+            push_line(center + Vec2::new(-r * 0.6, -r * 0.5), center + Vec2::new(0.0, r * 0.15), 4.0, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(center + Vec2::new(r * 0.6, -r * 0.5), center + Vec2::new(0.0, r * 0.15), 4.0, COLOR_GLYPH, out_vertices, out_indices);
+            push_rect(center + Vec2::new(-r * 0.75, r * 0.55), Vec2::new(r * 1.5, 3.0), COLOR_GLYPH, out_vertices, out_indices);
         }
     }
 }

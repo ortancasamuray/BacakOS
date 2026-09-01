@@ -212,6 +212,11 @@ pub struct InputHandler {
     /// `font_atlas.rs`. Built once in `main.rs`, shared with the renderer
     /// (which owns the matching GPU texture) via `Arc`.
     font_atlas: Arc<crate::font_atlas::FontAtlas>,
+
+    /// Set by the toolbar's "return to desktop" button — `app.rs` polls
+    /// this via `take_minimize_request` (only it owns the winit `Window`
+    /// this needs) since this module stays toolkit-agnostic.
+    minimize_requested: bool,
 }
 
 impl InputHandler {
@@ -253,7 +258,15 @@ impl InputHandler {
             last_input_at: None,
             toast: None,
             font_atlas,
+            minimize_requested: false,
         }
+    }
+
+    /// True (once) if the toolbar's "return to desktop" button was tapped
+    /// since the last call — clears the flag so `app.rs` only acts on it
+    /// once per tap.
+    pub fn take_minimize_request(&mut self) -> bool {
+        std::mem::take(&mut self.minimize_requested)
     }
 
     pub fn resize(&mut self, screen_size: Vec2) {
@@ -495,6 +508,11 @@ impl InputHandler {
                     }
                 };
                 self.toast = Some((message, now + 2.5));
+            }
+            ToolbarAction::MinimizeToDesktop => {
+                // Only `app.rs` owns the winit `Window`, so this just
+                // raises a flag — see `take_minimize_request`.
+                self.minimize_requested = true;
             }
         }
     }
