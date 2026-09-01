@@ -34,6 +34,9 @@ const PALM_CLUSTER_DEMOTE_RADIUS: f32 = 90.0;
 const DIVIDER_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 0.12];
 const DIVIDER_WIDTH: f32 = 2.0;
 
+const MIN_VIEW_SCALE: f32 = 0.4;
+const MAX_VIEW_SCALE: f32 = 3.0;
+
 /// Two Pen taps landing within this many seconds of each other, and this
 /// close together, are treated as a deliberate double-tap that opens the
 /// radial menu — NOT a single-finger long-press. The compositor has its
@@ -58,6 +61,27 @@ const MOUSE_POINTER_ID: u64 = u64::MAX;
 pub enum Zone {
     Left,
     Right,
+}
+
+/// Two-finger pinch-to-zoom, engaged from `Tool::Hand` when a second
+/// finger touches down while one is already panning (see `begin_pointer`).
+/// Drives `view_scale`/`view_offset` directly every `move_pointer` call
+/// for either id — the two touches don't get their own `PointerRole`
+/// beyond the placeholder `Palm` (this state machine, not per-touch role
+/// dispatch, owns the transform while it's active).
+struct PinchState {
+    id_a: u64,
+    id_b: u64,
+    pos_a: Vec2,
+    pos_b: Vec2,
+    /// Distance between the two fingers when the pinch began — the
+    /// current/start ratio scales `start_scale`.
+    start_distance: f32,
+    start_scale: f32,
+    /// Canvas-space point that was under both fingers' midpoint when the
+    /// pinch began, kept fixed under the (possibly moving) midpoint for
+    /// the whole gesture so zooming feels anchored, not like it recenters.
+    canvas_anchor: Vec2,
 }
 
 
@@ -137,6 +161,10 @@ pub struct InputHandler {
     eraser_mode: EraserMode,
     eraser_radius: f32,
     view_offset: Vec2,
+    /// Canvas zoom factor — `1.0` is unzoomed. See `to_canvas`/`PinchState`.
+    view_scale: f32,
+    /// Live two-finger pinch-zoom gesture, if one is in progress.
+    pinch: Option<PinchState>,
     eraser_cursor: Option<Vec2>,
     /// Live (center, radius) while a Compass drag is in progress.
     compass_preview: Option<(Vec2, f32)>,
@@ -198,6 +226,8 @@ impl InputHandler {
             eraser_radius: DEFAULT_ERASER_RADIUS,
             active_pen: PenSettings::ballpoint([0.92, 0.92, 0.95, 1.0]),
             view_offset: Vec2::ZERO,
+            view_scale: 1.0,
+            pinch: None,
             eraser_cursor: None,
             compass_preview: None,
             ruler: None,
@@ -257,7 +287,17 @@ impl InputHandler {
         }
         self.current_page = 0;
         self.view_offset = Vec2::ZERO;
+        self.view_scale = 1.0;
         Ok(())
+    }
+
+    /// Screen-space `p` to canvas-space, inverting the current pan/zoom
+    /// transform — `Stroke.points` are stored in canvas-space so old ink
+    /// stays correctly placed under it regardless of when it was drawn
+    /// relative to the current view (pan/zoom applied at render/hit-test
+    /// time via the same transform, see `stroke.rs`/`board.rs`).
+    fn to_canvas(&self, p: Vec2) -> Vec2 {
+        (p - self.view_offset) / self.view_scale
     }
 
     fn zone_of(&self, pos: Vec2) -> Zone {
@@ -652,6 +692,36 @@ impl InputHandler {
             }
         }
 
+        // Two-finger pinch-to-zoom: only from the Hand tool, only when a
+        // second finger touches down while exactly one other is already
+        // panning — never interrupts Pen/Eraser drawing, and never
+        // triggers from a touch that landed on a panel/toolbar (those all
+        // returned above already). See `PinchState` docs.
+        if self.active_tool == Tool::Hand {
+            let existing_pan = self.sessions.iter().find_map(|(&sid, s)| match s.role {
+                PointerRole::Panning { last_pos } => Some((sid, last_pos)),
+                _ => None,
+            });
+            if let Some((other_id, other_pos)) = existing_pan {
+                let start_midpoint = (other_pos + position) / 2.0;
+                let canvas_anchor = (start_midpoint - self.view_offset) / self.view_scale;
+                self.pinch = Some(PinchState {
+                    id_a: other_id,
+                    id_b: id,
+                    pos_a: other_pos,
+                    pos_b: position,
+                    start_distance: other_pos.distance(position).max(1.0),
+                    start_scale: self.view_scale,
+                    canvas_anchor,
+                });
+                if let Some(session) = self.sessions.get_mut(&other_id) {
+                    session.role = PointerRole::Palm;
+                }
+                self.sessions.insert(id, PointerSession { role: PointerRole::Palm, start_pos: position, start_time: now });
+                return;
+            }
+        }
+
         let zone = self.zone_of(position);
 
         // A quick double-tap with the Pen opens the radial menu right at
@@ -685,10 +755,15 @@ impl InputHandler {
                     PointerRole::Palm
                 } else {
                     let edge_snap = self.find_edge_snap(position);
-                    let start = match edge_snap {
+                    let start_screen = match edge_snap {
                         Some((a, b)) => crate::geom::project_onto_segment(position, a, b),
                         None => position,
                     };
+                    // `Stroke.points` are canvas-space (see `to_canvas`) so
+                    // old ink stays correctly placed under pan/zoom no
+                    // matter when it was drawn; `edge_snap` itself stays
+                    // screen-space (the ruler/setsquare are screen-fixed).
+                    let start = self.to_canvas(start_screen);
 
                     let pen = self.pen_for(zone).clone();
                     let page = &mut self.pages[self.current_page];
@@ -739,6 +814,27 @@ impl InputHandler {
     fn move_pointer(&mut self, id: u64, position: Vec2, now: f64) {
         self.last_input_at = Some(now);
 
+        if let Some(pinch) = &mut self.pinch {
+            if id == pinch.id_a || id == pinch.id_b {
+                if id == pinch.id_a {
+                    pinch.pos_a = position;
+                } else {
+                    pinch.pos_b = position;
+                }
+                let current_distance = pinch.pos_a.distance(pinch.pos_b).max(1.0);
+                let new_scale = (pinch.start_scale * (current_distance / pinch.start_distance)).clamp(MIN_VIEW_SCALE, MAX_VIEW_SCALE);
+                let midpoint = (pinch.pos_a + pinch.pos_b) / 2.0;
+                self.view_scale = new_scale;
+                self.view_offset = midpoint - pinch.canvas_anchor * new_scale;
+                return;
+            }
+        }
+
+        // Local copies — `to_canvas` needs `&self`, which would conflict
+        // with the `&mut session.role` borrow held through this match.
+        let view_offset = self.view_offset;
+        let inv_scale = 1.0 / self.view_scale;
+
         let Some(session) = self.sessions.get_mut(&id) else {
             return;
         };
@@ -746,10 +842,11 @@ impl InputHandler {
         let mut do_erase = false;
         match &mut session.role {
             PointerRole::Drawing { stroke_index, predictor, edge_snap } => {
-                let point = match edge_snap {
+                let point_screen = match edge_snap {
                     Some((a, b)) => crate::geom::project_onto_segment(position, *a, *b),
                     None => position,
                 };
+                let point = (point_screen - view_offset) * inv_scale;
                 let Some(stroke) = self.pages[self.current_page].strokes.get_mut(*stroke_index) else {
                     session.role = PointerRole::Palm; // stroke was undone from under us
                     return;
@@ -860,6 +957,20 @@ impl InputHandler {
     }
 
     fn end_pointer(&mut self, id: u64, now: f64) {
+        if let Some(pinch) = &self.pinch {
+            if id == pinch.id_a || id == pinch.id_b {
+                // One finger lifted — hand the transform back to ordinary
+                // single-finger panning for whichever finger is still down.
+                let (remaining_id, remaining_pos) =
+                    if id == pinch.id_a { (pinch.id_b, pinch.pos_b) } else { (pinch.id_a, pinch.pos_a) };
+                self.pinch = None;
+                self.sessions.remove(&id);
+                if let Some(session) = self.sessions.get_mut(&remaining_id) {
+                    session.role = PointerRole::Panning { last_pos: remaining_pos };
+                }
+                return;
+            }
+        }
         if let Some(session) = self.sessions.remove(&id) {
             match session.role {
                 PointerRole::Erasing => self.eraser_cursor = None,
@@ -899,6 +1010,12 @@ impl InputHandler {
             return;
         }
 
+        // Live preview (`center`/`radius`) is screen-space, matching the
+        // raw drag; converted to canvas-space here, same as ordinary ink,
+        // so the committed circle stays correctly placed under pan/zoom.
+        let center = self.to_canvas(center);
+        let radius = radius / self.view_scale;
+
         let pen = self.active_pen.clone();
         let mut stroke = Stroke::new(pen.color, pen.base_width, pen.brush_type);
         let now = self.last_input_at.unwrap_or(0.0);
@@ -924,13 +1041,14 @@ impl InputHandler {
     /// unrelated stroke it barely grazes.
     fn erase_area(&mut self, position: Vec2, radius: f32) {
         let view_offset = self.view_offset;
+        let view_scale = self.view_scale;
         let strokes = &mut self.pages[self.current_page].strokes;
         let mut new_strokes = Vec::new();
         for stroke in strokes.iter_mut() {
             if stroke.points.is_empty() {
                 continue;
             }
-            new_strokes.extend(stroke.erase_near(position, radius, view_offset));
+            new_strokes.extend(stroke.erase_near(position, radius, view_offset, view_scale));
         }
         strokes.extend(new_strokes);
     }
@@ -938,8 +1056,9 @@ impl InputHandler {
     /// Deletes an entire stroke if any part of it falls within `radius`.
     fn erase_object(&mut self, position: Vec2, radius: f32) {
         let view_offset = self.view_offset;
+        let view_scale = self.view_scale;
         for stroke in &mut self.pages[self.current_page].strokes {
-            if !stroke.points.is_empty() && stroke.hit_test(position, radius, view_offset) {
+            if !stroke.points.is_empty() && stroke.hit_test(position, radius, view_offset, view_scale) {
                 stroke.clear();
             }
         }
@@ -1071,7 +1190,7 @@ impl InputHandler {
         let mut glyph_i = Vec::new();
 
         let page = &self.pages[self.current_page];
-        board::render_background(page, self.screen_size, self.view_offset, &mut normal_v, &mut normal_i);
+        board::render_background(page, self.screen_size, self.view_offset, self.view_scale, &mut normal_v, &mut normal_i);
 
         // Draw straightedge widgets before ink so strokes snapped to their
         // edges are never hidden underneath the widget body (see
@@ -1107,7 +1226,7 @@ impl InputHandler {
             } else {
                 (&mut normal_v, &mut normal_i)
             };
-            stroke.tessellate(&predicted, self.view_offset, now, v, i);
+            stroke.tessellate(&predicted, self.view_offset, self.view_scale, now, v, i);
         }
 
         if self.zone_enabled {

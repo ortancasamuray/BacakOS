@@ -109,6 +109,7 @@ pub fn render_background(
     page: &Page,
     screen_size: Vec2,
     view_offset: Vec2,
+    view_scale: f32,
     out_vertices: &mut Vec<Vertex>,
     out_indices: &mut Vec<u32>,
 ) {
@@ -123,21 +124,24 @@ pub fn render_background(
     }
 
     let grid_color = page.background.grid_color();
-    let offset_x = view_offset.x.rem_euclid(GRID_SPACING);
-    let offset_y = view_offset.y.rem_euclid(GRID_SPACING);
+    // Spacing scales with zoom too, so the grid stays locked to the page
+    // (not the screen) exactly like ink does.
+    let spacing = GRID_SPACING * view_scale;
+    let offset_x = view_offset.x.rem_euclid(spacing);
+    let offset_y = view_offset.y.rem_euclid(spacing);
 
     if page.grid == GridPattern::Lined || page.grid == GridPattern::Checkered {
         let mut y = offset_y;
         while y < screen_size.y {
             push_line(Vec2::new(0.0, y), Vec2::new(screen_size.x, y), 1.0, grid_color, out_vertices, out_indices);
-            y += GRID_SPACING;
+            y += spacing;
         }
     }
     if page.grid == GridPattern::Checkered {
         let mut x = offset_x;
         while x < screen_size.x {
             push_line(Vec2::new(x, 0.0), Vec2::new(x, screen_size.y), 1.0, grid_color, out_vertices, out_indices);
-            x += GRID_SPACING;
+            x += spacing;
         }
     }
 }
