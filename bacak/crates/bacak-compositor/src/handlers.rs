@@ -725,6 +725,18 @@ impl XdgShellHandler for BacakState {
         }
     }
 
+    // A client-initiated minimize (`xdg_toplevel.set_minimized`, what
+    // e.g. winit's `Window::set_minimized(true)` sends) previously had no
+    // handler here at all — only the wlr-foreign-toplevel-management path
+    // (an external taskbar/dock driving `Request::SetMinimized`, see
+    // `foreign_toplevel.rs`) could minimize a window. Reusing the same
+    // animated-minimize logic here means any app can now ask to be sent
+    // to the dock itself, not just be minimized by an external controller.
+    fn minimize_request(&mut self, surface: ToplevelSurface) {
+        let Some(id) = self.window_for(surface.wl_surface()) else { return };
+        self.minimize_window_animated(id);
+    }
+
     fn fullscreen_request(&mut self, surface: ToplevelSurface, _output: Option<WlOutput>) {
         let Some(id) = self.window_for(surface.wl_surface()) else { return };
         let Some(output) = self.wm.output_for_window(id) else { return };
