@@ -8,6 +8,7 @@ mod calculator;
 mod dice;
 mod digits;
 mod font5x7;
+mod font_atlas;
 mod geom;
 mod input_handler;
 mod magnifier;
@@ -60,8 +61,14 @@ fn main() {
             .expect("failed to create window"),
     );
 
-    let renderer = pollster::block_on(Renderer::new(window.clone()));
-    let mut app = App::new(renderer, window.clone());
+    // Built once up front (rasterization, not per-frame) and shared: the
+    // renderer uploads its pixel buffer to the GPU once, `input_handler`
+    // (via `App`) uses its CPU-side glyph metrics every frame to lay out
+    // the text box's real-font display and virtual keyboard.
+    let font_atlas = Arc::new(crate::font_atlas::FontAtlas::new());
+
+    let renderer = pollster::block_on(Renderer::new(window.clone(), &font_atlas));
+    let mut app = App::new(renderer, window.clone(), font_atlas);
 
     // Opened "with" tahta from the file manager (Exec=tahta %f), or run
     // directly from a terminal with a path — either way, load it as a

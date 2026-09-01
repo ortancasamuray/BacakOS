@@ -6,10 +6,17 @@
 //! tested by tahta itself. A Shift key toggles between upper/lowercase
 //! (default: uppercase, matching the keyboard's printed key labels)
 //! including the six Turkish letters outside plain ASCII.
+//!
+//! Text (the display line and key legends) is drawn with the real-font
+//! `font_atlas` — the panel's own chrome (background/header/key
+//! rectangles/icon glyphs like the space bar or backspace arrow) stays
+//! on the plain vector `Vertex` pipeline, since those are just rects and
+//! lines, not text.
 
 use glam::Vec2;
 
-use crate::font5x7::{push_char, to_lower_tr};
+use crate::font5x7::to_lower_tr;
+use crate::font_atlas::{FontAtlas, GlyphVertex};
 use crate::stroke::{push_circle, push_line, push_rect, Vertex};
 
 const BTN: f32 = 52.0;
@@ -159,7 +166,14 @@ impl TextBox {
         }
     }
 
-    pub fn render(&self, out_vertices: &mut Vec<Vertex>, out_indices: &mut Vec<u32>) {
+    pub fn render(
+        &self,
+        font_atlas: &FontAtlas,
+        out_vertices: &mut Vec<Vertex>,
+        out_indices: &mut Vec<u32>,
+        glyph_vertices: &mut Vec<GlyphVertex>,
+        glyph_indices: &mut Vec<u32>,
+    ) {
         push_rect(self.position, Vec2::new(self.panel_width(), self.panel_height()), COLOR_PANEL_BG, out_vertices, out_indices);
         let (header_pos, header_size) = self.header_rect();
         push_rect(header_pos, header_size, COLOR_HEADER, out_vertices, out_indices);
@@ -171,14 +185,14 @@ impl TextBox {
 
         let (disp_pos, disp_size) = self.display_rect();
         push_rect(disp_pos, disp_size, COLOR_DISPLAY_BG, out_vertices, out_indices);
-        let cell = Vec2::new(disp_size.y * 0.32, disp_size.y * 0.55);
-        let text_pos = disp_pos + Vec2::new(10.0, disp_size.y * 0.22);
-        let width = crate::font5x7::push_text(&self.text, text_pos, cell, COLOR_DISPLAY_TEXT, out_vertices, out_indices);
+        let text_h = disp_size.y * 0.6;
+        let text_pos = disp_pos + Vec2::new(10.0, disp_size.y * 0.2);
+        let width = font_atlas.push_text(&self.text, text_pos, text_h, COLOR_DISPLAY_TEXT, glyph_vertices, glyph_indices);
         // A static caret right after the last character — always-editable
         // hint; no blink state needed for a first pass.
         push_line(
             text_pos + Vec2::new(width + 2.0, -2.0),
-            text_pos + Vec2::new(width + 2.0, cell.y + 2.0),
+            text_pos + Vec2::new(width + 2.0, text_h + 2.0),
             2.0,
             COLOR_DISPLAY_TEXT,
             out_vertices,
@@ -196,20 +210,33 @@ impl TextBox {
                     Key::Char(_) => COLOR_KEY_IDLE,
                 };
                 push_rect(pos, size, color, out_vertices, out_indices);
-                draw_key_glyph(key, pos, size, self.caps, out_vertices, out_indices);
+                draw_key_glyph(font_atlas, key, pos, size, self.caps, out_vertices, out_indices, glyph_vertices, glyph_indices);
             }
         }
     }
 }
 
-fn draw_key_glyph(key: Key, top_left: Vec2, size: Vec2, caps: bool, out_vertices: &mut Vec<Vertex>, out_indices: &mut Vec<u32>) {
+fn draw_key_glyph(
+    font_atlas: &FontAtlas,
+    key: Key,
+    top_left: Vec2,
+    size: Vec2,
+    caps: bool,
+    out_vertices: &mut Vec<Vertex>,
+    out_indices: &mut Vec<u32>,
+    glyph_vertices: &mut Vec<GlyphVertex>,
+    glyph_indices: &mut Vec<u32>,
+) {
     let center = top_left + size / 2.0;
     match key {
         Key::Char(c) => {
-            let cell = Vec2::new(size.x * 0.36, size.y * 0.6);
-            let pos = center - cell / 2.0;
             let shown = if caps { c } else { to_lower_tr(c) };
-            push_char(shown, pos, cell, COLOR_GLYPH, out_vertices, out_indices);
+            let text_h = size.y * 0.5;
+            let mut buf = [0u8; 4];
+            let s = shown.encode_utf8(&mut buf);
+            let w = font_atlas.measure(s, text_h);
+            let pos = Vec2::new(center.x - w / 2.0, center.y - text_h / 2.0);
+            font_atlas.push_text(s, pos, text_h, COLOR_GLYPH, glyph_vertices, glyph_indices);
         }
         Key::Space => {
             push_line(center + Vec2::new(-size.x * 0.28, 0.0), center + Vec2::new(size.x * 0.28, 0.0), 4.0, COLOR_GLYPH, out_vertices, out_indices);
