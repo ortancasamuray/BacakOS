@@ -24,8 +24,9 @@ use crate::renderer::Renderer;
 use crate::urlbar::{UrlBar, UrlBarHit};
 use crate::webengine::{TouchPhase, WebEngine, WebPanel};
 
-/// Home page for the embedded browser panel.
-const BROWSER_HOME: &str = "https://www.google.com";
+/// Home page for the embedded browser panel — Turkey's national education
+/// platform, the expected default for a classroom whiteboard.
+const BROWSER_HOME: &str = "https://www.eba.gov.tr";
 
 /// Where a screen-space point landed relative to the (open) browser
 /// panel — decides whether an event goes to the address bar, the Servo
@@ -341,6 +342,10 @@ impl App {
         let now = self.now_secs();
         self.input.tick(now);
         self.sync_browser();
+
+        if self.input.take_minimize_request() {
+            self.window.set_minimized(true);
+        }
 
         if let Some(engine) = &self.web_engine {
             engine.spin();
