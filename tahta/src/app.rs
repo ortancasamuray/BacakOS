@@ -341,6 +341,19 @@ impl App {
         let (mut normal_v, mut normal_i, highlight_v, highlight_i, page_image) = self.input.collect_geometry(now);
 
         if self.input.browser_visible {
+            // Passive sync: the field only pulled `panel.url()` on tap
+            // before, so Back/Forward or an in-page link click left it
+            // showing the stale address until the user tapped the field
+            // again. Keep it live every frame instead — skipped while
+            // `editing` so it doesn't clobber what the user is typing.
+            if !self.url_bar.editing {
+                if let Some(url) = self.web_panel.as_ref().and_then(|p| p.url()) {
+                    let upper = url.to_uppercase();
+                    if self.url_bar.text != upper {
+                        self.url_bar.text = upper;
+                    }
+                }
+            }
             let (panel_top_left, panel_size) = self.input.browser_bounds();
             let can_back = self.web_panel.as_ref().map(|p| p.can_go_back()).unwrap_or(false);
             let can_forward = self.web_panel.as_ref().map(|p| p.can_go_forward()).unwrap_or(false);
