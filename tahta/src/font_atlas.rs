@@ -9,15 +9,23 @@
 //! `push_text` (CPU-side, no GPU access) is called every frame to lay
 //! out glyph quads, mirroring `font5x7::push_text`'s call shape so
 //! textbox.rs barely changes.
+//!
+//! Font choice: DejaVu Sans, not Noto Sans (tahta's other embedded font
+//! choice, e.g. `bacak-belge`) — `fontdue::Font::horizontal_kern` only
+//! reads a TrueType font's *legacy* `kern` table, never modern `GPOS`
+//! kerning. NotoSans-Regular.ttf ships kerning as GPOS-only (verified: no
+//! `kern` table at all), so kerning would've silently been a no-op with
+//! that font. DejaVu Sans carries both, so fontdue's kerning actually
+//! fires.
 
 use std::collections::HashMap;
 
 use glam::Vec2;
 
 /// Embedded, not loaded from the system at runtime — tahta ships this in
-/// its own binary/.deb rather than depending on `fonts-noto-core` being
-/// installed. SIL Open Font License 1.1, see `assets/fonts/NOTO-LICENSE.txt`.
-const FONT_BYTES: &[u8] = include_bytes!("../assets/fonts/NotoSans-Regular.ttf");
+/// its own binary/.deb rather than depending on `fonts-dejavu-core` being
+/// installed. Bitstream Vera license, see `assets/fonts/DEJAVU-LICENSE.txt`.
+const FONT_BYTES: &[u8] = include_bytes!("../assets/fonts/DejaVuSans.ttf");
 
 /// Pixel size glyphs are rasterized at — text is always drawn scaled
 /// down from this, so it stays comfortably above the text box's biggest
@@ -51,6 +59,10 @@ pub struct FontAtlas {
     pub width: u32,
     pub height: u32,
     glyphs: HashMap<char, Glyph>,
+    /// Kept around (rasterization itself is done, its bitmap output
+    /// already baked into `pixels`) only so `push_text`/`measure` can
+    /// query `horizontal_kern` per adjacent character pair at layout time.
+    font: fontdue::Font,
 }
 
 #[repr(C)]
@@ -145,7 +157,7 @@ impl FontAtlas {
             );
         }
 
-        Self { pixels, width: ATLAS_WIDTH, height: atlas_height, glyphs }
+        Self { pixels, width: ATLAS_WIDTH, height: atlas_height, glyphs, font }
     }
 
     /// Draws `text` left-to-right so its rasterized cap-height maps onto
@@ -158,7 +170,12 @@ impl FontAtlas {
         let scale = pixel_height / RASTER_PX;
         let mut cursor_x = top_left.x;
         let baseline_y = top_left.y + pixel_height;
+        let mut prev: Option<char> = None;
         for ch in text.chars() {
+            if let Some(p) = prev {
+                cursor_x += self.font.horizontal_kern(p, ch, RASTER_PX).unwrap_or(0.0) * scale;
+            }
+            prev = Some(ch);
             let Some(glyph) = self.glyphs.get(&ch) else {
                 cursor_x += pixel_height * 0.5;
                 continue;
@@ -185,11 +202,18 @@ impl FontAtlas {
     /// up front (e.g. centering).
     pub fn measure(&self, text: &str, pixel_height: f32) -> f32 {
         let scale = pixel_height / RASTER_PX;
-        text.chars()
-            .map(|ch| match self.glyphs.get(&ch) {
+        let mut width = 0.0;
+        let mut prev: Option<char> = None;
+        for ch in text.chars() {
+            if let Some(p) = prev {
+                width += self.font.horizontal_kern(p, ch, RASTER_PX).unwrap_or(0.0) * scale;
+            }
+            prev = Some(ch);
+            width += match self.glyphs.get(&ch) {
                 Some(glyph) => glyph.advance * scale,
                 None => pixel_height * 0.5,
-            })
-            .sum()
+            };
+        }
+        width
     }
 }
