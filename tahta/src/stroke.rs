@@ -108,6 +108,7 @@ impl Stroke {
         &self,
         predicted: &[Vec2],
         view_offset: Vec2,
+        view_scale: f32,
         now: f64,
         out_vertices: &mut Vec<Vertex>,
         out_indices: &mut Vec<u32>,
@@ -134,11 +135,14 @@ impl Stroke {
         let colors = self.per_point_colors(&times, now);
 
         let (centerline, c_widths, c_colors) = smooth_with_attrs(&positions, &widths, &colors);
-        let centerline: Vec<Vec2> = if view_offset == Vec2::ZERO {
+        // Canvas-space -> screen-space: scale first (around the canvas
+        // origin), then pan.
+        let centerline: Vec<Vec2> = if view_offset == Vec2::ZERO && view_scale == 1.0 {
             centerline
         } else {
-            centerline.into_iter().map(|p| p + view_offset).collect()
+            centerline.into_iter().map(|p| p * view_scale + view_offset).collect()
         };
+        let c_widths: Vec<f32> = if view_scale == 1.0 { c_widths } else { c_widths.into_iter().map(|w| w * view_scale).collect() };
 
         build_variable_quad_strip(&centerline, &c_widths, &c_colors, out_vertices, out_indices);
     }
@@ -179,16 +183,15 @@ impl Stroke {
     /// Distance-to-segment hit test (not just to sample points — raw touch
     /// samples can be tens of pixels apart, so point-only testing misses
     /// touches that are visually right on the smoothed curve between two
-    /// samples). `view_offset` must match whatever was passed to
-    /// [`Self::tessellate`] so hit-testing lines up with what's on screen.
-    pub fn hit_test(&self, point: Vec2, radius: f32, view_offset: Vec2) -> bool {
-        let threshold = radius + self.width / 2.0;
+    /// samples). `view_offset`/`view_scale` must match whatever was passed
+    /// to [`Self::tessellate`] so hit-testing lines up with what's on screen.
+    pub fn hit_test(&self, point: Vec2, radius: f32, view_offset: Vec2, view_scale: f32) -> bool {
+        let threshold = radius + self.width * view_scale / 2.0;
+        let to_screen = |p: Vec2| p * view_scale + view_offset;
         if self.points.len() < 2 {
-            return self.points.iter().any(|&p| (p + view_offset).distance(point) <= threshold);
+            return self.points.iter().any(|&p| to_screen(p).distance(point) <= threshold);
         }
-        self.points
-            .windows(2)
-            .any(|w| distance_to_segment(point, w[0] + view_offset, w[1] + view_offset) <= threshold)
+        self.points.windows(2).any(|w| distance_to_segment(point, to_screen(w[0]), to_screen(w[1])) <= threshold)
     }
 
     /// Area erase: removes only the points within `radius` of `point`,
@@ -198,13 +201,13 @@ impl Stroke {
     /// tessellation never draws a line straight across the erased gap.
     /// Returns an empty `Vec` (and leaves `self` untouched) if nothing in
     /// this stroke was within range.
-    pub fn erase_near(&mut self, point: Vec2, radius: f32, view_offset: Vec2) -> Vec<Stroke> {
+    pub fn erase_near(&mut self, point: Vec2, radius: f32, view_offset: Vec2, view_scale: f32) -> Vec<Stroke> {
         if self.points.is_empty() {
             return Vec::new();
         }
-        let threshold = radius + self.width / 2.0;
+        let threshold = radius + self.width * view_scale / 2.0;
         let keep: Vec<bool> =
-            self.points.iter().map(|&p| (p + view_offset).distance(point) > threshold).collect();
+            self.points.iter().map(|&p| (p * view_scale + view_offset).distance(point) > threshold).collect();
         if keep.iter().all(|&k| k) {
             return Vec::new();
         }
