@@ -53,6 +53,13 @@ fn main() {
         WindowBuilder::new()
             .with_title("Tahta — Dijital Beyaz Tahta")
             .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 800.0))
+            // Opens straight into fullscreen — a classroom whiteboard is
+            // meant to fill the panel, not sit in a resizable window.
+            // Borderless (not Exclusive/Fullscreen mode switch) is the
+            // right choice under Wayland: it's the only variant most
+            // Wayland compositors, including bacak-compositor, actually
+            // implement. `None` picks the monitor the window opens on.
+            .with_fullscreen(Some(winit::window::Fullscreen::Borderless(None)))
             // Must match the `.desktop` file basename (tahta.desktop) so the
             // compositor's dock/app-menu app_id matching (dock_pinned) and
             // icon resolution find this window.
