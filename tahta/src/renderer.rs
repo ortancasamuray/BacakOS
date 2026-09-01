@@ -35,6 +35,16 @@ struct TexVertex {
     uv: [f32; 2],
 }
 
+/// Matches `shader.wgsl`'s `MagnifierUniforms` — `center`+`radius` in
+/// screen pixels, `zoom` the same factor `magnifier.rs` uses.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+struct MagnifierUniforms {
+    center: [f32; 2],
+    radius: f32,
+    zoom: f32,
+}
+
 impl TexVertex {
     const ATTRIBS: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2];
 
@@ -123,14 +133,22 @@ impl Batch {
     }
 
     fn draw<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, pipeline: &'a wgpu::RenderPipeline, bind_group: &'a wgpu::BindGroup, index_count: u32) {
-        if index_count == 0 {
+        self.draw_range(pass, pipeline, bind_group, 0..index_count);
+    }
+
+    /// Like `draw`, but only `range` of the index buffer — used to split
+    /// the normal batch into its "page content" prefix (magnifiable) and
+    /// "UI chrome" suffix (see `render`'s `content_index_count` param)
+    /// without needing two separate GPU buffers.
+    fn draw_range<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, pipeline: &'a wgpu::RenderPipeline, bind_group: &'a wgpu::BindGroup, range: std::ops::Range<u32>) {
+        if range.is_empty() {
             return;
         }
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, bind_group, &[]);
         pass.set_vertex_buffer(0, self.vertex.buffer.slice(..));
         pass.set_index_buffer(self.index.buffer.slice(..), wgpu::IndexFormat::Uint32);
-        pass.draw_indexed(0..index_count, 0, 0..1);
+        pass.draw_indexed(range, 0, 0..1);
     }
 }
 
@@ -163,6 +181,20 @@ pub struct Renderer {
     /// outright if the panel's pixel size changes (resize, not just pan).
     web_texture: Option<(wgpu::Texture, wgpu::BindGroup, u32, u32)>,
     web_quad_vertex: wgpu::Buffer,
+
+    /// Offscreen render target the whole "page content" (background/page
+    /// image/ink, not UI chrome) is re-rendered into every frame the
+    /// magnifier is open, so its lens can sample real pixels — see
+    /// `magnifier.rs` and `shader.wgsl::fs_magnifier`. Recreated on
+    /// resize (sized to match the swapchain).
+    content_texture: wgpu::Texture,
+    content_view: wgpu::TextureView,
+    content_bind_group: wgpu::BindGroup,
+
+    magnifier_pipeline: wgpu::RenderPipeline,
+    magnifier_uniform_buffer: wgpu::Buffer,
+    magnifier_uniform_bind_group: wgpu::BindGroup,
+    magnifier_quad_vertex: wgpu::Buffer,
 }
 
 impl Renderer {
@@ -243,7 +275,11 @@ impl Renderer {
                 label: Some("tahta_uniform_bgl"),
                 entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
+                    // VERTEX for the position transform every pipeline
+                    // does; FRAGMENT too because `fs_magnifier` also reads
+                    // `screen_size` to convert a source pixel position
+                    // into the content texture's UV space.
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
@@ -395,6 +431,64 @@ impl Renderer {
             mapped_at_creation: false,
         });
 
+        let (content_texture, content_view, content_bind_group) =
+            Self::create_content_texture(&device, &page_texture_bgl, &page_sampler, surface_format, config.width, config.height);
+
+        let magnifier_uniform_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("tahta_magnifier_uniform_bgl"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+                count: None,
+            }],
+        });
+        let magnifier_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("tahta_magnifier_uniform_buffer"),
+            size: std::mem::size_of::<MagnifierUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let magnifier_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("tahta_magnifier_uniform_bind_group"),
+            layout: &magnifier_uniform_bgl,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: magnifier_uniform_buffer.as_entire_binding() }],
+        });
+
+        let magnifier_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("tahta_magnifier_pipeline_layout"),
+            bind_group_layouts: &[&uniform_bind_group_layout, &page_texture_bgl, &magnifier_uniform_bgl],
+            push_constant_ranges: &[],
+        });
+        let magnifier_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("tahta_magnifier_pipeline"),
+            layout: Some(&magnifier_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_tex",
+                buffers: &[TexVertex::layout()],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_magnifier",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive,
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        });
+        let magnifier_quad_vertex = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("tahta_magnifier_quad_vertex"),
+            size: 4 * std::mem::size_of::<TexVertex>() as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         Self {
             surface,
             device,
@@ -414,7 +508,47 @@ impl Renderer {
             page_quad_index,
             web_texture: None,
             web_quad_vertex,
+            content_texture,
+            content_view,
+            content_bind_group,
+            magnifier_pipeline,
+            magnifier_uniform_buffer,
+            magnifier_uniform_bind_group,
+            magnifier_quad_vertex,
         }
+    }
+
+    /// Creates (or, on resize, recreates) the offscreen "content" texture
+    /// the magnifier lens samples from — sized to match the swapchain so
+    /// its pixel coordinates line up 1:1 with `Uniforms::screen_size`.
+    fn create_content_texture(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        sampler: &wgpu::Sampler,
+        format: wgpu::TextureFormat,
+        width: u32,
+        height: u32,
+    ) -> (wgpu::Texture, wgpu::TextureView, wgpu::BindGroup) {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("tahta_content_texture"),
+            size: wgpu::Extent3d { width: width.max(1), height: height.max(1), depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("tahta_content_bind_group"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
+            ],
+        });
+        (texture, view, bind_group)
     }
 
     /// Uploads `image` to the GPU the first time it's seen; subsequent
@@ -524,19 +658,40 @@ impl Renderer {
         self.config.width = new_size.width;
         self.config.height = new_size.height;
         self.surface.configure(&self.device, &self.config);
+
+        let (texture, view, bind_group) = Self::create_content_texture(
+            &self.device,
+            &self.page_texture_bgl,
+            &self.page_sampler,
+            self.config.format,
+            self.config.width,
+            self.config.height,
+        );
+        self.content_texture = texture;
+        self.content_view = view;
+        self.content_bind_group = bind_group;
     }
 
     /// Uploads and draws one frame: `normal` covers ink/UI (standard alpha
     /// blend, drawn first) and `highlighter` covers Highlighter-brush
     /// strokes (Max blend, drawn on top so marker strokes never darken the
-    /// ink or each other underneath).
+    /// ink or each other underneath). `content_index_count` is how many of
+    /// `normal`'s indices (from the start) are page content rather than UI
+    /// chrome — see `input_handler.rs::collect_geometry`. When
+    /// `magnifier_lens` is `Some((center, radius, zoom))`, the page content
+    /// (page image + highlighter + that content prefix) is re-rendered into
+    /// an offscreen texture first, then sampled into the lens circle
+    /// between the content and chrome portions of the main pass — real
+    /// pixels, not re-scaled vectors (see `magnifier.rs`).
     pub fn render(
         &mut self,
         normal: (&[Vertex], &[u32]),
         highlighter: (&[Vertex], &[u32]),
+        content_index_count: usize,
         page_image: Option<&PdfImage>,
         web_frame: Option<(&[u8], u32, u32)>,
         web_bounds: Option<(Vec2, Vec2)>,
+        magnifier_lens: Option<(Vec2, f32, f32)>,
     ) -> Result<(), wgpu::SurfaceError> {
         let output = self.surface.get_current_texture()?;
         let view = output
@@ -581,11 +736,55 @@ impl Renderer {
             self.queue.write_buffer(&self.web_quad_vertex, 0, bytemuck::cast_slice(&verts));
         }
 
+        if let Some((center, radius, zoom)) = magnifier_lens {
+            self.queue.write_buffer(
+                &self.magnifier_uniform_buffer,
+                0,
+                bytemuck::bytes_of(&MagnifierUniforms { center: [center.x, center.y], radius, zoom }),
+            );
+            let verts = [
+                TexVertex { position: [center.x - radius, center.y - radius], uv: [0.0, 0.0] },
+                TexVertex { position: [center.x - radius, center.y + radius], uv: [0.0, 1.0] },
+                TexVertex { position: [center.x + radius, center.y - radius], uv: [1.0, 0.0] },
+                TexVertex { position: [center.x + radius, center.y + radius], uv: [1.0, 1.0] },
+            ];
+            self.queue.write_buffer(&self.magnifier_quad_vertex, 0, bytemuck::cast_slice(&verts));
+        }
+
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("tahta_encoder"),
             });
+
+        if magnifier_lens.is_some() {
+            let mut content_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("tahta_content_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.content_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.05, g: 0.05, b: 0.07, a: 1.0 }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            if let Some(image) = page_image {
+                let bind_group = &self.page_textures[&image.id].1;
+                content_pass.set_pipeline(&self.page_pipeline);
+                content_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                content_pass.set_bind_group(1, bind_group, &[]);
+                content_pass.set_vertex_buffer(0, self.page_quad_vertex.slice(..));
+                content_pass.set_index_buffer(self.page_quad_index.slice(..), wgpu::IndexFormat::Uint32);
+                content_pass.draw_indexed(0..6, 0, 0..1);
+            }
+            self.highlighter_batch.draw(&mut content_pass, &self.highlighter_pipeline, &self.uniform_bind_group, highlighter.1.len() as u32);
+            self.normal_batch.draw_range(&mut content_pass, &self.normal_pipeline, &self.uniform_bind_group, 0..content_index_count as u32);
+        }
 
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -622,7 +821,23 @@ impl Renderer {
             // Highlighter next (Max-blended) so it sits "under" — visually
             // behind — freshly drawn ink and UI chrome painted after it.
             self.highlighter_batch.draw(&mut pass, &self.highlighter_pipeline, &self.uniform_bind_group, highlighter.1.len() as u32);
-            self.normal_batch.draw(&mut pass, &self.normal_pipeline, &self.uniform_bind_group, normal.1.len() as u32);
+            self.normal_batch.draw_range(&mut pass, &self.normal_pipeline, &self.uniform_bind_group, 0..content_index_count as u32);
+
+            // Magnifier lens (real pixel zoom of the content pass above)
+            // between page content and UI chrome, so its own rim/handle
+            // (drawn as part of the chrome range right after) sits on top
+            // of the zoomed circle instead of under it.
+            if magnifier_lens.is_some() {
+                pass.set_pipeline(&self.magnifier_pipeline);
+                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_bind_group(1, &self.content_bind_group, &[]);
+                pass.set_bind_group(2, &self.magnifier_uniform_bind_group, &[]);
+                pass.set_vertex_buffer(0, self.magnifier_quad_vertex.slice(..));
+                pass.set_index_buffer(self.page_quad_index.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..6, 0, 0..1);
+            }
+
+            self.normal_batch.draw_range(&mut pass, &self.normal_pipeline, &self.uniform_bind_group, content_index_count as u32..normal.1.len() as u32);
 
             // Browser panel last: it's a floating overlay above the
             // canvas/toolbar, not page content, so it draws on top of

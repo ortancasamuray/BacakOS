@@ -1034,10 +1034,17 @@ impl InputHandler {
     /// Builds this frame's mesh, split into a normal batch (ink + UI,
     /// standard alpha blend) and a highlighter batch (Max blend so marker
     /// overlaps never darken — see `renderer`).
+    /// Returns `(normal_vertices, normal_indices, highlighter_vertices,
+    /// highlighter_indices, page_image, content_index_count)` — the last
+    /// value is how many of `normal_indices` (from the start) are "page
+    /// content" rather than floating UI chrome; see the comment at its
+    /// call site below and `renderer.rs::render`'s `content_index_count`
+    /// param, which uses it to render the magnifier lens's texture
+    /// sample.
     pub fn collect_geometry(
         &self,
         now: f64,
-    ) -> (Vec<Vertex>, Vec<u32>, Vec<Vertex>, Vec<u32>, Option<Arc<board::PdfImage>>) {
+    ) -> (Vec<Vertex>, Vec<u32>, Vec<Vertex>, Vec<u32>, Option<Arc<board::PdfImage>>, usize) {
         let mut normal_v = Vec::new();
         let mut normal_i = Vec::new();
         let mut highlight_v = Vec::new();
@@ -1110,8 +1117,15 @@ impl InputHandler {
             push_circle(center, 3.0, color, 10, &mut normal_v, &mut normal_i);
         }
 
+        // Everything above this line is "page content" (background, page
+        // image, ink, live tool previews) — the split point the magnifier
+        // lens samples from (see `renderer.rs::render`'s `content_index_count`
+        // param). Everything below is floating UI chrome (the magnifier's
+        // own rim/handle included) that should never itself be magnified.
+        let content_index_count = normal_i.len();
+
         if let Some(magnifier) = &self.magnifier {
-            magnifier.render(page, self.view_offset, now, &mut normal_v, &mut normal_i);
+            magnifier.render(&mut normal_v, &mut normal_i);
         }
         if let Some(spotlight) = &self.spotlight {
             spotlight.render(self.screen_size, &mut normal_v, &mut normal_i);
@@ -1170,6 +1184,12 @@ impl InputHandler {
             }
         }
 
-        (normal_v, normal_i, highlight_v, highlight_i, page.pdf_image.clone())
+        (normal_v, normal_i, highlight_v, highlight_i, page.pdf_image.clone(), content_index_count)
+    }
+
+    /// `(center, radius, zoom)` for the renderer to draw the magnifier's
+    /// texture-sampled lens, or `None` when the widget isn't open.
+    pub fn magnifier_lens(&self) -> Option<(Vec2, f32, f32)> {
+        self.magnifier.as_ref().map(|m| m.lens())
     }
 }
