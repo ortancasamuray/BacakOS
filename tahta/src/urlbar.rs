@@ -1,6 +1,12 @@
 //! Address bar for the embedded browser panel (`webengine`) — a thin
-//! always-visible strip (back/forward + URL/search field) above the
-//! Servo content. Editing the field doesn't draw a keyboard of our own:
+//! always-visible strip (back/forward + a draw-mode toggle + URL/search
+//! field) above the Servo content. The draw toggle lets a teacher
+//! annotate directly on a live web page: while active, touches over the
+//! page are routed to the ordinary canvas drawing path (`app.rs::
+//! browser_region` returns `Outside` instead of `Content`) instead of
+//! reaching Servo, using whatever tool/pen is selected on the main
+//! toolbar — same ink, same page-strokes, just happening to land where
+//! the page is currently drawn. Editing the field doesn't draw a keyboard of our own:
 //! `app.rs` calls `Window::set_ime_allowed`/`set_ime_cursor_area` (the
 //! standard cross-platform winit IME API, backed on Wayland by
 //! `zwp_text_input_v3`), which is exactly what `bacak-compositor`'s own
@@ -22,6 +28,7 @@ const MAX_CHARS: usize = 96;
 const COLOR_BAR_BG: [f32; 4] = [0.16, 0.17, 0.21, 1.0];
 const COLOR_BTN: [f32; 4] = [0.22, 0.24, 0.30, 1.0];
 const COLOR_BTN_DISABLED: [f32; 4] = [0.16, 0.17, 0.21, 1.0];
+const COLOR_BTN_ACTIVE: [f32; 4] = [0.23, 0.51, 0.96, 1.0]; // matches the toolbar's accent
 const COLOR_FIELD_BG: [f32; 4] = [0.06, 0.07, 0.09, 1.0];
 const COLOR_FIELD_EDITING: [f32; 4] = [0.09, 0.11, 0.15, 1.0];
 const COLOR_TEXT: [f32; 4] = [0.95, 0.95, 0.97, 1.0];
@@ -39,6 +46,10 @@ pub enum UrlBarHit {
     /// raw typed text, not yet resolved to a URL (see `resolve_input` in
     /// `app.rs`).
     Go(String),
+    /// Toggles whether touches over the page draw ink (using the main
+    /// toolbar's current tool/pen) instead of reaching the page itself —
+    /// see `App::browser_draw_mode`.
+    ToggleDraw,
     None,
 }
 
@@ -60,12 +71,16 @@ impl UrlBar {
         (top_left + Vec2::new(BTN_W, 0.0), Vec2::new(BTN_W, BAR_H))
     }
 
+    fn draw_toggle_rect(top_left: Vec2) -> (Vec2, Vec2) {
+        (top_left + Vec2::new(BTN_W * 2.0, 0.0), Vec2::new(BTN_W, BAR_H))
+    }
+
     /// The field's rect in screen space — `app.rs` also uses this to
     /// place `Window::set_ime_cursor_area` (where the compositor may
     /// anchor IME-related UI).
     pub fn field_rect(top_left: Vec2, bar_width: f32) -> (Vec2, Vec2) {
-        let x = top_left.x + BTN_W * 2.0 + 6.0;
-        (Vec2::new(x, top_left.y + 6.0), Vec2::new(bar_width - BTN_W * 2.0 - 12.0, BAR_H - 12.0))
+        let x = top_left.x + BTN_W * 3.0 + 6.0;
+        (Vec2::new(x, top_left.y + 6.0), Vec2::new(bar_width - BTN_W * 3.0 - 12.0, BAR_H - 12.0))
     }
 
     /// Fixed — the bar never grows for a keyboard anymore (that's the
@@ -89,6 +104,9 @@ impl UrlBar {
         if rect_contains(Self::forward_rect(bar_top_left), p) {
             self.editing = false;
             return UrlBarHit::Forward;
+        }
+        if rect_contains(Self::draw_toggle_rect(bar_top_left), p) {
+            return UrlBarHit::ToggleDraw;
         }
         if rect_contains(Self::field_rect(bar_top_left, bar_width), p) {
             if !self.editing {
@@ -137,6 +155,7 @@ impl UrlBar {
         bar_width: f32,
         can_go_back: bool,
         can_go_forward: bool,
+        draw_mode: bool,
         out_v: &mut Vec<Vertex>,
         out_i: &mut Vec<u32>,
     ) {
@@ -149,6 +168,10 @@ impl UrlBar {
         let (fwd_pos, fwd_size) = Self::forward_rect(bar_top_left);
         push_rect(fwd_pos, fwd_size, if can_go_forward { COLOR_BTN } else { COLOR_BTN_DISABLED }, out_v, out_i);
         draw_arrow(fwd_pos + fwd_size / 2.0, 1.0, out_v, out_i);
+
+        let (draw_pos, draw_size) = Self::draw_toggle_rect(bar_top_left);
+        push_rect(draw_pos, draw_size, if draw_mode { COLOR_BTN_ACTIVE } else { COLOR_BTN }, out_v, out_i);
+        draw_pen_icon(draw_pos + draw_size / 2.0, out_v, out_i);
 
         let (field_pos, field_size) = Self::field_rect(bar_top_left, bar_width);
         push_rect(field_pos, field_size, if self.editing { COLOR_FIELD_EDITING } else { COLOR_FIELD_BG }, out_v, out_i);
@@ -172,6 +195,15 @@ fn draw_arrow(center: Vec2, dir: f32, out_v: &mut Vec<Vertex>, out_i: &mut Vec<u
     let tip = center + Vec2::new(dir * 8.0, 0.0);
     push_line(tip, tip + Vec2::new(-dir * 8.0, -8.0), 3.0, COLOR_TEXT, out_v, out_i);
     push_line(tip, tip + Vec2::new(-dir * 8.0, 8.0), 3.0, COLOR_TEXT, out_v, out_i);
+}
+
+/// A simple diagonal pen glyph — same visual language as the toolbar's
+/// own Pen icon, so the toggle reads as "drawing" at a glance.
+fn draw_pen_icon(center: Vec2, out_v: &mut Vec<Vertex>, out_i: &mut Vec<u32>) {
+    let a = center + Vec2::new(-7.0, 7.0);
+    let b = center + Vec2::new(7.0, -7.0);
+    push_line(a, b, 3.5, COLOR_TEXT, out_v, out_i);
+    crate::stroke::push_circle(a, 2.5, COLOR_TEXT, 10, out_v, out_i);
 }
 
 fn rect_contains((top_left, size): (Vec2, Vec2), point: Vec2) -> bool {
