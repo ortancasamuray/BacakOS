@@ -56,14 +56,14 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(renderer: Renderer, window: Arc<Window>) -> Self {
+    pub fn new(renderer: Renderer, window: Arc<Window>, font_atlas: Arc<crate::font_atlas::FontAtlas>) -> Self {
         let size = window.inner_size();
         let screen_size = Vec2::new(size.width as f32, size.height as f32);
         Self {
             renderer,
             window,
             start: Instant::now(),
-            input: InputHandler::new(screen_size),
+            input: InputHandler::new(screen_size, font_atlas),
             web_engine: None,
             web_panel: None,
             url_bar: UrlBar::new(BROWSER_HOME),
@@ -338,7 +338,7 @@ impl App {
         };
         let web_bounds = self.input.browser_visible.then(|| self.browser_content_bounds());
 
-        let (mut normal_v, mut normal_i, highlight_v, highlight_i, page_image, content_index_count) = self.input.collect_geometry(now);
+        let (mut normal_v, mut normal_i, highlight_v, highlight_i, page_image, content_index_count, glyph_v, glyph_i) = self.input.collect_geometry(now);
 
         if self.input.browser_visible {
             // Passive sync: the field only pulled `panel.url()` on tap
@@ -363,6 +363,7 @@ impl App {
         match self.renderer.render(
             (&normal_v, &normal_i),
             (&highlight_v, &highlight_i),
+            (&glyph_v, &glyph_i),
             content_index_count,
             page_image.as_deref(),
             web_frame.as_ref().map(|(rgba, w, h)| (rgba.as_slice(), *w, *h)),

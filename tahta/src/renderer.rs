@@ -19,6 +19,7 @@ use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
 use crate::board::PdfImage;
+use crate::font_atlas::{FontAtlas, GlyphVertex};
 use crate::stroke::Vertex;
 
 #[repr(C)]
@@ -121,8 +122,11 @@ impl Batch {
         }
     }
 
-    fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, vertices: &[Vertex], indices: &[u32]) {
-        self.vertex.ensure_capacity(device, (vertices.len() * std::mem::size_of::<Vertex>()) as u64);
+    /// Generic over the vertex type so this one buffer-management struct
+    /// serves both `Vertex` (ink/UI) and `GlyphVertex` (text box text)
+    /// batches — `DynamicBuffer` only ever sees raw bytes either way.
+    fn upload<V: Pod>(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, vertices: &[V], indices: &[u32]) {
+        self.vertex.ensure_capacity(device, (vertices.len() * std::mem::size_of::<V>()) as u64);
         self.index.ensure_capacity(device, (indices.len() * std::mem::size_of::<u32>()) as u64);
         if !vertices.is_empty() {
             queue.write_buffer(&self.vertex.buffer, 0, bytemuck::cast_slice(vertices));
@@ -195,10 +199,20 @@ pub struct Renderer {
     magnifier_uniform_buffer: wgpu::Buffer,
     magnifier_uniform_bind_group: wgpu::BindGroup,
     magnifier_quad_vertex: wgpu::Buffer,
+
+    /// Real-font text (currently just `textbox.rs`) — a single-channel
+    /// coverage atlas uploaded once at startup from `font_atlas.rs`,
+    /// sampled through its own alpha-blended pipeline since it's drawn
+    /// as arbitrary glyph quads, not the fixed page/web/magnifier quad.
+    glyph_pipeline: wgpu::RenderPipeline,
+    glyph_batch: Batch,
+    #[allow(dead_code)] // kept alive for `glyph_bind_group`'s view
+    glyph_atlas_texture: wgpu::Texture,
+    glyph_bind_group: wgpu::BindGroup,
 }
 
 impl Renderer {
-    pub async fn new(window: Arc<Window>) -> Self {
+    pub async fn new(window: Arc<Window>, font_atlas: &FontAtlas) -> Self {
         let size = window.inner_size();
 
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -489,6 +503,66 @@ impl Renderer {
             mapped_at_creation: false,
         });
 
+        // Font atlas: uploaded once here (never rewritten — `font_atlas.rs`
+        // rasterizes every glyph the text box can produce up front), a
+        // single-channel coverage texture reusing `page_texture_bgl`'s
+        // shape (texture_2d<f32> + sampler — the layout doesn't care that
+        // this one's R8Unorm instead of Rgba8UnormSrgb).
+        let glyph_atlas_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("tahta_glyph_atlas_texture"),
+            size: wgpu::Extent3d { width: font_atlas.width, height: font_atlas.height, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            wgpu::ImageCopyTexture { texture: &glyph_atlas_texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            &font_atlas.pixels,
+            wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(font_atlas.width), rows_per_image: Some(font_atlas.height) },
+            wgpu::Extent3d { width: font_atlas.width, height: font_atlas.height, depth_or_array_layers: 1 },
+        );
+        let glyph_atlas_view = glyph_atlas_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let glyph_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("tahta_glyph_bind_group"),
+            layout: &page_texture_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&glyph_atlas_view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&page_sampler) },
+            ],
+        });
+
+        let glyph_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("tahta_glyph_pipeline_layout"),
+            bind_group_layouts: &[&uniform_bind_group_layout, &page_texture_bgl],
+            push_constant_ranges: &[],
+        });
+        let glyph_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("tahta_glyph_pipeline"),
+            layout: Some(&glyph_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_glyph",
+                buffers: &[GlyphVertex::layout()],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_glyph",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive,
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        });
+        let glyph_batch = Batch::new(&device, "tahta_glyph_batch");
+
         Self {
             surface,
             device,
@@ -515,6 +589,10 @@ impl Renderer {
             magnifier_uniform_buffer,
             magnifier_uniform_bind_group,
             magnifier_quad_vertex,
+            glyph_pipeline,
+            glyph_batch,
+            glyph_atlas_texture,
+            glyph_bind_group,
         }
     }
 
@@ -687,6 +765,7 @@ impl Renderer {
         &mut self,
         normal: (&[Vertex], &[u32]),
         highlighter: (&[Vertex], &[u32]),
+        glyph: (&[GlyphVertex], &[u32]),
         content_index_count: usize,
         page_image: Option<&PdfImage>,
         web_frame: Option<(&[u8], u32, u32)>,
@@ -709,6 +788,7 @@ impl Renderer {
 
         self.normal_batch.upload(&self.device, &self.queue, normal.0, normal.1);
         self.highlighter_batch.upload(&self.device, &self.queue, highlighter.0, highlighter.1);
+        self.glyph_batch.upload(&self.device, &self.queue, glyph.0, glyph.1);
 
         if let Some(image) = page_image {
             self.ensure_page_texture(image);
@@ -838,6 +918,20 @@ impl Renderer {
             }
 
             self.normal_batch.draw_range(&mut pass, &self.normal_pipeline, &self.uniform_bind_group, content_index_count as u32..normal.1.len() as u32);
+
+            // Real-font text (text box display/keyboard) — chrome, so
+            // after the chrome range above, on top of its panel's own
+            // background/key rects. Two bind groups (uniform + atlas
+            // texture), so this doesn't go through `Batch::draw` (which
+            // only sets one).
+            if !glyph.1.is_empty() {
+                pass.set_pipeline(&self.glyph_pipeline);
+                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_bind_group(1, &self.glyph_bind_group, &[]);
+                pass.set_vertex_buffer(0, self.glyph_batch.vertex.buffer.slice(..));
+                pass.set_index_buffer(self.glyph_batch.index.buffer.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..glyph.1.len() as u32, 0, 0..1);
+            }
 
             // Browser panel last: it's a floating overlay above the
             // canvas/toolbar, not page content, so it draws on top of

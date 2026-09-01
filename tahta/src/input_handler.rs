@@ -179,10 +179,15 @@ pub struct InputHandler {
     /// one-shot action like PDF export — no toast/notification system
     /// exists yet, so this is the whole of it.
     toast: Option<(String, f64)>,
+
+    /// Real-font glyph metrics for `textbox.rs`'s display/keyboard — see
+    /// `font_atlas.rs`. Built once in `main.rs`, shared with the renderer
+    /// (which owns the matching GPU texture) via `Arc`.
+    font_atlas: Arc<crate::font_atlas::FontAtlas>,
 }
 
 impl InputHandler {
-    pub fn new(screen_size: Vec2) -> Self {
+    pub fn new(screen_size: Vec2, font_atlas: Arc<crate::font_atlas::FontAtlas>) -> Self {
         Self {
             pages: vec![Page::new()],
             current_page: 0,
@@ -217,6 +222,7 @@ impl InputHandler {
             screen_size,
             last_input_at: None,
             toast: None,
+            font_atlas,
         }
     }
 
@@ -1035,20 +1041,34 @@ impl InputHandler {
     /// standard alpha blend) and a highlighter batch (Max blend so marker
     /// overlaps never darken — see `renderer`).
     /// Returns `(normal_vertices, normal_indices, highlighter_vertices,
-    /// highlighter_indices, page_image, content_index_count)` — the last
-    /// value is how many of `normal_indices` (from the start) are "page
-    /// content" rather than floating UI chrome; see the comment at its
-    /// call site below and `renderer.rs::render`'s `content_index_count`
-    /// param, which uses it to render the magnifier lens's texture
-    /// sample.
+    /// highlighter_indices, page_image, content_index_count, glyph_vertices,
+    /// glyph_indices)` — `content_index_count` is how many of
+    /// `normal_indices` (from the start) are "page content" rather than
+    /// floating UI chrome; see the comment at its call site below and
+    /// `renderer.rs::render`'s `content_index_count` param, which uses it
+    /// to render the magnifier lens's texture sample. `glyph_vertices`/
+    /// `glyph_indices` are the text box's real-font text (see
+    /// `font_atlas.rs`), drawn through a separate pipeline from the rest
+    /// of this vector geometry.
     pub fn collect_geometry(
         &self,
         now: f64,
-    ) -> (Vec<Vertex>, Vec<u32>, Vec<Vertex>, Vec<u32>, Option<Arc<board::PdfImage>>, usize) {
+    ) -> (
+        Vec<Vertex>,
+        Vec<u32>,
+        Vec<Vertex>,
+        Vec<u32>,
+        Option<Arc<board::PdfImage>>,
+        usize,
+        Vec<crate::font_atlas::GlyphVertex>,
+        Vec<u32>,
+    ) {
         let mut normal_v = Vec::new();
         let mut normal_i = Vec::new();
         let mut highlight_v = Vec::new();
         let mut highlight_i = Vec::new();
+        let mut glyph_v = Vec::new();
+        let mut glyph_i = Vec::new();
 
         let page = &self.pages[self.current_page];
         board::render_background(page, self.screen_size, self.view_offset, &mut normal_v, &mut normal_i);
@@ -1166,7 +1186,7 @@ impl InputHandler {
             dice.render(&mut normal_v, &mut normal_i);
         }
         if let Some(textbox) = &self.textbox {
-            textbox.render(&mut normal_v, &mut normal_i);
+            textbox.render(&self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
         }
 
         if let Some(menu) = &self.radial_menu {
@@ -1184,7 +1204,7 @@ impl InputHandler {
             }
         }
 
-        (normal_v, normal_i, highlight_v, highlight_i, page.pdf_image.clone(), content_index_count)
+        (normal_v, normal_i, highlight_v, highlight_i, page.pdf_image.clone(), content_index_count, glyph_v, glyph_i)
     }
 
     /// `(center, radius, zoom)` for the renderer to draw the magnifier's
