@@ -63,3 +63,40 @@ fn vs_tex(in: TexVertexInput) -> TexVertexOutput {
 fn fs_tex(in: TexVertexOutput) -> @location(0) vec4<f32> {
     return textureSample(page_texture, page_sampler, in.uv);
 }
+
+// --- Magnifier lens (real pixel zoom of the "content" texture) --------
+//
+// Vertex stage reuses `vs_tex` (same quad-in-pixel-space -> clip-space
+// transform); this only adds a fragment stage that, for each pixel of a
+// quad covering the lens's bounding box, maps back to a source pixel in
+// `content_texture` — `(frag_pos - center) / zoom + center` — discarding
+// outside the circle or outside the texture. See `magnifier.rs` for why
+// this replaced an earlier per-stroke vector-zoom approach.
+
+struct MagnifierUniforms {
+    center: vec2<f32>,
+    radius: f32,
+    zoom: f32,
+};
+
+@group(1) @binding(0)
+var content_texture: texture_2d<f32>;
+@group(1) @binding(1)
+var content_sampler: sampler;
+@group(2) @binding(0)
+var<uniform> magnifier: MagnifierUniforms;
+
+@fragment
+fn fs_magnifier(in: TexVertexOutput) -> @location(0) vec4<f32> {
+    let frag_xy = in.clip_position.xy;
+    let d = frag_xy - magnifier.center;
+    if (length(d) > magnifier.radius) {
+        discard;
+    }
+    let source_xy = d / magnifier.zoom + magnifier.center;
+    let uv = source_xy / uniforms.screen_size;
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
+        discard;
+    }
+    return textureSample(content_texture, content_sampler, uv);
+}

@@ -338,7 +338,7 @@ impl App {
         };
         let web_bounds = self.input.browser_visible.then(|| self.browser_content_bounds());
 
-        let (mut normal_v, mut normal_i, highlight_v, highlight_i, page_image) = self.input.collect_geometry(now);
+        let (mut normal_v, mut normal_i, highlight_v, highlight_i, page_image, content_index_count) = self.input.collect_geometry(now);
 
         if self.input.browser_visible {
             // Passive sync: the field only pulled `panel.url()` on tap
@@ -363,9 +363,11 @@ impl App {
         match self.renderer.render(
             (&normal_v, &normal_i),
             (&highlight_v, &highlight_i),
+            content_index_count,
             page_image.as_deref(),
             web_frame.as_ref().map(|(rgba, w, h)| (rgba.as_slice(), *w, *h)),
             web_bounds,
+            self.input.magnifier_lens(),
         ) {
             Ok(()) => {}
             Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
