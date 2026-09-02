@@ -8,7 +8,7 @@ use smithay::backend::renderer::gles::GlesRenderer;
 use super::{Plugin, PluginCtx};
 use crate::render::BacakElements;
 use crate::state::BacakState;
-use crate::wm::{OutputId, Rect, WindowId};
+use crate::wm::{OutputId, Rect, WinState, WindowId};
 
 // --- plugin-owned data types (Phase-2). The field instances + methods stay on
 // `BacakState` (smithay's handler-data type); these definitions live here. ---
@@ -91,6 +91,20 @@ pub struct DockDrag {
     pub source_app: String,
 }
 
+/// True when some window on `output` is currently fullscreen — used to hide
+/// the dock while e.g. tahta covers the whole panel, rather than drawing it
+/// on top of (or under, per `udev_runtime.rs`'s forced full-composite path)
+/// a fullscreen client. Reappears the moment that window closes/unfullscreens.
+fn output_has_fullscreen(state: &BacakState, output: OutputId) -> bool {
+    state.wm.workspaces_for(output).iter().any(|ws| {
+        state
+            .wm
+            .windows_on_workspace(ws.id)
+            .iter()
+            .any(|w| matches!(w.state, WinState::Fullscreen))
+    })
+}
+
 pub struct DockPlugin;
 
 impl Plugin for DockPlugin {
@@ -103,7 +117,13 @@ impl Plugin for DockPlugin {
     }
 
     fn enabled(&self, state: &BacakState) -> bool {
-        !state.is_greeter && state.config.dock
+        !state.is_greeter
+            && state.config.dock
+            && !state
+                .wm
+                .outputs()
+                .iter()
+                .any(|o| output_has_fullscreen(state, o.id))
     }
 
     fn on_pointer_press(&self, ctx: &mut PluginCtx, gx: f64, gy: f64) -> bool {
