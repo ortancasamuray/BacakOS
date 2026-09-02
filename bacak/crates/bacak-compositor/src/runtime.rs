@@ -63,10 +63,10 @@ const CLEAR_COLOR: Color32F = Color32F::new(0.024, 0.165, 0.239, 1.0);
 
 /// `BTN_LEFT` from `linux/input-event-codes.h` — the primary click
 /// that activates a dock tile.
-const BTN_LEFT: u32 = 0x110;
+pub(crate) const BTN_LEFT: u32 = 0x110;
 /// `BTN_RIGHT` from `linux/input-event-codes.h` — opens the dock's
 /// per-tile context menu.
-const BTN_RIGHT: u32 = 0x111;
+pub(crate) const BTN_RIGHT: u32 = 0x111;
 /// `BTN_MIDDLE` — middle-click closes the hovered Overview card.
 const BTN_MIDDLE: u32 = 0x112;
 
@@ -242,8 +242,19 @@ pub fn run() -> Result<()> {
         {
             let c = crate::config::CompositorConfig::load();
             tracing::info!(blur = c.blur, "compositor config reloaded");
+            let font_changed = state.config.font != c.font;
+            let theme_changed = state.config.icon_theme != c.icon_theme;
             state.blur_enabled = c.blur_enabled();
             state.config = c;
+            if font_changed {
+                state.text = crate::text::TextRenderer::load_with_override(&state.config.font);
+            }
+            if theme_changed {
+                crate::icons::set_icon_theme_override(
+                    (!state.config.icon_theme.is_empty()).then(|| state.config.icon_theme.clone()),
+                );
+                state.icon_cache.lock().clear();
+            }
             // Dock toggle / height may have changed — re-reserve the
             // bottom strut so snap math tracks the new bar.
             state.apply_dock_strut();
@@ -682,6 +693,11 @@ fn forward_input(
             let button = event.button_code();
             let bstate = event.state();
 
+            // Double chord-press (LEFT+RIGHT together, twice) → open a
+            // terminal. Tracked before the per-button branches below (some
+            // of which `return` early) so it sees every LEFT/RIGHT edge.
+            state.chord_button_event(button, bstate == ButtonState::Pressed);
+
             // Compositor dock owns left-clicks that land on a tile.
             // Press registers (and may start a pinned-tile drag);
             // release commits the drag (or fires the deferred click).
@@ -772,6 +788,11 @@ fn forward_input(
             // priority (keyboard → selection → screenshot → menus → overview →
             // dock); each records its own drag slot. See `crate::plugins`.
             if crate::plugins::touch_press(state, tx, ty, slot).is_some() {
+                return;
+            }
+            // Core: a touch on a server-side title bar's close button (not a
+            // plugin, mirrors the pointer path's `title_press` check).
+            if state.title_touch_close(tx, ty) {
                 return;
             }
             state.touch_aggregator.down(

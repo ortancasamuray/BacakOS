@@ -3192,6 +3192,14 @@ fn forward_libinput_event(
                 }
                 return;
             }
+            // Core: a touch on a server-side title bar's close button (not a
+            // plugin, mirrors the pointer path's `title_press` check).
+            if data.state.title_touch_close(tx, ty) {
+                for t in data.targets.iter_mut() {
+                    t.needs_redraw = true;
+                }
+                return;
+            }
             // Feed the aggregator first, then arbitrate: one or two free fingers
             // go to the client (tap / drag / pinch); the third finger claims the
             // whole sequence as a compositor gesture (workspace swipe / overview)
