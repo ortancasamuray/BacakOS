@@ -7904,6 +7904,28 @@ impl BacakState {
         true
     }
 
+    /// A touch press on a server-side title bar's close button. Unlike
+    /// [`Self::title_press`] (the pointer path), this only handles `Close` —
+    /// drag-to-move via touch isn't wired up (`TitleDrag` has no per-slot
+    /// ownership, so a second finger moving during a drag would be
+    /// ambiguous), so a touch on the rest of the bar falls through to normal
+    /// touch routing unchanged. Returns whether a close button was hit.
+    pub fn title_touch_close(&mut self, px: f32, py: f32) -> bool {
+        use crate::decoration::{hit, DecoHit};
+        let mut wins = self.wm.list_visible();
+        wins.sort_by_key(|w| std::cmp::Reverse(w.z)); // topmost first
+        for w in &wins {
+            if !self.decorated.contains(&w.id) {
+                continue;
+            }
+            if hit(w.geom, px, py) == DecoHit::Close {
+                self.close_window(w.id);
+                return true;
+            }
+        }
+        false
+    }
+
     /// LEFT/RIGHT bits in [`Self::pressed_chord_buttons`] — `BTN_LEFT`/
     /// `BTN_RIGHT` from `linux/input-event-codes.h`, remapped to a compact
     /// mask since the raw codes (0x110/0x111) aren't adjacent bits.
