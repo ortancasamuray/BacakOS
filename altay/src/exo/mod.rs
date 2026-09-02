@@ -6,8 +6,8 @@
 //!
 //!   * [`mime_type`] — detect a file's MIME type (via `xdg-mime`, extension
 //!     fallback),
-//!   * [`apps_for`] — the applications that declare support for that type,
-//!     default first,
+//!   * [`apps_for`] — every installed application, MIME-matching ones and the
+//!     current default sorted first,
 //!   * [`open`] / [`open_with`] — launch the default or a chosen application,
 //!   * [`set_default`] — make an application the default for a type.
 //!
@@ -332,19 +332,28 @@ fn builtin_default_app(mime: &str) -> Option<&'static str> {
     }
 }
 
-/// Applications that can open `path`, with the default (if any) listed first.
+/// Every installed application, for the "Birlikte Aç" (Open With) picker —
+/// not just the ones declaring this MIME type in their `.desktop` file, since
+/// many installed apps have incomplete `MimeType=` entries and would
+/// otherwise never show up even though they can open the file fine when
+/// launched with it. Apps that *do* declare the MIME type are sorted first
+/// (still alphabetically among themselves), followed by the rest
+/// alphabetically; the current default (if any) is pinned to the very top.
 pub fn apps_for(sandbox: &Sandbox, path: &Path) -> Result<Vec<AppEntry>, ExoError> {
     let safe = sandbox.resolve(path)?;
-    let Some(mime) = mime_type(safe.as_path()) else {
-        return Ok(Vec::new());
-    };
-    let mut apps: Vec<AppEntry> =
-        all_apps().into_iter().filter(|a| a.mime_types.iter().any(|m| m == &mime)).collect();
+    let mime = mime_type(safe.as_path());
+    let mut apps: Vec<AppEntry> = all_apps();
     apps.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-    if let Some(def) = default_app(&mime) {
-        if let Some(pos) = apps.iter().position(|a| a.id == def) {
-            let d = apps.remove(pos);
-            apps.insert(0, d);
+    if let Some(mime) = &mime {
+        let (mut matching, mut rest): (Vec<AppEntry>, Vec<AppEntry>) =
+            apps.into_iter().partition(|a| a.mime_types.iter().any(|m| m == mime));
+        matching.append(&mut rest);
+        apps = matching;
+        if let Some(def) = default_app(mime) {
+            if let Some(pos) = apps.iter().position(|a| a.id == def) {
+                let d = apps.remove(pos);
+                apps.insert(0, d);
+            }
         }
     }
     Ok(apps)
