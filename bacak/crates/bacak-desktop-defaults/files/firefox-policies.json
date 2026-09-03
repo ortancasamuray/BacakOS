@@ -1,0 +1,9 @@
+{
+  "policies": {
+    "Homepage": {
+      "URL": "https://www.eba.gov.tr",
+      "Locked": false,
+      "StartPage": "homepage"
+    }
+  }
+}
