@@ -709,7 +709,31 @@ pub fn logout() {
 
 /// Localised "HH:MM · Weekday DD Month" header line, via `date(1)` so we
 /// pull in no calendar/timezone crate. Empty string on failure.
+///
+/// `date(1)` picks weekday/month names from `LC_TIME`, which the compositor
+/// process doesn't otherwise set — under whatever locale the session
+/// inherits (often `C`/`C.UTF-8`), `%A`/`%B` come out in English even on a
+/// Turkish system. Force `tr_TR.UTF-8` explicitly rather than relying on the
+/// ambient environment.
 pub fn datetime() -> String {
-    capture("date", &["+%H:%M  ·  %A, %d %B"]).unwrap_or_default()
+    let mut child = match Command::new("date")
+        .args(["+%H:%M  ·  %A, %d %B"])
+        .env("LC_TIME", "tr_TR.UTF-8")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .stdout(Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(_) => return String::new(),
+    };
+    let mut s = String::new();
+    match child.stdout.take() {
+        Some(mut out) => {
+            let _ = out.read_to_string(&mut s);
+            s.trim().to_string()
+        }
+        None => String::new(),
+    }
 }
 
