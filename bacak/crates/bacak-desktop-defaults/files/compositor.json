@@ -1,0 +1,28 @@
+{
+  "blur": false,
+  "blur_radius": 24.0,
+  "shadow_top": 1.0,
+  "shadow_step": 0.18,
+  "shadow_floor": 0.3,
+  "dock_slot_w": 96.0,
+  "dock_slot_h": 12.0,
+  "dock": true,
+  "dock_height": 56.0,
+  "dock_edge": "bottom",
+  "dock_autohide": false,
+  "dock_pinned": [
+    "altay",
+    "firefox-esr",
+    "libreoffice-startcenter",
+    "bacak-belge",
+    "tahta"
+  ],
+  "wallpaper_color": [
+    20,
+    78,
+    60
+  ],
+  "wallpaper_image": "/usr/share/backgrounds/bacakos/wallpaper.png",
+  "font": "",
+  "icon_theme": "BacakOS"
+}
