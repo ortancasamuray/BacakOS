@@ -1,0 +1,41 @@
+[package]
+name        = "bacakos"
+description = "BacakOS meta-paketi — tek komutla tüm BacakOS bileşenlerini kurar"
+version     = { workspace = true }
+edition     = { workspace = true }
+license     = { workspace = true }
+authors     = { workspace = true }
+repository  = { workspace = true }
+
+[lib]
+path = "src/lib.rs"
+
+[package.metadata.deb]
+maintainer = "Bacak Desktop Project <packages@example.org>"
+copyright  = "2026, Bacak Desktop Project"
+section    = "metapackages"
+priority   = "optional"
+extended-description = """\
+İçeriksiz meta-paket: BacakOS masaüstünü oluşturan tüm bileşenleri tek
+bir bağımlılık listesiyle kurdurur. `sudo apt install ./bacakos_*.deb`
+tek komutuyla derleyici, giriş ekranı, dosya yöneticisi, belge
+görüntüleyici, dijital tahta, masaüstü eklentileri, marka temaları ve
+varsayılan ayarların tamamı kurulur."""
+depends = """\
+bacak-compositor (>= 0.1.0), \
+bacak-display-manager (>= 0.1.0), \
+bacak-cli (>= 0.1.0), \
+bacak-plugin-audio (>= 0.1.0), \
+bacak-plugin-network (>= 0.1.0), \
+bacak-plugin-desktop-settings (>= 0.1.0), \
+bacak-icons (>= 0.1.0), \
+bacak-desktop-defaults (>= 0.1.0), \
+bacak-grub-theme (>= 0.1.0), \
+bacak-plymouth-theme (>= 0.1.0), \
+altay (>= 0.1.0), \
+bacak-belge (>= 0.1.0), \
+tahta (>= 0.1.0)\
+"""
+assets = [
+    ["files/README", "usr/share/doc/bacakos/README", "644"],
+]

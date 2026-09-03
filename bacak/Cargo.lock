@@ -355,6 +355,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "bacak-desktop-defaults"
+version = "0.1.0"
+
+[[package]]
+name = "bacak-grub-theme"
+version = "0.1.0"
+
+[[package]]
+name = "bacak-icons"
+version = "0.1.0"
+
+[[package]]
 name = "bacak-plugin-audio"
 version = "0.1.0"
 
@@ -364,6 +376,10 @@ version = "0.1.0"
 
 [[package]]
 name = "bacak-plugin-network"
+version = "0.1.0"
+
+[[package]]
+name = "bacak-plymouth-theme"
 version = "0.1.0"
 
 [[package]]
@@ -395,6 +411,10 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
 ]
+
+[[package]]
+name = "bacakos"
+version = "0.1.0"
 
 [[package]]
 name = "base64"

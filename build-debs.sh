@@ -8,6 +8,8 @@
 #
 # Kurmak için (hedef makinede):
 #   sudo apt install ./dist/*.deb
+#   — veya tek paketle (bağımlılık listesi üzerinden aynı şeyi yapar):
+#   sudo apt install ./dist/bacakos_*.deb
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -152,6 +154,15 @@ KUR_SRC="$HERE/kur"
 
     log "kur deb oluşturuluyor"
     cargo deb --no-build -o "$DIST"
+)
+
+# ---------------------------------------------------------------------------
+# bacakos: içeriksiz meta-paket — tek `apt install` ile tüm bileşenleri kurar
+# ---------------------------------------------------------------------------
+log "=== bacakos meta-paketi oluşturuluyor ==="
+(
+    cd "$BACAK_SRC"
+    cargo deb --no-build -p bacakos -o "$DIST"
 )
 
 # NOT: Ayarlar/ dizini kaldırıldı — BT/Wi-Fi/Ses/Ayarlar artık ayrı uygulama

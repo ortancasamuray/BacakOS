@@ -12,6 +12,7 @@ members = [
     "crates/bacak-desktop-defaults",
     "crates/bacak-grub-theme",
     "crates/bacak-plymouth-theme",
+    "crates/bacakos-meta",
 ]
 
 [workspace.package]
