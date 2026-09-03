@@ -308,6 +308,7 @@
       <div class="group-label">Uygulamalar</div>
       <a href="#dosya-yoneticisi">Dosya Yöneticisi — altay</a>
       <a href="#belge-goruntuleyici">Belge Görüntüleyici</a>
+      <a href="#tahta">Dijital Tahta — tahta</a>
       <a href="#varsayilan-uygulamalar">Varsayılan Uygulamalar</a>
     </div>
     <div class="group">
@@ -484,6 +485,7 @@
       <h2><span class="num">06</span> Kontrol Merkezi</h2>
       <p class="lede">Dock üzerindeki dişli simgesinden açılan hızlı ayarlar paneli.</p>
       <ul>
+        <li><strong>Saat / tarih:</strong> panelin üst kısmında "SS:DD · Gün, GG Ay" biçiminde, Türkçe gün ve ay adlarıyla gösterilir.</li>
         <li><strong>Wi-Fi:</strong> aç/kapat anahtarı + ağ listesi; şifre girme, statik IP/DHCP ayarı, otomatik yeniden bağlanma, MAC/IPv4/IPv6 bilgisi.</li>
         <li><strong>Bluetooth:</strong> aç/kapat anahtarı (cihaz eşleştirme ve dosya gönderme için genişletilmiş panel).</li>
         <li><strong>Kablolu ağ:</strong> bağlantıyı aç/kapat, DHCP veya statik IP.</li>
@@ -527,7 +529,7 @@
       <table class="kv">
         <tr><td class="k"><kbd>F2</kbd></td><td class="d">Yeniden adlandır</td></tr>
         <tr><td class="k"><kbd>Ctrl</kbd>+<kbd>A</kbd></td><td class="d">Tümünü seç</td></tr>
-        <tr><td class="k">Sağ tık &rarr; "Birlikte Aç"</td><td class="d">Bir dosya türü için varsayılan uygulamayı değiştirir</td></tr>
+        <tr><td class="k">Uzun basış (dokunmatik) / Sağ tık &rarr; "Birlikte Aç"</td><td class="d">Sistemdeki tüm kurulu uygulamaları listeler (en uygun olanlar üstte); istediğinizi seçip isteğe bağlı olarak o dosya türü için varsayılan yapabilirsiniz</td></tr>
       </table>
     </section>
 
@@ -542,19 +544,47 @@
       </ul>
     </section>
 
+    <section id="tahta">
+      <h2><span class="num">10</span> Dijital Tahta — tahta</h2>
+      <p class="lede">
+        Dokunmatik etkileşimli panellerde ders/sunum yapmak için tasarlanmış,
+        wgpu tabanlı tam ekran çizim uygulaması. Açılır açılmaz tam ekrana
+        geçer ve masaüstü çubuğunu (dock) kapanana kadar arka planda tutar —
+        ekranın tamamı derse ayrılır.
+      </p>
+
+      <h3>Çizim araçları</h3>
+      <ul>
+        <li>Kalem, vurgulayıcı (highlighter), silgi ve şekil araçları (çizgi, dikdörtgen, daire).</li>
+        <li>Cetvel, gönye ve pergel — geometrik çizim için gerçek ölçekli yardımcı araçlar.</li>
+        <li>Metin kutusu (gerçek font kerning'i ile), kronometre, zar, spot ışığı ve büyüteç panelleri.</li>
+        <li>Çok dokunuşlu çizim ve iki parmakla sıkıştırarak yakınlaştırma/uzaklaştırma (pinch-zoom).</li>
+      </ul>
+
+      <h3>PDF ve sayfalar</h3>
+      <p>Bir PDF dosyasını (dosya yöneticisinden "Birlikte Aç" &rarr; tahta ile, veya <code>tahta dosya.pdf</code> ile) sayfa sayfa açıp üzerine anotasyon ekleyebilirsiniz. Çalışmanızı PDF olarak dışa aktarabilirsiniz.</p>
+
+      <h3>Gömülü tarayıcı ve EBA</h3>
+      <p>Araç çubuğundaki adres çubuğu bir web sayfası açar; varsayılan anasayfa <strong>www.eba.gov.tr</strong>'dir (Eğitim Bilişim Ağı). Adres çubuğundaki kalem simgesiyle "çizim modu"na geçip, açık olan web sayfasının üzerine doğrudan not alabilirsiniz.</p>
+
+      <h3>Kapatma</h3>
+      <p>Araç çubuğunun sonundaki aşağı-ok simgesi tahta'yı küçültüp masaüstüne döner (uygulama kapanmaz, arka planda açık kalır). Pencereyi tamamen kapattığınızda dock otomatik olarak geri gelir.</p>
+    </section>
+
     <section id="varsayilan-uygulamalar">
-      <h2><span class="num">10</span> Varsayılan Uygulamalar</h2>
+      <h2><span class="num">11</span> Varsayılan Uygulamalar</h2>
       <p class="lede">Dock'ta hazır sabitlenmiş gelen uygulamalar:</p>
       <div class="app-list">
         <div class="card"><span class="app-icon">A</span><div><h4>altay</h4><p>Dosya yöneticisi</p></div></div>
-        <div class="card"><span class="app-icon">F</span><div><h4>Firefox ESR</h4><p>Web tarayıcı</p></div></div>
+        <div class="card"><span class="app-icon">F</span><div><h4>Firefox ESR</h4><p>Web tarayıcı — anasayfa varsayılanı www.eba.gov.tr</p></div></div>
         <div class="card"><span class="app-icon">L</span><div><h4>LibreOffice</h4><p>Ofis paketi başlangıç merkezi</p></div></div>
         <div class="card"><span class="app-icon">B</span><div><h4>bacak-belge</h4><p>PDF / EPUB / resim görüntüleyici</p></div></div>
+        <div class="card"><span class="app-icon">T</span><div><h4>tahta</h4><p>Dokunmatik panel için dijital tahta</p></div></div>
       </div>
     </section>
 
     <section id="sorun-giderme">
-      <h2><span class="num">11</span> Sorun Giderme</h2>
+      <h2><span class="num">12</span> Sorun Giderme</h2>
 
       <h3>Açılışta ekran siyah kalıyor / sürekli yanıp sönen imleç</h3>
       <p>Ctrl+Alt+F2 ile bir metin konsoluna geçip <code>systemctl status bacak-display-manager</code> ve <code>journalctl -u bacak-display-manager</code> ile hata mesajına bakın. Genellikle giriş ekranı servisinin bir önceki oturumu düzgün kapatamamasından kaynaklanır; <code>sudo systemctl restart bacak-display-manager</code> çoğu zaman yeterlidir.</p>
@@ -563,11 +593,11 @@
       <p>Jest eşikleri (dokunma süresi, sürükleme mesafesi) şu an kullanıcı ayarlarından değiştirilemiyor — sabit değerlerdir. Beklenmedik davranış görüyorsanız dokunmatik yüzeyinizin sürücü ayarlarını (varsa) kontrol edin.</p>
 
       <h3>Bir dosya türü yanlış uygulamayla açılıyor</h3>
-      <p>altay'da dosyaya sağ tıklayıp "Birlikte Aç" &rarr; istediğiniz uygulamayı seçip "Varsayılan yap" işaretleyin.</p>
+      <p>altay'da dosyaya uzun basıp (veya sağ tıklayıp) "Birlikte Aç" &rarr; istediğiniz uygulamayı seçip "Varsayılan yap" işaretleyin.</p>
     </section>
 
     <footer>
-      <span>BacakOS &middot; bacak-compositor / turan / altay / bacak-belge / kur</span>
+      <span>BacakOS &middot; bacak-compositor / turan / altay / bacak-belge / tahta / kur</span>
       <span>Bu kılavuz kod tabanından derlenmiştir, sürüm ilerledikçe güncellenmelidir</span>
     </footer>
   </main>
