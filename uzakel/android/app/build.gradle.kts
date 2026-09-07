@@ -53,5 +53,14 @@ dependencies {
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 
+    // X25519 + ChaCha20-Poly1305 for the end-to-end encrypted session
+    // (ARCHITECTURE.md §2.3.1). Android's own javax.crypto/KeyPairGenerator
+    // only gets X25519 support on API 33+; minSdk here is 26, so Bouncy
+    // Castle's raw primitives are used instead — chosen specifically
+    // because they're low-level (no library-owned key/wire format
+    // wrapping it), which is what makes it possible to match
+    // `daemon/src/crypto.rs`'s byte-for-byte HKDF/AEAD derivation exactly.
+    implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
