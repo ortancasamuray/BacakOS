@@ -8,7 +8,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import org.anadolupanteri.uzakel.network.FileSendResult
 import org.anadolupanteri.uzakel.network.NetworkClient
-import java.net.InetAddress
+import org.anadolupanteri.uzakel.network.PairedSession
 import java.util.UUID
 
 /** One entry in the transfer list the UI (`ui/TrackpadScreen.kt`'s transfer
@@ -49,7 +49,7 @@ class FileTransferManager(private val context: Context) {
     private val _transfers = MutableStateFlow<List<Transfer>>(emptyList())
     val transfers: StateFlow<List<Transfer>> = _transfers
 
-    suspend fun send(uri: Uri, host: InetAddress) {
+    suspend fun send(uri: Uri, session: PairedSession) {
         val id = UUID.randomUUID().toString()
         val name = queryDisplayName(uri) ?: uri.lastPathSegment ?: "dosya"
         val size = querySize(uri) ?: -1L
@@ -68,7 +68,7 @@ class FileTransferManager(private val context: Context) {
         val resolver = context.contentResolver
         val result = resolver.openInputStream(uri)?.use { input ->
             client.sendFile(
-                host = host,
+                session = session,
                 name = name,
                 size = size,
                 sha256 = digest,

@@ -7,12 +7,14 @@
 //! mDNS crate, at the cost of not working across routed subnets (fine for
 //! "same Wi-Fi network," which is the only case this needs to cover today).
 //!
-//! **Security note:** a successful PIN match here marks the client's IP
-//! trusted in the shared [`crate::trust::TrustStore`], which
-//! `input_manager.rs` and `file_server.rs` check before acting on anything.
-//! That's IP-based, not cryptographic — see `trust.rs`'s doc comment for
-//! exactly what that does and doesn't guarantee. Picking a real TLS/PSK
-//! approach is still open, see ARCHITECTURE.md §5.
+//! **Security note:** a successful PIN match here runs an ephemeral X25519
+//! key exchange (`crypto.rs`) and stores the resulting session keys in the
+//! shared [`crate::trust::TrustStore`], which `input_manager.rs` and
+//! `file_server.rs` use to decrypt/authenticate everything on those
+//! channels. See `crypto.rs`'s doc comment for exactly what that does and
+//! doesn't guarantee (real confidentiality against a passive eavesdropper;
+//! not a full PAKE — an active attacker who already knows the PIN isn't
+//! defeated by this).
 
 use std::net::SocketAddr;
 use std::process::Command;
@@ -22,7 +24,8 @@ use rand::Rng;
 use tokio::net::UdpSocket;
 use tracing::{info, warn};
 
-use crate::protocol::{DiscoverResponse, Header, Opcode, PairRequest, HEADER_LEN};
+use crate::crypto::EphemeralKeypair;
+use crate::protocol::{DiscoverResponse, Header, Opcode, PairRequest, PairResponse, HEADER_LEN};
 use crate::trust::TrustStore;
 
 const DAEMON_NAME_ENV: &str = "UZAKEL_DAEMON_NAME";
@@ -96,17 +99,38 @@ async fn handle(
             let payload = &buf[HEADER_LEN..];
             let req = PairRequest::decode_payload(payload)?;
             let accepted = req.pin == *current_pin;
-            if accepted {
-                trust.trust(from.ip());
+
+            let response = if accepted {
+                let daemon_keypair = EphemeralKeypair::generate();
+                let daemon_pubkey = daemon_keypair.public_bytes;
+                let material = daemon_keypair.derive(
+                    req.client_pubkey,
+                    req.pin,
+                    req.client_pubkey,
+                    daemon_pubkey,
+                );
+                // From the daemon's side: c2s_key decrypts what the client
+                // sends us, s2c_key encrypts what we send the client.
+                trust.trust(from.ip(), material.c2s_key, material.s2c_key);
                 info!(%from, "client paired successfully");
                 // A fresh PIN for the *next* pairing attempt, so a captured
                 // PIN can't be replayed once it's been used.
                 *current_pin = new_pin();
+                PairResponse {
+                    accepted: true,
+                    daemon_pubkey,
+                    confirm_tag: material.confirm_tag,
+                }
             } else {
                 warn!(%from, "pairing attempt with a wrong PIN");
-            }
+                PairResponse {
+                    accepted: false,
+                    daemon_pubkey: [0u8; 32],
+                    confirm_tag: [0u8; 32],
+                }
+            };
             socket
-                .send_to(&crate::protocol::encode_pair_response(accepted), from)
+                .send_to(&response.encode(), from)
                 .await
                 .context("sending PAIR_RESPONSE")?;
         }

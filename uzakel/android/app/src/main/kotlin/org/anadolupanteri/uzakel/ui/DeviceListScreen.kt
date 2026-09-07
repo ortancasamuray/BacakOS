@@ -35,19 +35,21 @@ import org.anadolupanteri.uzakel.discovery.SavedHost
 import org.anadolupanteri.uzakel.discovery.SavedHostsStore
 import org.anadolupanteri.uzakel.network.DiscoveredHost
 import org.anadolupanteri.uzakel.network.NetworkClient
+import org.anadolupanteri.uzakel.network.PairedSession
 import java.net.InetAddress
 
 /**
  * Device list + discovery + pairing (ARCHITECTURE.md §4's `discovery/`
  * and §2.3's PIN flow). Tapping a discovered host that isn't already
  * paired prompts for the PIN the daemon showed as a desktop notification;
- * a successful pair saves the host and hands control to [onConnected].
+ * a successful pair saves the host and hands control (with the session
+ * keys the pairing derived) to [onConnected].
  */
 @Composable
 fun DeviceListScreen(
     client: NetworkClient,
     savedHosts: SavedHostsStore,
-    onConnected: (name: String, address: InetAddress) -> Unit,
+    onConnected: (name: String, session: PairedSession) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     var scanning by remember { mutableStateOf(false) }
@@ -141,16 +143,16 @@ fun DeviceListScreen(
             onDismiss = { pairingTarget = null; pairingError = null },
             onSubmit = { pin ->
                 scope.launch {
-                    val ok = try {
+                    val session = try {
                         client.pair(target.second, pin)
                     } catch (_: Exception) {
-                        false
+                        null
                     }
-                    if (ok) {
+                    if (session != null) {
                         savedHosts.upsert(SavedHost(target.first, target.second.hostAddress ?: target.first))
                         savedList = savedHosts.list()
                         pairingTarget = null
-                        onConnected(target.first, target.second)
+                        onConnected(target.first, session)
                     } else {
                         pairingError = "PIN yanlış veya cihaz yanıt vermedi"
                     }

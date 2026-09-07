@@ -36,7 +36,12 @@ enum class Opcode(val value: Int) {
     DISCOVER_REQUEST(20),
     DISCOVER_RESPONSE(21),
     PAIR_REQUEST(22),
-    PAIR_RESPONSE(23);
+    PAIR_RESPONSE(23),
+
+    /** Wraps a full inner frame's ciphertext once a session key exists
+     * (ARCHITECTURE.md §2.3.1) — carried on both the input and
+     * file-transfer channels post-pairing, with no plaintext fallback. */
+    ENCRYPTED_FRAME(30);
 
     companion object {
         fun fromByte(b: Int): Opcode? = values().find { it.value == b }
@@ -210,17 +215,54 @@ data class DiscoverResponse(
 
 fun encodeDiscoverRequest(): ByteArray = encodeSimple(Opcode.DISCOVER_REQUEST)
 
-fun encodePairRequest(pin: Int): ByteArray {
-    val bb = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN)
+/** `clientPubkey` is this device's ephemeral X25519 public key for this
+ * pairing attempt (ARCHITECTURE.md §2.3.1) — 32 bytes, from
+ * [org.anadolupanteri.uzakel.crypto.UzakelCrypto.EphemeralKeypair]. */
+fun encodePairRequest(pin: Int, clientPubkey: ByteArray): ByteArray {
+    require(clientPubkey.size == 32) { "clientPubkey must be 32 bytes, got ${clientPubkey.size}" }
+    val bb = ByteBuffer.allocate(4 + 32).order(ByteOrder.LITTLE_ENDIAN)
     bb.putInt(pin)
+    bb.put(clientPubkey)
     return frame(Opcode.PAIR_REQUEST, bb.array())
 }
 
-data class PairResponse(val accepted: Boolean) {
+/** `daemonPubkey`/`confirmTag` are all-zero when `accepted` is false — the
+ * caller must not use them in that case. See `daemon/src/crypto.rs`'s doc
+ * comment for what `confirmTag` proves. */
+data class PairResponse(val accepted: Boolean, val daemonPubkey: ByteArray, val confirmTag: ByteArray) {
     companion object {
         fun decodePayload(payload: ByteArray): PairResponse {
-            if (payload.isEmpty()) throw ProtocolException("empty PairResponse payload")
-            return PairResponse(payload[0].toInt() != 0)
+            if (payload.size < 1 + 32 + 32) throw ProtocolException("truncated PairResponse")
+            val accepted = payload[0].toInt() != 0
+            val daemonPubkey = payload.copyOfRange(1, 33)
+            val confirmTag = payload.copyOfRange(33, 65)
+            return PairResponse(accepted, daemonPubkey, confirmTag)
         }
     }
+
+    override fun equals(other: Any?): Boolean =
+        other is PairResponse && accepted == other.accepted &&
+            daemonPubkey.contentEquals(other.daemonPubkey) && confirmTag.contentEquals(other.confirmTag)
+
+    override fun hashCode(): Int = accepted.hashCode() * 31 + daemonPubkey.contentHashCode()
+}
+
+// ── Encrypted envelope (§2.3.1) ─────────────────────────────────────────────
+
+const val NONCE_LEN = 12
+
+/** Wraps an already-encrypted inner frame's ciphertext (produced by
+ * [org.anadolupanteri.uzakel.crypto.UzakelCrypto.Cipher]) for transmission.
+ * `nonce` is the 12-byte ChaCha20-Poly1305 nonce used to produce
+ * `ciphertext` (which includes the 16-byte Poly1305 tag appended). */
+fun encodeEncryptedFrame(nonce: ByteArray, ciphertext: ByteArray): ByteArray {
+    require(nonce.size == NONCE_LEN) { "nonce must be $NONCE_LEN bytes, got ${nonce.size}" }
+    val payload = nonce + ciphertext
+    return frame(Opcode.ENCRYPTED_FRAME, payload)
+}
+
+/** Splits an `EncryptedFrame` payload back into `(nonce, ciphertext)`. */
+fun decodeEncryptedFramePayload(payload: ByteArray): Pair<ByteArray, ByteArray> {
+    if (payload.size < NONCE_LEN) throw ProtocolException("truncated EncryptedFrame")
+    return payload.copyOfRange(0, NONCE_LEN) to payload.copyOfRange(NONCE_LEN, payload.size)
 }

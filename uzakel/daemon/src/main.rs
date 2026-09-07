@@ -6,6 +6,7 @@
 //! (TCP). None of them share state beyond what each module owns internally
 //! — a crash or bug in one channel doesn't take the others down.
 
+mod crypto;
 mod discovery;
 mod file_server;
 mod input_manager;

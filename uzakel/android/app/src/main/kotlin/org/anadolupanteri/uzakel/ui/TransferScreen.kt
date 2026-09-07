@@ -24,10 +24,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import org.anadolupanteri.uzakel.network.PairedSession
 import org.anadolupanteri.uzakel.transfer.FileTransferManager
 import org.anadolupanteri.uzakel.transfer.Transfer
 import org.anadolupanteri.uzakel.transfer.TransferState
-import java.net.InetAddress
 
 /**
  * File-transfer panel (ARCHITECTURE.md §4's `transfer/` bullet): a
@@ -41,7 +41,7 @@ import java.net.InetAddress
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TransferScreen(
-    host: InetAddress,
+    session: PairedSession,
     manager: FileTransferManager,
     onBack: () -> Unit,
 ) {
@@ -50,7 +50,7 @@ fun TransferScreen(
 
     val pickFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
-            scope.launch { manager.send(uri, host) }
+            scope.launch { manager.send(uri, session) }
         }
     }
 

@@ -33,8 +33,8 @@ import org.anadolupanteri.uzakel.input.KeyCodes
 import org.anadolupanteri.uzakel.input.TrackpadView
 import org.anadolupanteri.uzakel.input.typeChar
 import org.anadolupanteri.uzakel.network.InputChannel
+import org.anadolupanteri.uzakel.network.PairedSession
 import org.anadolupanteri.uzakel.protocol.MouseButton
-import java.net.InetAddress
 
 /** The hidden field's content is always this single placeholder char with the
  * cursor after it — its only job is giving the system IME something to send
@@ -57,7 +57,7 @@ private const val PLACEHOLDER = "​"
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ControlScreen(
-    host: InetAddress,
+    session: PairedSession,
     hostName: String,
     onOpenTransfer: () -> Unit,
     onDisconnect: () -> Unit,
@@ -68,9 +68,9 @@ fun ControlScreen(
     // thread too (see NetworkClient.kt's InputChannel doc) — Android's
     // StrictMode blocks DatagramSocket I/O there with a
     // NetworkOnMainThreadException, found via on-device testing.
-    var channel by remember(host) { mutableStateOf<InputChannel?>(null) }
-    LaunchedEffect(host) { channel = withContext(Dispatchers.IO) { InputChannel(host) } }
-    DisposableEffect(host) { onDispose { channel?.close() } }
+    var channel by remember(session) { mutableStateOf<InputChannel?>(null) }
+    LaunchedEffect(session) { channel = withContext(Dispatchers.IO) { InputChannel(session) } }
+    DisposableEffect(session) { onDispose { channel?.close() } }
 
     var ctrlHeld by remember { mutableStateOf(false) }
     var altHeld by remember { mutableStateOf(false) }
