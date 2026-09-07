@@ -1,0 +1,28 @@
+[package]
+name        = "bacak-grub-theme"
+description = "BacakOS GRUB önyükleyici teması — packaging-only"
+version     = { workspace = true }
+edition     = { workspace = true }
+license     = { workspace = true }
+authors     = { workspace = true }
+repository  = { workspace = true }
+
+[lib]
+path = "src/lib.rs"
+
+[package.metadata.deb]
+maintainer = "Bacak Desktop Project <packages@example.org>"
+copyright  = "2026, Bacak Desktop Project"
+section    = "x11"
+priority   = "optional"
+extended-description = """\
+Önyükleme menüsüne BacakOS masaüstü duvar kağıdını arka plan yapan, menü
+başlığını "Bacak OS" olarak gösteren bir GRUB teması kurar. Kurulum
+sırasında (postinst) /etc/default/grub içine GRUB_DISTRIBUTOR ve
+GRUB_THEME yazılır ve update-grub çalıştırılır."""
+depends = "grub-common"
+maintainer-scripts = "debian"
+assets = [
+    ["files/theme.txt",      "boot/grub/themes/bacakos/theme.txt",      "644"],
+    ["files/background.png", "boot/grub/themes/bacakos/background.png", "644"],
+]

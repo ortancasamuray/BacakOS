@@ -1,0 +1,278 @@
+---
+- name: Remove compiled GUI components and sources
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /opt/mycroft-gui
+    - /opt/ovos-shell
+    - /opt/lottie
+    - /usr/bin/ovos-shell
+    - /usr/bin/ovos-gui-app
+    - /usr/share/applications/ovos-shell.desktop
+    - /usr/share/applications/ai.ovos.gui-app.desktop
+    - /usr/share/OVOS
+    - /usr/lib64/qt5/qml/org/kde/lottie
+    - /usr/lib/aarch64-linux-gnu/qt5/qml/org/kde/lottie
+    - /usr/lib/aarch64-linux-gnu/qt5/qml/Mycroft
+    - /usr/lib/aarch64-linux-gnu/qt5/qml/OVOSPlugin
+    - "{{ ovos_installer_user_home }}/.config/ovos-eglfs.json"
+    - "{{ ovos_installer_user_home }}/.cache/mycroft.gui"
+    - "{{ ovos_installer_user_home }}/.cache/ovos-installer/gui-mycroft-gui.built"
+    - "{{ ovos_installer_user_home }}/.cache/ovos-installer/gui-ovos-shell.built"
+    - "{{ ovos_installer_user_home }}/.cache/ovos-installer/gui-lottie.built"
+
+- name: Load tracked GUI package ownership
+  ansible.builtin.include_role:
+    name: ovos_installer
+    tasks_from: package_tracking_load.yml
+  vars:
+    ovos_installer_package_tracking_marker_path: "{{ ovos_virtualenv_gui_package_marker_path }}"
+  when:
+    - ovos_installer_uninstall_remove_packages | default(false) | bool
+    - ansible_facts.distribution == "Debian"
+    - ansible_facts.distribution_major_version == "13"
+    - (ovos_installer_raspberrypi | default('')) | regex_search(ovos_installer_raspberry_pi_4_regex)
+    - "'tas5806' in (ovos_installer_i2c_devices | default([]))"
+
+- name: Remove tracked ovos-gui package requirements (Debian Trixie Mark II/DevKit)
+  ansible.builtin.apt:
+    name: "{{ ovos_installer_package_tracking_tracked_packages_to_remove }}"
+    state: absent
+    purge: true
+    autoremove: true
+  register: ovos_virtualenv_gui_package_uninstall_result
+  ignore_errors: true
+  when:
+    - ovos_installer_uninstall_remove_packages | default(false) | bool
+    - ansible_facts.distribution == "Debian"
+    - ansible_facts.distribution_major_version == "13"
+    - "'tas5806' in (ovos_installer_i2c_devices | default([]))"
+    - (ovos_installer_package_tracking_tracked_packages_to_remove | default([]) | length) > 0
+
+- name: Remove GUI package ownership marker
+  ansible.builtin.file:
+    path: "{{ ovos_virtualenv_gui_package_marker_path }}"
+    state: absent
+  when:
+    - ovos_installer_uninstall_remove_packages | default(false) | bool
+    - ansible_facts.distribution == "Debian"
+    - ansible_facts.distribution_major_version == "13"
+    - "'tas5806' in (ovos_installer_i2c_devices | default([]))"
+    - (ovos_installer_package_tracking_tracked_packages_to_remove | default([]) | length) == 0
+      or ovos_virtualenv_gui_package_uninstall_result is not ansible.builtin.failed
+
+- name: Load tracked virtualenv package ownership (Linux)
+  ansible.builtin.include_role:
+    name: ovos_installer
+    tasks_from: package_tracking_load.yml
+  vars:
+    ovos_installer_package_tracking_marker_path: "{{ ovos_virtualenv_package_marker_path_linux }}"
+  when:
+    - ovos_installer_uninstall_remove_packages | default(false) | bool
+    - ansible_facts.system != "Darwin"
+
+- name: Remove tracked virtualenv package requirements (Debian family)
+  ansible.builtin.apt:
+    name: "{{ ovos_installer_package_tracking_tracked_packages_to_remove }}"
+    install_recommends: false
+    state: absent
+    purge: true
+    autoremove: true
+  register: ovos_virtualenv_package_uninstall_debian
+  ignore_errors: true
+  when:
+    - ovos_installer_uninstall_remove_packages | default(false) | bool
+    - ansible_facts.os_family == "Debian"
+    - (ovos_installer_package_tracking_tracked_packages_to_remove | default([]) | length) > 0
+
+- name: Remove tracked virtualenv package requirements (RedHat)
+  ansible.builtin.dnf:
+    name: "{{ ovos_installer_package_tracking_tracked_packages_to_remove }}"
+    state: absent
+    autoremove: true
+  register: ovos_virtualenv_package_uninstall_redhat
+  ignore_errors: true
+  when:
+    - ovos_installer_uninstall_remove_packages | default(false) | bool
+    - ansible_facts.os_family == "RedHat"
+    - (ovos_installer_package_tracking_tracked_packages_to_remove | default([]) | length) > 0
+
+- name: Remove tracked virtualenv package requirements (SUSE)
+  community.general.zypper:
+    name: "{{ ovos_installer_package_tracking_tracked_packages_to_remove }}"
+    state: absent
+    clean_deps: true
+  register: ovos_virtualenv_package_uninstall_suse
+  ignore_errors: true
+  when:
+    - ovos_installer_uninstall_remove_packages | default(false) | bool
+    - ansible_facts.os_family == "Suse"
+    - (ovos_installer_package_tracking_tracked_packages_to_remove | default([]) | length) > 0
+
+- name: Remove tracked virtualenv package requirements (Archlinux)
+  community.general.pacman:
+    name: "{{ ovos_installer_package_tracking_tracked_packages_to_remove }}"
+    state: absent
+    extra_args: --recursive
+    remove_nosave: true
+  register: ovos_virtualenv_package_uninstall_archlinux
+  ignore_errors: true
+  when:
+    - ovos_installer_uninstall_remove_packages | default(false) | bool
+    - ansible_facts.os_family == "Archlinux"
+    - (ovos_installer_package_tracking_tracked_packages_to_remove | default([]) | length) > 0
+
+- name: Remove Linux virtualenv package ownership marker
+  ansible.builtin.file:
+    path: "{{ ovos_virtualenv_package_marker_path_linux }}"
+    state: absent
+  when:
+    - ovos_installer_uninstall_remove_packages | default(false) | bool
+    - ansible_facts.system != "Darwin"
+    - ansible_facts.os_family in ["Debian", "RedHat", "Suse", "Archlinux"]
+    - (ovos_installer_package_tracking_tracked_packages_to_remove | default([]) | length) == 0
+      or not (
+        (ovos_virtualenv_package_uninstall_debian.failed | default(false))
+        or (ovos_virtualenv_package_uninstall_redhat.failed | default(false))
+        or (ovos_virtualenv_package_uninstall_suse.failed | default(false))
+        or (ovos_virtualenv_package_uninstall_archlinux.failed | default(false))
+      )
+
+- name: Load tracked virtualenv package ownership (macOS)
+  ansible.builtin.include_role:
+    name: ovos_installer
+    tasks_from: package_tracking_load.yml
+  vars:
+    ovos_installer_package_tracking_marker_path: "{{ ovos_virtualenv_package_marker_path_macos }}"
+  when:
+    - ovos_installer_uninstall_remove_packages | default(false) | bool
+    - ansible_facts.system == "Darwin"
+
+- name: Remove tracked virtualenv package requirements (macOS)
+  become: true
+  become_user: "{{ ovos_installer_user }}"
+  community.general.homebrew:
+    name: "{{ ovos_installer_package_tracking_tracked_packages_to_remove }}"
+    state: absent
+    path: "{{ ovos_virtualenv_homebrew_path }}"
+    update_homebrew: false
+  register: ovos_virtualenv_package_uninstall_macos
+  environment:
+    PATH: "{{ ovos_virtualenv_homebrew_path }}:{{ ansible_env.PATH | default('/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin') }}"
+  ignore_errors: true
+  when:
+    - ovos_installer_uninstall_remove_packages | default(false) | bool
+    - ansible_facts.system == "Darwin"
+    - (ovos_installer_package_tracking_tracked_packages_to_remove | default([]) | length) > 0
+
+- name: Remove macOS virtualenv package ownership marker
+  ansible.builtin.file:
+    path: "{{ ovos_virtualenv_package_marker_path_macos }}"
+    state: absent
+  when:
+    - ovos_installer_uninstall_remove_packages | default(false) | bool
+    - ansible_facts.system == "Darwin"
+    - (ovos_installer_package_tracking_tracked_packages_to_remove | default([]) | length) == 0
+      or ovos_virtualenv_package_uninstall_macos is not ansible.builtin.failed
+
+- name: Check for OVOS venv activation script
+  ansible.builtin.stat:
+    path: "{{ ovos_virtualenv_path }}/bin/activate"
+  register: ovos_virtualenv_activate_script
+  changed_when: false
+
+- name: Remove OVOS constraints from venv activation
+  vars:
+    _ovos_release: "{{ ovos_virtualenv_constraints_url }}"
+  ansible.builtin.lineinfile:
+    path: "{{ ovos_virtualenv_path }}/bin/activate"
+    line: "{{ item.line }}"
+    regexp: "{{ item.regexp }}"
+    insertafter: "{{ item.insertafter }}"
+    owner: "{{ ovos_installer_user }}"
+    group: "{{ ovos_installer_group }}"
+    state: absent
+  loop:
+    - line: "export PIP_CONSTRAINT=\"{{ _ovos_release }}\""
+      regexp: "^export PIP_CONSTRAINT="
+      insertafter: "^VIRTUAL_ENV="
+    - line: "export UV_CONSTRAINT=\"{{ _ovos_release }}\""
+      regexp: "^export UV_CONSTRAINT="
+      insertafter: "^export PIP_CONSTRAINT="
+  loop_control:
+    label: "{{ item.regexp }}"
+  when: ovos_virtualenv_activate_script.stat.exists | default(false) | bool
+
+- name: Check for user shell init file
+  ansible.builtin.stat:
+    path: "{{ ovos_virtualenv_shell_init_file }}"
+  register: ovos_virtualenv_shell_init
+  changed_when: false
+
+- name: Remove VIRTUAL_ENV variable and update PATH in shell init file
+  vars:
+    _path: "{{ ovos_virtualenv_path }}/bin"
+  ansible.builtin.lineinfile:
+    path: "{{ ovos_virtualenv_shell_init_file }}"
+    line: "{{ item.line }}"
+    regexp: "{{ item.regexp }}"
+    owner: "{{ ovos_installer_user }}"
+    group: "{{ ovos_installer_group }}"
+    mode: "0644"
+    state: absent
+  loop:
+    - line: "VIRTUAL_ENV={{ _path }}"
+      regexp: "^VIRTUAL_ENV"
+    - line: "PATH=$PATH:{{ _path }}"
+      regexp: "^PATH"
+  loop_control:
+    label: "{{ item.regexp }}"
+  when:
+    - ovos_virtualenv_shell_init.stat.exists | default(false) | bool
+    - (ovos_installer_i2c_devices | default([])) | length < 1
+
+- name: Remove OVOS virtualenv auto-activate block
+  ansible.builtin.blockinfile:
+    path: "{{ ovos_virtualenv_shell_init_file }}"
+    marker: "# {mark} OVOS VENV"
+    block: |
+      if [[ $- == *i* ]] && [ -f "{{ ovos_virtualenv_path }}/bin/activate" ]; then
+        source "{{ ovos_virtualenv_path }}/bin/activate"
+      fi
+    owner: "{{ ovos_installer_user }}"
+    group: "{{ ovos_installer_group }}"
+    mode: "0644"
+    state: absent
+  when: ovos_virtualenv_shell_init.stat.exists | default(false) | bool
+
+- name: Remove ovos Python virtualenv and requirements.txt files
+  vars:
+    _requirements_paths: "{{ ovos_virtualenv_requirements_files | map(attribute='dest') | list }}"
+    _venv_executable: >-
+      {{ ansible_playbook_python
+         | default(ansible_python_interpreter | default(ansible_facts.get('python', {}).get('executable', ''))) }}
+    _running_from_ovos_venv: >-
+      {{ _venv_executable is search('^' ~ (ovos_virtualenv_root_dir | regex_escape)) }}
+    _remove_venv_paths: >-
+      {{ [] if (_running_from_ovos_venv and not (ovos_virtualenv_force_remove | bool))
+         else [ovos_virtualenv_path, ovos_virtualenv_root_dir] }}
+    _uninstall_paths: >-
+      {{ _remove_venv_paths
+         + _requirements_paths
+         + ovos_virtualenv_uninstall_extra_paths
+         + [ovos_virtualenv_messagebus_path, ovos_virtualenv_rust_messagebus_binary_path]
+         | unique }}
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ _uninstall_paths }}"
+
+- name: Warn when skipping venv removal during uninstall
+  ansible.builtin.debug:
+    msg: >-
+      Skipping removal of {{ ovos_virtualenv_root_dir }} because Ansible is
+      running from that venv. Set ovos_virtualenv_force_remove=true to override.
+  when:
+    - ansible_facts.get('python', {}).get('executable', '') is search('^' ~ (ovos_virtualenv_root_dir | regex_escape))
+    - not (ovos_virtualenv_force_remove | bool)

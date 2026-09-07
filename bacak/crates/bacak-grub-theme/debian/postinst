@@ -1,0 +1,46 @@
+#!/bin/sh
+# BacakOS GRUB teması + dağıtıcı adı — /etc/default/grub'ı idempotent olarak
+# günceller, sonra grub.cfg'yi yeniden üretir. update-grub yoksa (ör. bu paket
+# grub kurulu olmayan bir ortamda test ediliyorsa) sessizce atlar.
+#
+# BacakOS'ta /etc/default/grub'ı normalde debconf üzerinden grub-pc/
+# grub-efi-amd64 METAPAKETLERİ oluşturur — ama bu paketler birbiriyle
+# Conflicts verdiği için kur/live-build yalnızca çakışmayan grub-*-bin
+# paketlerini kurar (bkz kur package-lists notu). Sonuç: hiçbir paket
+# /etc/default/grub'ı hiç oluşturmaz, quiet/splash kernel parametreleri
+# hiçbir zaman set edilmez ve plymouth teması görünmez. Bu yüzden dosya
+# yoksa burada minimal ama işlevsel bir tane yaratıyoruz (eski "sessizce
+# atla" davranışı GRUB_THEME/GRUB_DISTRIBUTOR'ı hiç uygulamıyordu).
+set -e
+
+GRUB_DEFAULT_FILE=/etc/default/grub
+
+if [ ! -f "$GRUB_DEFAULT_FILE" ]; then
+    cat > "$GRUB_DEFAULT_FILE" <<'EOF'
+GRUB_DEFAULT=0
+GRUB_TIMEOUT=5
+GRUB_CMDLINE_LINUX_DEFAULT="quiet splash"
+GRUB_CMDLINE_LINUX=""
+GRUB_DISABLE_OS_PROBER=true
+EOF
+fi
+
+if [ -f "$GRUB_DEFAULT_FILE" ]; then
+    if grep -q '^GRUB_DISTRIBUTOR=' "$GRUB_DEFAULT_FILE"; then
+        sed -i 's/^GRUB_DISTRIBUTOR=.*/GRUB_DISTRIBUTOR="Bacak OS"/' "$GRUB_DEFAULT_FILE"
+    else
+        echo 'GRUB_DISTRIBUTOR="Bacak OS"' >> "$GRUB_DEFAULT_FILE"
+    fi
+
+    if grep -q '^GRUB_THEME=' "$GRUB_DEFAULT_FILE"; then
+        sed -i 's|^GRUB_THEME=.*|GRUB_THEME="/boot/grub/themes/bacakos/theme.txt"|' "$GRUB_DEFAULT_FILE"
+    else
+        echo 'GRUB_THEME="/boot/grub/themes/bacakos/theme.txt"' >> "$GRUB_DEFAULT_FILE"
+    fi
+
+    if command -v update-grub >/dev/null 2>&1 && [ -d /boot/grub ]; then
+        update-grub || true
+    fi
+fi
+
+exit 0

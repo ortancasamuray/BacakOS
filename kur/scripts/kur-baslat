@@ -4,24 +4,29 @@
 #
 # kur-baslat — kullanıcı tarafındaki başlatıcı. Menüden çalıştırılan budur.
 #
-# `kur` diskleri bölümlediği için root gerektirir. pkexec, güvenlik gereği
-# ortam değişkenlerinin neredeyse tamamını siler; bu da Wayland soketinin
-# adresini (WAYLAND_DISPLAY, XDG_RUNTIME_DIR) yok eder ve arayüz açılamaz.
-# Bu yüzden bu betik değişkenleri argüman olarak geçirir ve root tarafındaki
-# /usr/libexec/kur-root onları geri kurar.
+# `kur` diskleri bölümlediği için root gerektirir. `pkexec` kullanmıyoruz:
+# polkit'in `auth_admin` politikası PAM üzerinden gerçek bir parola ister, ama
+# `kur` yalnızca canlı ortamdan çalışır ve o oturumun kullanıcısının hiçbir
+# zaman gerçek bir parolası yoktur (autologin) — `pkexec` bu yüzden "pam_
+# authenticate failed" ile daima başarısız olur. Canlı oturum kullanıcısı zaten
+# parolasız `sudo` yetkisine sahiptir (live-boot'un standart kurulumu; fiziksel
+# olarak ortamı önyükleyen kişi zaten tam yetkilidir), o yüzden `sudo` üzerinden
+# geçiyoruz. `sudo` da ortam değişkenlerini sıfırlar; bu yüzden bu betik
+# WAYLAND_DISPLAY/XDG_RUNTIME_DIR/DISPLAY'i argüman olarak geçirir ve root
+# tarafındaki /usr/libexec/kur-root onları geri kurar.
 set -eu
 
-# Canlı ortamda oturum zaten root olabilir; o zaman pkexec'e gerek yok.
+# Canlı ortamda oturum zaten root olabilir; o zaman sudo'ya gerek yok.
 if [ "$(id -u)" -eq 0 ]; then
     exec /usr/bin/kur "$@"
 fi
 
-if ! command -v pkexec >/dev/null 2>&1; then
-    echo "kur: pkexec bulunamadı — 'sudo kur' olarak çalıştırın." >&2
+if ! command -v sudo >/dev/null 2>&1; then
+    echo "kur: sudo bulunamadı — 'sudo kur' olarak çalıştırın." >&2
     exit 1
 fi
 
-exec pkexec /usr/libexec/kur-root \
+exec sudo /usr/libexec/kur-root \
     "${WAYLAND_DISPLAY-}" \
     "${XDG_RUNTIME_DIR-}" \
     "${DISPLAY-}"

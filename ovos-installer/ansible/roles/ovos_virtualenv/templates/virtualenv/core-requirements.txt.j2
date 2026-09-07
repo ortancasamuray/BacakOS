@@ -1,0 +1,65 @@
+{% set _ovos_is_raspberry_pi_4 = (ovos_installer_raspberrypi | default('')) | regex_search(ovos_installer_raspberry_pi_4_regex) %}
+{% set _ovos_is_mark2_family = _ovos_is_raspberry_pi_4 and ('tas5806' in (ovos_installer_i2c_devices | default([]))) %}
+{% set _ovos_is_devkit = _ovos_is_mark2_family and ('attiny1614' in (ovos_installer_i2c_devices | default([]))) %}
+ovos-audio[extras]
+ovos-core[lgpl,plugins]
+ovos-dinkum-listener[{{ 'extras' if ansible_facts.system == 'Darwin' else 'extras,linux' }}]
+# Keep configured VAD selection and Linux fallback installed explicitly.
+{% if (ovos_installer_cpu_is_capable | default(false)) | bool %}
+ovos-vad-plugin-silero
+{% endif %}
+{% if ansible_facts.system != 'Darwin' %}
+ovos-vad-plugin-webrtcvad
+{% endif %}
+{% if ansible_facts.system == 'Darwin' or _ovos_is_mark2_family %}
+ovos-microphone-plugin-sounddevice
+{% endif %}
+{% if ansible_facts.system == 'Darwin' %}
+{% if (ovos_installer_cpu_is_capable | default(false)) | bool %}
+ovos-ww-plugin-precise-onnx
+{% endif %}
+{% endif %}
+ovos-docs-viewer
+{% if ovos_installer_feature_gui | bool %}
+ovos-gui[extras]
+ovos-skill-homescreen
+{% endif %}
+ovos-PHAL[{{ 'mac' if ansible_facts.system == 'Darwin' else 'linux' }}]
+ovos-phal-plugin-ipgeo
+{% if (ovos_installer_locale != "ca-es") and (ovos_installer_locale != "eu-es") and (ovos_installer_locale != "gl-es") %}
+ovos-tts-plugin-piper
+{% endif %}
+ovos-tts-plugin-polly
+
+{% if ovos_installer_locale == "ca-es" %}
+ovos-tts-plugin-matxa-multispeaker-cat
+{% endif %}
+
+{% if ovos_installer_locale == "gl-es" %}
+ovos-tts-plugin-nos
+{% endif %}
+
+{% if (ovos_installer_locale == "es-es") or (ovos_installer_locale == "eu-es") %}
+ovos-tts-plugin-ahotts
+{% endif %}
+
+{% if ovos_installer_enable_ggwave %}
+ovos-audio-transformer-plugin-ggwave
+{% endif %}
+
+{% if (ovos_installer_cpu_is_capable | default(false)) | bool %}
+ovos-dinkum-listener[onnx]
+{% endif %}
+
+{% if _ovos_is_mark2_family %}
+ovos-PHAL[mk2]
+{% endif %}
+
+{% if 'atmega328p' in ovos_installer_i2c_devices %}
+ovos-PHAL[mk1]
+{% endif %}
+
+{% if _ovos_is_devkit %}
+ovos-PHAL[mk2dev]
+git+https://github.com/OVOSHatchery/ovos-PHAL-plugin-sj201-leds.git
+{% endif %}

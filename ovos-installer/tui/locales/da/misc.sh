@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+OK_BUTTON="Næste"
+YES_BUTTON="Ja"
+NO_BUTTON="Nej"
+BACK_BUTTON="Tilbage"
+
+export OK_BUTTON YES_BUTTON NO_BUTTON BACK_BUTTON

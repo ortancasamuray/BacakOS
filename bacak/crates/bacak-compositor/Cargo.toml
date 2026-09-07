@@ -119,7 +119,11 @@ to host the greeter and user sessions."""
 # libegl1 + libgl1-mesa-dri are dlopen'd by Mesa at runtime (not in ldd).
 # xwayland is spawned by the compositor for X11 application support.
 depends = "$auto, xkb-data, fonts-dejavu-core | fonts-dejavu, libegl1, libgl1-mesa-dri, xwayland, bluez-obexd, python3, python3-dbus, python3-gi"
-recommends = "bacak-display-manager"
+# lxpolkit: bacak-session starts it as the session's polkit auth agent.
+# Without it, pkexec (kur-baslat and anything else needing root) has nowhere
+# to show its prompt and fails silently — soft dependency since the session
+# still starts fine without it, just without privileged-action prompts.
+recommends = "bacak-display-manager, lxpolkit"
 # bacak (<= 0.1.0) shipped /usr/bin/bacak-compositor; this package takes it over.
 replaces = "bacak (<= 0.1.0)"
 breaks = "bacak (<= 0.1.0)"

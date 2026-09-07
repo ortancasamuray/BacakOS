@@ -21,6 +21,7 @@ mod search;
 mod security;
 mod transfer;
 mod trash;
+mod userdirs;
 
 use std::cell::RefCell;
 use std::collections::HashSet;
@@ -68,6 +69,9 @@ struct AppState {
     open_with_path: Option<PathBuf>,
     /// If Some, we're in archive-browser mode for this archive file.
     archive_path: Option<PathBuf>,
+    /// Cancel flag for an in-flight compress operation. Set to `true` by the
+    /// cancel button to abort the background thread.
+    compress_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl AppState {
@@ -91,6 +95,7 @@ impl AppState {
             pending_chmod: None,
             open_with_path: None,
             archive_path: None,
+            compress_cancel: None,
         }
     }
 }
@@ -103,6 +108,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     .init();
 
     let sandbox = Sandbox::from_env();
+    // First run after install: localise the XDG user directories to Turkish
+    // names (create if missing, rename an English counterpart if present) so
+    // the sidebar categories land on real, correctly-named folders.
+    userdirs::ensure_localized(&sandbox.home().into_path_buf());
     // Start building the home filename index in the background for fast search.
     let index = search::Index::build(&sandbox, sandbox.home().into_path_buf());
     let state = Rc::new(RefCell::new(AppState::new(sandbox)));
@@ -290,6 +299,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ui.on_compress_selected(move || {
             if let Some(ui) = ui_w.upgrade() {
                 compress_selected(&ui, &st);
+            }
+        });
+    }
+    {
+        let st = state.clone();
+        ui.on_cancel_compress(move || {
+            if let Some(c) = st.borrow().compress_cancel.as_ref() {
+                c.store(true, std::sync::atomic::Ordering::SeqCst);
             }
         });
     }
@@ -647,8 +664,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ui.on_navigate_category(move |cat| {
             if let Some(ui) = ui_w.upgrade() {
                 let home = st.borrow().sandbox.home().into_path_buf();
-                let dir = xdg_dir_for_category(cat.as_str(), &home);
-                navigate(&ui, &st, &dir.to_string_lossy());
+                // Archives has no dedicated XDG folder — show a home-wide
+                // filtered view of archive files instead of falling back to
+                // the raw home listing.
+                if cat.as_str() == "archives" {
+                    show_category_files(&ui, &st, &home, search::Category::Archives);
+                } else {
+                    let dir = xdg_dir_for_category(cat.as_str(), &home);
+                    navigate(&ui, &st, &dir.to_string_lossy());
+                }
             }
         });
     }
@@ -686,8 +710,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ui.set_disk_usage(build_disk_usage(&home));
     }
 
-    // Initial load.
-    reload(&ui, &state);
+    // Initial load. Deferred so the window paints its first frame before the
+    // directory scan (child_count() per entry + icon loading) runs — without
+    // this, nothing appears on screen until the scan finishes.
+    {
+        let ui_w = ui.as_weak();
+        let st = state.clone();
+        slint::Timer::single_shot(std::time::Duration::ZERO, move || {
+            if let Some(ui) = ui_w.upgrade() {
+                reload(&ui, &st);
+            }
+        });
+    }
     ui.run()?;
     Ok(())
 }
@@ -1515,6 +1549,80 @@ fn run_search(ui: &MainWindow, state: &Rc<RefCell<AppState>>, term: &str) {
     refresh_view(ui, state);
 }
 
+/// Show a category that has no dedicated XDG directory (e.g. Archives) as a
+/// home-wide filtered view: every file under the home directory whose type
+/// matches `category`, with the breadcrumb kept at Home.
+///
+/// The scan runs on a background thread (index if ready, else a live walk)
+/// so a large home — or a slow/unresponsive mount under it — never freezes
+/// the UI. Results are posted back on the event loop, and only applied if
+/// the user is still viewing this home category.
+fn show_category_files(
+    ui: &MainWindow,
+    state: &Rc<RefCell<AppState>>,
+    home: &std::path::Path,
+    category: search::Category,
+) {
+    let home = home.to_path_buf();
+    // Set the view context up front so the breadcrumb/path show Home with an
+    // empty list while the scan runs off the UI thread.
+    {
+        let mut s = state.borrow_mut();
+        s.current = home.clone();
+        s.in_trash_view = false;
+        s.archive_path = None;
+        s.entries = Vec::new();
+        s.selected.clear();
+    }
+    ui.set_current_path(SharedString::from(home.to_string_lossy().to_string()));
+    ui.set_active_root_path(SharedString::from(active_root(&state.borrow(), &home)));
+    set_breadcrumbs(ui, state, &home);
+    ui.set_in_trash(false);
+    ui.set_in_archive(false);
+    refresh_view(ui, state);
+    ui.set_status_text(sx(ui, "Scanning…", "Taranıyor…", "Escaneando…"));
+
+    let (sandbox, index, show_hidden) = {
+        let s = state.borrow();
+        (s.sandbox.clone(), s.index.clone(), s.show_hidden)
+    };
+    let query = search::Query {
+        category: Some(category),
+        include_hidden: show_hidden,
+        limit: 1000,
+        ..Default::default()
+    };
+    let weak = ui.as_weak();
+    std::thread::Builder::new()
+        .name("category-scan".into())
+        .spawn(move || {
+            let hits = match &index {
+                Some(idx) if idx.covers(&home) && idx.is_ready() => idx.query(&home, &query),
+                _ => search::search(&sandbox, &home, &query),
+            };
+            let _ = weak.upgrade_in_event_loop(move |ui| {
+                let count = hits.len();
+                APP.with(|a| {
+                    if let Some(state) = a.borrow().as_ref() {
+                        // Skip if the user navigated away while we scanned.
+                        if state.borrow().current != home {
+                            return;
+                        }
+                        state.borrow_mut().entries = hits;
+                        refresh_view(&ui, state);
+                        ui.set_status_text(sx(
+                            &ui,
+                            format!("{count} archives"),
+                            format!("{count} arşiv"),
+                            format!("{count} archivos comprimidos"),
+                        ));
+                    }
+                });
+            });
+        })
+        .ok();
+}
+
 fn make_new_folder(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
     let dir = state.borrow().current.clone();
     let mut name = "New Folder".to_string();
@@ -1550,37 +1658,113 @@ fn trash_selected(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
 }
 
 fn compress_selected(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
-    let (dir, paths) = {
+    let (dir, paths, sandbox) = {
         let s = state.borrow();
         let paths: Vec<PathBuf> =
             s.selected.iter().filter_map(|i| s.entries.get(*i)).map(|e| e.path.clone()).collect();
-        (s.current.clone(), paths)
+        (s.current.clone(), paths, s.sandbox.clone())
     };
     if paths.is_empty() {
         ui.set_status_text(sx(ui, "Select items to compress", "Sıkıştırılacak öğeleri seçin", "Seleccione elementos para comprimir"));
         return;
     }
     let target = unique_path(&dir, "Archive", "zip");
-    let result = archive::create(
-        &state.borrow().sandbox,
-        &target,
-        &paths,
-        &archive::Options::default(),
-        &mut |_p| {},
-    );
-    match result {
-        Ok(()) => {
-            let name = target.file_name().unwrap_or_default().to_string_lossy().into_owned();
-            ui.set_status_text(sx(
-                ui,
-                format!("Compressed {} items → {name}", paths.len()),
-                format!("{} öğe sıkıştırıldı → {name}", paths.len()),
-                format!("{} elementos comprimidos → {name}", paths.len()),
-            ));
-            reload(ui, state);
-        }
-        Err(e) => ui.set_status_text(sx(ui, format!("Compress failed: {e}"), format!("Sıkıştırma başarısız: {e}"), format!("Error al comprimir: {e}"))),
-    }
+    let count = paths.len();
+
+    // Fresh cancel token, shared with the worker and the cancel button.
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    state.borrow_mut().compress_cancel = Some(cancel.clone());
+
+    ui.set_compress_active(true);
+    ui.set_compress_fraction(0.0);
+    ui.set_compress_label(sx(ui, "Compressing…", "Sıkıştırılıyor…", "Comprimiendo…"));
+
+    // Compress on a background thread — a large directory would otherwise
+    // block the UI thread and freeze the window. Progress and the final
+    // result are posted back on the event loop. The user can abort via the
+    // cancel button, which flips `cancel`.
+    let weak = ui.as_weak();
+    let cancel_thread = cancel.clone();
+    std::thread::Builder::new()
+        .name("compress".into())
+        .spawn(move || {
+            let progress_weak = weak.clone();
+            let opts = archive::Options { cancel: Some(cancel_thread.clone()), ..Default::default() };
+            let result = archive::create(
+                &sandbox,
+                &target,
+                &paths,
+                &opts,
+                &mut |p: filesystem::Progress| {
+                    // Prefer byte progress; fall back to file count when the
+                    // total byte size is unknown/zero (e.g. only empty files).
+                    let frac = if p.bytes_total > 0 {
+                        p.bytes_done as f32 / p.bytes_total as f32
+                    } else if p.files_total > 0 {
+                        p.files_done as f32 / p.files_total as f32
+                    } else {
+                        0.0
+                    };
+                    let frac = frac.clamp(0.0, 1.0);
+                    let _ = progress_weak.upgrade_in_event_loop(move |ui| {
+                        ui.set_compress_fraction(frac);
+                    });
+                },
+            );
+            let cancelled =
+                cancel_thread.load(std::sync::atomic::Ordering::SeqCst) || matches!(result, Err(archive::ArchiveError::Cancelled));
+            let result = result.map_err(|e| e.to_string());
+            let target_name =
+                target.file_name().unwrap_or_default().to_string_lossy().into_owned();
+            let target_for_cleanup = target.clone();
+            let _ = weak.upgrade_in_event_loop(move |ui| {
+                ui.set_compress_active(false);
+                ui.set_compress_fraction(0.0);
+                APP.with(|a| {
+                    if let Some(state) = a.borrow().as_ref() {
+                        state.borrow_mut().compress_cancel = None;
+                    }
+                });
+                if cancelled {
+                    // Remove the partial archive left behind by the abort.
+                    let _ = std::fs::remove_file(&target_for_cleanup);
+                    ui.set_status_text(sx(
+                        &ui,
+                        "Compression cancelled",
+                        "Sıkıştırma iptal edildi",
+                        "Compresión cancelada",
+                    ));
+                    APP.with(|a| {
+                        if let Some(state) = a.borrow().as_ref() {
+                            reload(&ui, state);
+                        }
+                    });
+                    return;
+                }
+                match result {
+                    Ok(()) => {
+                        ui.set_status_text(sx(
+                            &ui,
+                            format!("Compressed {count} items → {target_name}"),
+                            format!("{count} öğe sıkıştırıldı → {target_name}"),
+                            format!("{count} elementos comprimidos → {target_name}"),
+                        ));
+                        APP.with(|a| {
+                            if let Some(state) = a.borrow().as_ref() {
+                                reload(&ui, state);
+                            }
+                        });
+                    }
+                    Err(e) => ui.set_status_text(sx(
+                        &ui,
+                        format!("Compress failed: {e}"),
+                        format!("Sıkıştırma başarısız: {e}"),
+                        format!("Error al comprimir: {e}"),
+                    )),
+                }
+            });
+        })
+        .ok();
 }
 
 fn extract_selected(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {

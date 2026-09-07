@@ -1,0 +1,187 @@
+#!/usr/bin/env bash
+# shellcheck source=tui/dialogs.sh
+source tui/dialogs.sh
+
+# shellcheck source=tui/locales/en-us/tuning.sh
+source "tui/locales/$LOCALE/tuning.sh"
+
+if [ -f "tui/locales/$LOCALE/overclock.sh" ]; then
+  # shellcheck source=tui/locales/en-us/overclock.sh
+  source "tui/locales/$LOCALE/overclock.sh"
+fi
+
+if [ -z "${OVERCLOCK_TITLE:-}" ]; then
+  OVERCLOCK_TITLE="Open Voice OS Installation - Overclocking"
+fi
+
+if [ -z "${OVERCLOCK_CONTENT:-}" ]; then
+  OVERCLOCK_CONTENT="
+Overclocking increases CPU/GPU frequency for maximum performance but can reduce stability and increase heat.
+
+Requirements:
+- Active cooling (heatsink/fan) and good airflow
+- A stable power supply appropriate for your Pi model
+- Monitor temperatures and stop if throttling or crashes
+
+Risks:
+- Random reboots, audio glitches, data corruption
+- Higher power draw and reduced lifespan
+
+Open Voice OS is not responsible for any issues related to overclocking.
+
+Enable overclocking?
+"
+fi
+
+if [ -z "${OVERCLOCK_ARM_FREQ:-}" ]; then
+  if [[ "${RASPBERRYPI_MODEL:-}" == *"Raspberry Pi 5"* ]]; then
+    OVERCLOCK_ARM_FREQ="2800"
+  else
+    OVERCLOCK_ARM_FREQ="2000"
+  fi
+fi
+
+if [ -z "${OVERCLOCK_GPU_FREQ:-}" ]; then
+  OVERCLOCK_GPU_FREQ="750"
+fi
+
+if [ -z "${OVERCLOCK_OVER_VOLTAGE:-}" ]; then
+  OVERCLOCK_OVER_VOLTAGE="6"
+fi
+
+if [ -z "${OVERCLOCK_INITIAL_TURBO:-}" ]; then
+  OVERCLOCK_INITIAL_TURBO="60"
+fi
+
+if [ -z "${OVERCLOCK_ARM_BOOST:-}" ]; then
+  OVERCLOCK_ARM_BOOST="1"
+fi
+
+export OVERCLOCK_ARM_FREQ OVERCLOCK_GPU_FREQ OVERCLOCK_OVER_VOLTAGE OVERCLOCK_INITIAL_TURBO OVERCLOCK_ARM_BOOST
+
+persist_tuning_state() {
+  local state_tmp
+
+  state_tmp="$(mktemp)"
+  if [ -f "$INSTALLER_STATE_FILE" ] && \
+    jq --arg tuning "$TUNING" --arg tuning_overclock "$TUNING_OVERCLOCK" \
+      'if type=="object" then . else {} end | .tuning = $tuning | .tuning_overclock = $tuning_overclock' \
+      "$INSTALLER_STATE_FILE" >"$state_tmp" 2>>"$LOG_FILE"; then
+    mv -f "$state_tmp" "$INSTALLER_STATE_FILE"
+  else
+    jq -n --arg tuning "$TUNING" --arg tuning_overclock "$TUNING_OVERCLOCK" \
+      '{tuning: $tuning, tuning_overclock: $tuning_overclock}' >"$state_tmp" 2>>"$LOG_FILE" && \
+      mv -f "$state_tmp" "$INSTALLER_STATE_FILE"
+  fi
+
+  # Keep state writable by the target user when running under sudo/root.
+  if [ -n "${RUN_AS:-}" ] && [ -f "$INSTALLER_STATE_FILE" ]; then
+    chown "$RUN_AS":"$(id -ng "$RUN_AS" 2>>"$LOG_FILE")" "$INSTALLER_STATE_FILE" &>>"$LOG_FILE" || true
+  fi
+}
+
+if [ -f "$INSTALLER_STATE_FILE" ]; then
+  persisted_tuning="$(jq -r '.tuning // ""' "$INSTALLER_STATE_FILE" 2>>"$LOG_FILE")"
+  case "$persisted_tuning" in
+    yes | no)
+      TUNING="$persisted_tuning"
+      ;;
+  esac
+
+  persisted_tuning_overclock="$(jq -r '.tuning_overclock // ""' "$INSTALLER_STATE_FILE" 2>>"$LOG_FILE")"
+  case "$persisted_tuning_overclock" in
+    yes | no)
+      TUNING_OVERCLOCK="$persisted_tuning_overclock"
+      ;;
+  esac
+fi
+
+available_options=(yes no)
+
+while true; do
+  active_option="${TUNING:-yes}"
+  if [[ "$active_option" != "yes" && "$active_option" != "no" ]]; then
+    active_option="yes"
+  fi
+
+  list_height="${#available_options[@]}"
+  if [ "$list_height" -lt 4 ]; then
+    list_height=4
+  fi
+
+  whiptail_args=(
+    --title "$TITLE"
+    --radiolist "$CONTENT"
+    --cancel-button "$BACK_BUTTON"
+    --ok-button "$OK_BUTTON"
+    "$TUI_WINDOW_HEIGHT" "$TUI_WINDOW_WIDTH" "$list_height"
+  )
+
+  for option in "${available_options[@]}"; do
+    whiptail_args+=("$option" "")
+    if [[ $option = "$active_option" ]]; then
+      whiptail_args+=("ON")
+    else
+      whiptail_args+=("OFF")
+    fi
+  done
+
+  tuning_choice=""
+  if tui_whiptail_capture tuning_choice "${whiptail_args[@]}"; then
+    TUNING="$tuning_choice"
+    if [ "$TUNING" == "yes" ]; then
+      overclock_option="${TUNING_OVERCLOCK:-no}"
+      if [[ "$overclock_option" != "yes" && "$overclock_option" != "no" ]]; then
+        overclock_option="no"
+      fi
+      overclock_options=(yes no)
+      overclock_list_height="${#overclock_options[@]}"
+      if [ "$overclock_list_height" -lt 4 ]; then
+        overclock_list_height=4
+      fi
+      overclock_args=(
+        --title "$OVERCLOCK_TITLE"
+        --radiolist "$OVERCLOCK_CONTENT"
+        --cancel-button "$BACK_BUTTON"
+        --ok-button "$OK_BUTTON"
+        "$TUI_WINDOW_HEIGHT" "$TUI_WINDOW_WIDTH" "$overclock_list_height"
+      )
+
+      for option in "${overclock_options[@]}"; do
+        overclock_args+=("$option" "")
+        if [[ $option = "$overclock_option" ]]; then
+          overclock_args+=("ON")
+        else
+          overclock_args+=("OFF")
+        fi
+      done
+
+      overclock_choice=""
+      if tui_whiptail_capture overclock_choice "${overclock_args[@]}"; then
+        TUNING_OVERCLOCK="$overclock_choice"
+        export TUNING
+        export TUNING_OVERCLOCK
+        persist_tuning_state
+        break
+      fi
+      continue
+    else
+      export TUNING
+      export TUNING_OVERCLOCK="no"
+      persist_tuning_state
+      break
+    fi
+  fi
+
+  # Preserve the previous selection when the user goes back.
+  if ! [[ "${TUNING:-}" == "yes" || "${TUNING:-}" == "no" ]]; then
+    TUNING="$active_option"
+    export TUNING
+  fi
+  if [[ "${PROFILE:-}" == "satellite" ]]; then
+    source tui/satellite/main.sh
+  else
+    source tui/features.sh
+  fi
+  break
+done
