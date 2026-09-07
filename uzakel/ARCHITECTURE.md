@@ -262,12 +262,11 @@ control → transfer, and back).
   apply in practice.
 - Replacing the `notify-send` shell-out in `discovery.rs`/`file_server.rs`
   with a native `org.freedesktop.Notifications` D-Bus call (e.g. via
-  `zbus`), removing the runtime dependency on `libnotify-bin`.
-- **The two sides have never actually talked to each other.** Both build
-  and pass their own tests/lint independently, but no one has run the
-  daemon and the Android app against real BacakOS + Android hardware on
-  the same network yet — that's the next thing to actually validate before
-  trusting any of the above.
+  `zbus`), removing the runtime dependency on `libnotify-bin` — and, more
+  importantly, showing the pairing PIN *on screen* rather than depending on
+  a notification daemon at all. Real-hardware testing hit exactly this: the
+  test session had no notification service running, so the PIN was only
+  ever visible in the daemon's own log — a real UX gap, not just a nice-to-have.
 - `DeviceListScreen`'s "connect to a saved host" path uses the persisted IP
   as-is rather than re-scanning first; if the host's address changed since
   it was saved, connecting silently fails instead of falling back to a
@@ -281,3 +280,65 @@ control → transfer, and back).
 - Android reconnect/retry behavior on Wi-Fi handoff or the daemon
   restarting mid-session — `InputChannel` currently just swallows send
   failures silently (see its doc comment) with no reconnect logic.
+- A custom cursor (round, grows/shrinks on touch) for on-screen visibility
+  from a distance — a `bacak-compositor` cursor-rendering feature, not
+  something Uzakel itself can provide; out of scope here but worth linking
+  to from that project when it's picked up.
+
+---
+
+## 6. What real-hardware testing found
+
+Both sides built, unit-tested, and lint-passed independently well before
+either touched real hardware — none of that caught what actually broke the
+first time a real phone talked to a real daemon over real Wi-Fi. Three real
+bugs, found and fixed in that order:
+
+1. **`DatagramSocket.connect()` crashed the app the instant `ControlScreen`
+   opened**, with `IllegalArgumentException: connect: -1`, on a real Redmi
+   Note 8 (MIUI, Android 11) — reproducible every time. `InputChannel`
+   didn't need the peer "connected" (every `send()` already carries the
+   destination in its `DatagramPacket`), so the fix was just not calling
+   `connect()` at all — see the doc comment on `InputChannel` in
+   `network/NetworkClient.kt`.
+2. **Every single input packet was silently failing to send, 100% loss,
+   with zero visible symptoms.** `channel.mouseMove()` etc. are called
+   directly from Compose gesture callbacks, which run on the main thread —
+   but the actual `DatagramSocket.send()` syscall is exactly what Android's
+   StrictMode `NetworkOnMainThreadException` exists to block. The socket
+   itself opened fine (created via `withContext(Dispatchers.IO)`), so
+   nothing about setup looked wrong; only every individual send afterward
+   silently threw and was swallowed by `InputChannel`'s deliberately
+   best-effort `catch (_: Exception) {}`. Gesture detection, delta math, and
+   the daemon's own protocol handling were all independently confirmed
+   correct throughout — this bug hid in the one place neither side's own
+   testing could reach: the seam between a UI callback and a blocking
+   socket call. Found by temporarily surfacing `InputChannel`'s real
+   exception on-screen instead of swallowing it, which is what actually
+   showed `NetworkOnMainThreadException` on the first try. Fixed by giving
+   `InputChannel` its own background `CoroutineScope` (`Dispatchers.IO`)
+   and launching each `send()` there instead of running it inline on the
+   caller's thread.
+3. **`DeviceListScreen` showed a paired host twice** — once from a fresh
+   discovery response ("Eşleştir") and once from the saved-hosts list
+   ("Bağlan") — because nothing filtered discovered hosts against the
+   already-saved list. Fixed by excluding any discovered address already
+   present in `savedList`.
+
+A fourth finding was a tuning issue rather than a bug: the default
+client-side sensitivity (`TrackpadView`'s `sensitivity = 1.5f`) combined
+with the daemon's own acceleration curve (`input_manager.rs`'s `accelerate`)
+to feel far too fast on a real trackpad — real captured `REL_X`/`REL_Y`
+values reached 111 for what was meant to be a modest finger drag. Lowered
+to `sensitivity = 0.4f`; this document's earlier note that
+`input_manager.rs`'s curve is "a safety net, not the primary feel-tuning
+knob" held up — the client-side number was what actually needed changing.
+
+None of this diagnosis would have been possible without instrumenting the
+running app directly: `/proc/net/udp` turned out to be **useless** for this
+(Android 10+ hides other apps' sockets from it, even to `adb shell` — a
+false negative that briefly pointed the investigation the wrong way), while
+temporary on-screen counters (`moveCount`, `sendErrorCount`, `lastError`)
+and capturing raw kernel events off `/dev/input/eventN` while the phone was
+actively driving it were what actually pinned down each bug. Both are worth
+reaching for again before assuming "no visible errors" means "working."
