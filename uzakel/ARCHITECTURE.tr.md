@@ -160,6 +160,47 @@ nonce-sayaç tekrarı riski taşırdı). Daha yetenekli bir aktif saldırgana
 karşı dayanması gerekiyorsa, gerçek bir TLS/PSK ya da SPAKE2 yaklaşımı
 (§5) hâlâ bir sonraki adım.
 
+#### 2.3.2 QR ile eşleştirme
+
+Manuel giriş (telefonda elle yazılan host IP + 6 haneli PIN) hâlâ temel
+yol — QR onun üzerine eklenmiş bir alternatif, farklı bir protokol değil.
+Daemon, her taze PIN ürettiğinde — başlangıçta ve her başarılı
+eşleştirmeden sonra, masaüstü bildirimiyle aynı tetikleyicide —
+`~/.cache/uzakel/pairing.json`'a (`daemon/src/pairing_state.rs`) mevcut
+eşleştirme durumunu yazar. Dosyadaki LAN adresi, keşif soketinin kendi
+bağlı adresinden (`0.0.0.0`, telefona hiçbir işe yaramaz) değil,
+yan etkisiz bir `UdpSocket::connect` rota sorgusundan (hiçbir zaman paket
+göndermez) gelir.
+
+`bacak-compositor`'ın Control Center'ında "Uzakel'e Bağlan" adlı bir çip
+var (`bacak/crates/bacak-compositor/src/plugins/uzakel.rs`, diğer her
+opsiyonel Control Center bölümü gibi
+`/usr/share/bacak/plugins/uzakel.plugin` ile kapılı) — bu dosyayı her
+açılışta taze okur ve bir QR koduna dönüştürür:
+
+```
+uzakel://pair?host=<ip>&port=<discovery_port>&pin=<pin>&name=<url-encode edilmiş daemon adı>
+```
+
+Android uygulamasının kamera ekranı (`ui/QrScanScreen.kt`, bir `CameraX`
+`ImageAnalysis` çerçevesini ZXing ile çözer — Google'ın ML Kit'i değil,
+özellikle bu LAN-yalnızca uygulamaya bir Google Play Services çalışma
+zamanı bağımlılığı eklememek için) bunu `network/PairingUri.kt` ile
+ayrıştırır ve elle yazılan bir PIN'in çalıştıracağı *tam olarak aynı*
+`NetworkClient.pair()` çağrısını çalıştırır — QR yalnızca PIN ve IP'yi
+elle yazmayı atlatır, kendisi hiçbir kriptografik materyal taşımaz. ECDH
+değişimi, onay-etiketi kontrolü ve §2.3.1'deki her şey her iki yolda da
+aynen gerçekleşir.
+
+Dosya, daemon tarafında bir sunucusu olmayan düz bir `.cache` tarzı taslak
+dosya olduğundan (neden olduğu için `pairing_state.rs`'in modül
+doc-comment'ine bakın: daemon ile compositor'ın hangi sırayla
+başlayacağına dair bir garanti yok, bu yüzden hiçbir şeyin bunu daemon'a
+eşzamanlı olarak sormasına gerek olmamalı), bu doğası gereği *yerel* bir
+mekanizma — onu okumak, daemon'ın çalıştığı aynı BacakOS oturumuna giriş
+yapmış olmayı gerektirir, kabul edilebilir bir güven sınırı (o dosyayı
+okuyabilen biri zaten eşleştirilecek masaüstünü kontrol ediyordur).
+
 ## 3. Daemon (Rust) — modül tasarımı
 
 ```
@@ -167,6 +208,7 @@ daemon/src/
 ├── main.rs            # ortam değişkeni tabanlı yapılandırma, üç soketi bağlar, /dev/uinput'u açar, üç görevi başlatır
 ├── discovery.rs        # UDP yayın yanıtlayıcısı; DISCOVER_REQUEST'i yanıtlar + ECDH eşleştirme el sıkışmasını (§2.3) çalıştırır
 ├── crypto.rs            # X25519 ECDH + HKDF-SHA256 anahtar türetimi + ChaCha20-Poly1305 seal/open (§2.3.1)
+├── pairing_state.rs      # ~/.cache/uzakel/pairing.json'ı yazar (mevcut PIN + LAN adresi), QR eşleştirmesi için (§2.3.2)
 ├── trust.rs             # TrustStore — IP başına oturum (türetilmiş anahtarlar + AEAD durumu), input_manager + file_server'ın kontrol ettiği
 ├── protocol.rs          # paket başlığı/opcode tanımları + encode/decode, her modülün paylaştığı
 ├── input_manager.rs     # UDP soketi → TrustStore oturumunu arar → şifreyi çözer → girdi opcode'larını ayrıştırır → /dev/uinput üzerinden yeniden oynatır
@@ -236,10 +278,10 @@ android/app/src/main/kotlin/org/anadolupanteri/uzakel/
 ├── protocol/      # Protocol.kt — daemon/src/protocol.rs'in bayt-bayt Kotlin karşılığı
 ├── crypto/        # UzakelCrypto.kt — X25519/HKDF/ChaCha20-Poly1305, daemon/src/crypto.rs'in Kotlin ikizi (§2.3.1)
 ├── discovery/     # SavedHostsStore: SharedPreferences tabanlı eşleştirilmiş host listesi
-├── network/       # NetworkClient: keşif taraması, ECDH+PIN eşleştirme, şifreli InputChannel (UDP), şifreli sendFile (TCP)
+├── network/       # NetworkClient + PairingUri.kt: keşif taraması, ECDH+PIN eşleştirme (manuel ya da QR, §2.3.2), şifreli InputChannel (UDP), şifreli sendFile (TCP)
 ├── input/         # TrackpadView (çok dokunuşlu), KeyCodes (evdev tuş kodu tablosu), IME→typeChar köprüsü
 ├── transfer/      # FileTransferManager: SAF dosya seçimi, SHA-256, StateFlow ile ilerleme
-├── ui/            # UzakelApp (kök), DeviceListScreen, ControlScreen, TransferScreen
+├── ui/            # UzakelApp (kök), DeviceListScreen, QrScanScreen, ControlScreen, TransferScreen
 └── MainActivity.kt
 ```
 
@@ -304,6 +346,19 @@ ateşle-unut UDP sarmalayıcısıdır; `sendFile()` §2.2'deki üç fazlı
 yüklemeyi her iki yönde de `Cipher`/`Opener` ile sarmalanmış/çözülmüş
 çerçevelerle çalıştırır ve trailer çerçevesi üzerinde okuma zaman aşımını
 başarı olarak ele alır, çünkü daemon yalnızca `FILE_CORRUPT`'ta konuşur.
+
+`ui/QrScanScreen` (§2.3.2), arka kameraya bağlanmış bir `CameraX`
+`Preview` + `ImageAnalysis`'tir, çerçeve çerçeve ZXing'in
+`MultiFormatReader`'ı ile doğrudan analiz çerçevesinin Y-düzlemi
+üzerinden çözülür (bitmap dönüşümü yok — QR çözme yalnızca parlaklığa
+ihtiyaç duyar). Kasıtlı olarak ZXing, Google'ın ML Kit'i değil: ML Kit'in
+cihaz-üstü barkod tarayıcısı çalışma zamanında hâlâ Google Play
+Services'e ihtiyaç duyuyor, ve bu uygulama başka hiçbir yerde LAN'ın
+ötesinde bir şeye bağımlı değil. `network/PairingUri.kt`, çözülen
+`uzakel://pair?host=...&port=...&pin=...&name=...` dizesini ayrıştırır;
+`DeviceListScreen` daha sonra elle yazılan bir PIN'in çalıştıracağı *tam
+olarak aynı* `NetworkClient.pair()` çağrısını çalıştırır — QR yalnızca
+yazmayı atlatır, kendi başına hiçbir anahtar materyali taşımaz.
 
 `transfer/FileTransferManager`, gönderilecek bir dosya seçmek için
 Android'in Storage Access Framework'ünü kullanır, böylece asla geniş

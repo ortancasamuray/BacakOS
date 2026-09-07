@@ -179,6 +179,45 @@ across daemon restarts would risk nonce-counter reuse anyway). A real
 TLS/PSK or SPAKE2 approach (§5) remains the next step if this needs to
 hold up against a more capable active attacker.
 
+#### 2.3.2 QR pairing
+
+Manual entry (host IP + 6-digit PIN, both typed on the phone) is still the
+baseline path — QR is an alternative on top of it, not a different
+protocol. The daemon writes its current pairing state to
+`~/.cache/uzakel/pairing.json` (`daemon/src/pairing_state.rs`) every time it
+generates a fresh PIN — at startup, and again after every successful pair,
+same trigger as the desktop notification. The file's LAN address comes from
+a side-effect-free `UdpSocket::connect` route lookup (never sends a
+packet), not from the discovery socket's own bind address (`0.0.0.0`, not
+useful to a phone).
+
+`bacak-compositor`'s Control Center has an "Uzakel'e Bağlan" tile
+(`bacak/crates/bacak-compositor/src/plugins/uzakel.rs`, gated by
+`/usr/share/bacak/plugins/uzakel.plugin` like every other optional Control
+Center section) that reads this file fresh on every open and renders it as
+a QR code:
+
+```
+uzakel://pair?host=<ip>&port=<discovery_port>&pin=<pin>&name=<url-encoded daemon name>
+```
+
+The Android app's camera screen (`ui/QrScanScreen.kt`, ZXing decoding a
+`CameraX` `ImageAnalysis` frame — not Google's ML Kit, specifically to
+avoid a Google-Play-Services runtime dependency for a LAN-only app) parses
+this with `network/PairingUri.kt` and runs the *exact same*
+`NetworkClient.pair()` call a manually typed PIN would — the QR only saves
+typing the PIN and IP, it carries no cryptographic material itself. The
+ECDH exchange, confirm-tag check, and everything in §2.3.1 happen
+identically either way.
+
+Since the file is a plain `.cache`-style scratch file with no daemon-side
+server (see the module doc on `pairing_state.rs` for why: no ordering
+guarantee between the daemon and the compositor starting, so nothing should
+have to synchronously ask the daemon for this), it's inherently a *local*
+mechanism — reading it requires being logged into the same BacakOS session
+the daemon is running in, which is an acceptable trust boundary (anyone who
+can read that file already controls the desktop being paired with).
+
 ---
 
 ## 3. Daemon (Rust) — module design
@@ -188,6 +227,7 @@ daemon/src/
 ├── main.rs            # env-based config, binds all three sockets, opens /dev/uinput, spawns the three tasks
 ├── discovery.rs        # UDP broadcast responder; answers DISCOVER_REQUEST + runs the ECDH pairing handshake (§2.3)
 ├── crypto.rs            # X25519 ECDH + HKDF-SHA256 key derivation + ChaCha20-Poly1305 seal/open (§2.3.1)
+├── pairing_state.rs      # writes ~/.cache/uzakel/pairing.json (current PIN + LAN address) for QR pairing (§2.3.2)
 ├── trust.rs             # TrustStore — per-IP session (derived keys + AEAD state), checked by input_manager + file_server
 ├── protocol.rs          # packet header/opcode definitions + encode/decode, shared by every module
 ├── input_manager.rs     # UDP socket → looks up TrustStore session → decrypts → parses input opcodes → replays via /dev/uinput
@@ -254,10 +294,10 @@ android/app/src/main/kotlin/org/anadolupanteri/uzakel/
 ├── protocol/      # Protocol.kt — byte-for-byte Kotlin mirror of daemon/src/protocol.rs
 ├── crypto/        # UzakelCrypto.kt — X25519/HKDF/ChaCha20-Poly1305, the Kotlin twin of daemon/src/crypto.rs (§2.3.1)
 ├── discovery/     # SavedHostsStore: SharedPreferences-backed list of previously-paired hosts
-├── network/       # NetworkClient: discovery scan, ECDH+PIN pairing, encrypted InputChannel (UDP), encrypted sendFile (TCP)
+├── network/       # NetworkClient + PairingUri.kt: discovery scan, ECDH+PIN pairing (manual or QR, §2.3.2), encrypted InputChannel (UDP), encrypted sendFile (TCP)
 ├── input/         # TrackpadView (multi-touch), KeyCodes (evdev keycode table), IME→typeChar bridge
 ├── transfer/      # FileTransferManager: SAF file picking, SHA-256, progress via StateFlow
-├── ui/            # UzakelApp (root), DeviceListScreen, ControlScreen, TransferScreen
+├── ui/            # UzakelApp (root), DeviceListScreen, QrScanScreen, ControlScreen, TransferScreen
 └── MainActivity.kt
 ```
 
@@ -317,6 +357,17 @@ control → transfer, and back).
   wrapped/unwrapped via `Cipher`/`Opener`, and treats a read timeout on the
   trailer frame as success, since the daemon only ever speaks up on
   `FILE_CORRUPT`.
+- **`ui/QrScanScreen`** (§2.3.2) is a `CameraX` `Preview` + `ImageAnalysis`
+  bound to the back camera, decoded frame-by-frame with ZXing's
+  `MultiFormatReader` directly over the analysis frame's Y-plane (no
+  bitmap conversion — QR decoding only needs luminance). Deliberately
+  ZXing, not Google's ML Kit: ML Kit's on-device barcode scanner still
+  needs Google Play Services present at runtime, and this app otherwise
+  never depends on anything beyond the LAN. `network/PairingUri.kt` parses
+  the decoded `uzakel://pair?host=...&port=...&pin=...&name=...` string;
+  `DeviceListScreen` then calls the exact same `NetworkClient.pair()` a
+  manually typed PIN would — the QR only saves typing, it carries no key
+  material of its own.
 - **`transfer/FileTransferManager`** uses Android's Storage Access
   Framework for picking a file to send, so it never needs broad storage
   permissions — matching the "no shell-out, sandboxed by design" instinct

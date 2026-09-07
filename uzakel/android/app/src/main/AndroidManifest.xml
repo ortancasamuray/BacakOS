@@ -8,6 +8,14 @@
          broadcast (see ARCHITECTURE.md's note on why not real mDNS), not
          multicast, so no multicast lock is required. -->
 
+    <!-- QR-code pairing scan (ui/QrScanScreen.kt) — requested at runtime,
+         not just declared here; the feature is optional (manual PIN entry
+         still works without it) so android:required="false" keeps this app
+         installable on a device with no camera at all. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+
     <!-- No android:icon yet — a launcher icon asset (mipmap set) hasn't been
          designed for this project; the system default is used until one is
          added, matching bacak-icons' guidance to not improvise app icons. -->
