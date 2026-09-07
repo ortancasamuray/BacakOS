@@ -2,15 +2,17 @@
 
 🌐 [Türkçe](README.tr.md) · **English**
 
-> **Status: both `daemon/` and `android/` have a first pass implemented.**
-> `daemon/` builds, passes its unit tests, and implements discovery/pairing,
-> input replay, and file receive end-to-end. `android/` builds a debug APK
-> and passes Android Lint (verified with a real Gradle + Android SDK build,
-> not just written and hoped) — device discovery, PIN pairing, a trackpad +
-> IME-bridged keyboard, and one-way file sending are wired up. Neither side
-> has been run against the other on real hardware yet, and pairing still
-> isn't enforced on the input/file sockets — see the security note in
-> [ARCHITECTURE.md](ARCHITECTURE.md) §"open questions."
+> **Status: verified end-to-end on real hardware.** `daemon/` and `android/`
+> have been run against each other for real — a physical Android phone
+> (MIUI, Android 11) discovering, PIN-pairing with, and moving the real
+> cursor on a live BacakOS session's `bacak-compositor` over real Wi-Fi, with
+> the resulting kernel `REL_X`/`REL_Y` events captured directly from
+> `/dev/input/eventN` to confirm it. File transfer was verified the same way
+> (real SHA-256-checked file landing in `~/İndirilenler`). This found and
+> fixed three real bugs no amount of code review would have caught — see
+> ARCHITECTURE.md §6. Pairing still isn't enforced on the input/file
+> sockets — see the security note in [ARCHITECTURE.md](ARCHITECTURE.md)
+> §"open questions."
 
 Uzakel ("remote hand" in Turkish) is a two-part remote-control and
 file-transfer ecosystem for BacakOS: an Android app that turns a phone into

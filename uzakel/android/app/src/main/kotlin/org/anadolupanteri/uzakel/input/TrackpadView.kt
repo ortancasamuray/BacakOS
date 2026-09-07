@@ -32,7 +32,7 @@ private const val TAP_TIMEOUT_MS = 300L
 @Composable
 fun TrackpadView(
     modifier: Modifier = Modifier,
-    sensitivity: Float = 1.5f,
+    sensitivity: Float = 0.4f,
     onMove: (dx: Int, dy: Int) -> Unit,
     onScroll: (dx: Int, dy: Int) -> Unit,
     onClick: (button: MouseButton) -> Unit,
