@@ -1,5 +1,7 @@
 # BDM Architecture
 
+🌐 [Türkçe özet](ARCHITECTURE.tr.md) · **English**
+
 ## 1. Component & privilege overview
 
 ```
