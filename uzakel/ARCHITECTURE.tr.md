@@ -16,7 +16,10 @@ Bu, [ARCHITECTURE.md](ARCHITECTURE.md) dosyasının kısa Türkçe özetidir.
 > türetimleri, birbirine bağlanmadan önce sabit bir bilinen-cevap test
 > vektörüyle bayt bayt karşılaştırıldı (`daemon/examples/kat.rs`). Bu
 > şemanın aktif bir saldırgana karşı tam olarak ne garanti edip
-> etmediği için §2.3'e bakın.
+> etmediği için §2.3'e bakın. QR ile eşleştirme (§2.3.2) de gerçek
+> donanımda doğrulandı — bir telefon `bacak-compositor` panelindeki QR'ı
+> tarayıp eşleşti ve imleci sürdü; yolda bir render bug'ı bulunup
+> düzeltildi (§6).
 
 İki bileşen, üç ağ kanalı, tek bir paylaşılan kablo protokolü.
 
@@ -507,3 +510,47 @@ içi olduğundan ve yeniden başlatmada hayatta kalmadığından, her zaman PIN
 diyaloğunu yeniden çalıştırıyor — doğrudan bağlanmak, yukarıdaki 1.
 adımın kasıtlı olarak yeniden ürettiği tam olarak "her şey bağlı görünüyor
 ama hiçbir şey hareket etmiyor" belirtisini sessizce üretirdi.
+
+### QR ile eşleştirme (§2.3.2), gerçek donanımda doğrulandı — bir gerçek bug bulundu
+
+`qr.rs`/`UzakelCrypto`'yu derlemek ve birim testten geçirmek *bayt*ların
+doğru olduğunu kanıtladı (§2.3.1'in KAT çapraz kontrolü); QR panelinin
+gerçekten *görüntülenip görüntülenmediği* hakkında hiçbir şey söylemedi,
+çünkü bu birim-test edilebilir bir yüzeyi olmayan saf bir render işi.
+Gerçek doğrulama, asıl GLES render yolunu gerektirdi: canlı oturumun kendi
+Wayland soketine karşı çalışan iç içe bir `bacak-compositor --features
+runtime` (winit backend) örneği — böylece panelin gerçek kod yolu, üretim
+`udev`-destekli oturuma hiç dokunmadan çalıştı.
+
+**Bulunan bug: QR, kendi beyaz arka plan kartının arkasında görünmez
+haldeydi.** `render_uzakel_panel`, QR'ın opak beyaz arka kartını QR
+bitmap'inin *önce*sinde push ediyordu — bu codebase'in render eleman
+listesi en-önde-ilk sırayla çalışır (en erken push = en önde, bkz.
+`render_audio_panel`'in üç geçişli kuralı), bu yüzden kart QR'ın *önünde*
+çiziliyordu, arkasında değil. Panel açılıyor ve başlık/durum/Kapat düğmesi
+doğru görünüyordu (hepsi kartla çakışmayan noktalara push edilmişti), bu
+da tam olarak neden bunun kod okunarak fark edilemediğini açıklıyor —
+yalnızca render edilmiş panele gerçekten bakmak, QR'ın olması gereken
+yerde düz beyaz bir kutu olduğunu gösterdi. Push sırası de düzeltilerek
+çözüldü (`985a094`).
+
+Düzeltmeden sonra tüm zincir gerçek bir telefonla doğrulandı: iç içe
+compositor'ın QR paneli, Uzakel Android uygulamasının yeni kamera ekranı
+tarafından başarıyla tarandı, `discovery.rs` `client paired successfully`
+kaydetti, ve ardından bir trackpad sürükleme hareketi
+`/dev/input/eventN`'den **329 `REL_X` + 315 `REL_Y`** gerçek çekirdek
+olayı yakaladı — §2.3.2'deki tara → ayrıştır → ECDH el sıkışması →
+onay-etiketi kontrolü → şifreli oturum zincirinin yalnızca her parçasının
+derlendiğini değil, uçtan uca gerçekten çalıştığını doğrulayarak.
+
+Bir sonraki sefer için bir metodoloji notu: `/dev/input/eventN`'i
+`cat … > dosya &` ile bir `timeout` altında yakalayıp sonra kullanıcıdan
+hareketi yapmasını istemek, kullanıcı her iki seferde de gerçek imleç
+hareketini doğrulamasına rağmen **iki kez 0 bayt yakalanmasına** yol açtı
+— `timeout`, `cat`'e bir `SIGTERM` gönderiyor, bunun varsayılan davranışı
+bekleyen herhangi bir tamponlanmış yazmayı atlıyor, `cat`'in zaten okuduğu
+ama henüz çıktı dosyasına yazmadığı her şeyi sessizce düşürüyor. Küçük bir
+Python yakalama döngüsü (`os.read()` + her parça için anında `write()` +
+`flush()`, `select()` ile non-blocking bir fd üzerinde sürülen) üçüncü
+denemede sorunu çözdü. Bu projede gelecekteki herhangi bir çekirdek-olay
+yakalaması için `cat`'e kabuk çıkışı yapmak yerine bu deseni tercih edin.
