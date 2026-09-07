@@ -4,13 +4,15 @@
 
 Bu, [ARCHITECTURE.md](ARCHITECTURE.md) dosyasının kısa Türkçe özetidir.
 
-> **Durum: hem `daemon/` (Rust) hem `android/` (Kotlin) ilk sürümüyle
-> uygulandı ve bu belgeyle örtüşüyor.** Android derlemesi gerçek bir
-> Gradle + Android SDK ile uçtan uca doğrulandı (`assembleDebug` çalışan
-> bir debug APK üretiyor, `lintDebug` temiz geçiyor) — bkz. README.md.
-> Henüz doğrulanmayan şey, iki tarafın gerçek donanımda birbiriyle
-> gerçekten konuşması, ve eşleştirmenin hâlâ girdi/dosya soketlerinde
-> zorunlu kılınmaması (§2.3, §5).
+> **Durum: gerçek donanımda uçtan uca doğrulandı, eşleştirme zorunlu.**
+> Gerçek bir telefon ve gerçek bir daemon birbirine karşı çalıştırıldı —
+> keşfetti, PIN ile eşleşti, gerçek imleci hareket ettirdi, gerçek bir
+> dosya transfer etti; hepsi çekirdek düzeyinde yakalamayla doğrulandı,
+> sadece uygulama loglarıyla değil (§6). Eşleştirme artık hem girdi hem
+> dosya transferi soketlerini koruyor: eşleşmemiş bir göndericinin trafiği
+> düşürülür/reddedilir, bu da aynı gerçek kurulumda hem eşleşme öncesi hem
+> sonrası doğrulandı. Hâlâ IP tabanlı, kriptografik değil — bkz.
+> `trust.rs`'in doc-comment'i ve §5.
 
 İki bileşen, üç ağ kanalı, tek bir paylaşılan kablo protokolü.
 
@@ -88,15 +90,25 @@ ve masaüstü bildirimiyle gösterir. Bir istemci, keşif UDP soketi üzerinden
 `PAIR_REQUEST { pin }` gönderir; daemon karşılaştırır ve
 `PAIR_RESPONSE { accepted }` ile yanıtlar.
 
-**Bu henüz bir güvenlik sınırı değil.** Doğru bir PIN, bugün yalnızca
-daemon'ın bir eşleşme kaydettiğini kanıtlar — bu onayı girdi (UDP) veya
-dosya transferi (TCP) soketlerine bağlayan hiçbir şey yok; bu ikisi şu an
-eşleştirilmiş olsun olmasın LAN'daki *herhangi* bir gönderenden paket
-kabul ediyor, ve hiç TLS/sertifika materyali değişimi yok. §5'teki TLS
-yaklaşımlarından birini seçip bir güven deposunu bu iki kanala bağlamak,
-burada hâlâ açık olan gerçek güvenlik işidir; şu anki PIN kontrolünü bir
-garanti değil, bir kullanıcı-deneyimi inceliği ("telefonun göstermesi
-gereken PIN bu") olarak görün.
+**Bu IP tabanlı bir güven kapısı, kriptografik kimlik doğrulama değil.**
+Doğru bir PIN, istemcinin IP'sini paylaşılan bir
+[`TrustStore`](../daemon/src/trust.rs)'ta güvenilir işaretler — bunu hem
+`input_manager.rs` hem `file_server.rs` bir şey yapmadan önce kontrol eder:
+eşleşmemiş bir göndericinin UDP girdi paketleri sessizce düşürülür, TCP
+dosya transferi bağlantısı ise anında `FILE_REJECT` alır. Gerçek donanımda
+doğrulandı: eşleşmeden önce gerçek bir telefonun trackpad kaydırmaları
+daemon tarafında sıfır çekirdek girdi olayı üretti; eşleştikten sonra aynı
+kaydırmalar gerçek `REL_X`/`REL_Y` olayları üretti (§6).
+
+Hâlâ olmayan şey: bir adres, LAN'da zaten bulunan kasıtlı kötü niyetli bir
+cihaz tarafından sahtelenebilir, hiç TLS/sertifika materyali değişimi yok,
+ve güven **yalnızca bellekte** — daemon yeniden başlayınca hayatta kalmaz,
+bu yüzden Android'in "Bağlan"ı (kayıtlı host'a yeniden bağlanma) artık
+doğrudan bağlanmak yerine her zaman PIN diyaloğunu yeniden çalıştırıyor,
+çünkü daemon'ın onu hâlâ hatırlayıp hatırlamadığını bilmenin bir yolu yok.
+Gerçek bir TLS/PSK yaklaşımı seçmek (§5), bu "aynı LAN'daki başka bir
+cihaz"dan daha düşmanca bir şeye karşı dayanması gerekiyorsa bir sonraki
+adım.
 
 ## 3. Daemon (Rust) — modül tasarımı
 
@@ -104,10 +116,19 @@ gereken PIN bu") olarak görün.
 daemon/src/
 ├── main.rs            # ortam değişkeni tabanlı yapılandırma, üç soketi bağlar, /dev/uinput'u açar, üç görevi başlatır
 ├── discovery.rs        # UDP yayın yanıtlayıcısı; DISCOVER_REQUEST + PIN eşleştirmesini (§2.3) yanıtlar
+├── trust.rs             # TrustStore — eşleştirilmiş IP'lerin paylaşılan kaydı, input_manager + file_server'ın kontrol ettiği
 ├── protocol.rs          # paket başlığı/opcode tanımları + encode/decode, her modülün paylaştığı
-├── input_manager.rs     # UDP soketi → girdi opcode'larını ayrıştırır → /dev/uinput üzerinden yeniden oynatır
-└── file_server.rs       # TCP dinleyici → parçalı alım, SHA-256 doğrulama, ~/İndirilenler'e yazar
+├── input_manager.rs     # UDP soketi → TrustStore kontrolü → girdi opcode'larını ayrıştırır → /dev/uinput üzerinden yeniden oynatır
+└── file_server.rs       # TCP dinleyici → TrustStore kontrolü → parçalı alım, SHA-256 doğrulama, ~/İndirilenler'e yazar
 ```
+
+`trust.rs`, tek bir `TrustStore`'dur (küçük bir API'nin arkasındaki bir
+`Arc<Mutex<HashSet<IpAddr>>>`), `main.rs`'te bir kez oluşturulur ve her üç
+göreve klonlanır. `discovery.rs` tek yazandır (başarılı bir PIN
+eşleşmesinde `trust()`); `input_manager.rs` ve `file_server.rs` yalnızca
+okuyan çağrıcılardır (`is_trusted()`). IP tabanlı, yalnızca bellekte —
+tam olarak ne garanti edip etmediği için kendi doc-comment'ine ve §2.3'e
+bakın.
 
 `input_manager.rs`, `input-linux` crate'iyle `/dev/uinput` üzerinden
 oluşturulmuş sanal bir fare ve klavye aygıtını sahiplenir (geçerli her
@@ -118,13 +139,16 @@ gönderen bir istemci için güvenlik ağı olarak — ama imleç konumunu
 kendisi sıkıştırmaz: her olay `REL_X`/`REL_Y` (göreli)'dir, bu yüzden
 ekran-kenarı sıkıştırması tamamen compositor'ın işidir, gerçek bir fare
 için olduğu gibi. Bir `tokio` görevinde UDP soketini sıkı bir döngüde
-okur ve kaynak-adresi başına son görülen `seq`'i takip eder, böylece
-sırası bozuk veya yinelenen bir UDP paketi imleci geri hareket ettirmek
-yerine düşürülür.
+okur, `TrustStore`'un tanımadığı bir adresten gelen her paketi düşürür, ve
+kaynak-adresi başına son görülen `seq`'i takip eder, böylece sırası bozuk
+veya yinelenen bir UDP paketi imleci geri hareket ettirmek yerine
+düşürülür.
 
-`file_server.rs`, düz bir `tokio` TCP dinleyicisidir; kabul edilen her
-bağlantı, §2.2'deki durum makinesinin alım tarafını çalıştıran kendi
-görevini alır, çakışmasız bir hedef dosya adı seçer (`ad`, sonra
+`file_server.rs`, düz bir `tokio` TCP dinleyicisidir; güvenilmeyen bir
+adresten gelen bağlantı, el sıkışma başlamadan anında `FILE_REJECT` alır
+ve düşürülür. Güvenilir bir bağlantı, §2.2'deki durum makinesinin alım
+tarafını çalıştıran kendi görevini alır, çakışmasız bir hedef dosya adı
+seçer (`ad`, sonra
 `ad (2)`, `ad (3)`, …) — `altay`'ın masaüstü tarafındaki transfer
 modülünün yaptığı aynı şekilde. Başarılı doğrulamada `notify-send`'e
 çıkar (kasıtlı bir kapsam kısıtlaması — bkz. §5 — `org.freedesktop.
@@ -223,11 +247,6 @@ bağlanmadı (§5).
 
 ## 5. Açık sorular / henüz karara bağlanmadı
 
-- **Eşleştirme henüz zorunlu kılınmıyor.** Girdi ve dosya transferi
-  soketleri, eşleştirme PIN durumundan bağımsız olarak LAN'daki herhangi
-  bir göndericiden kabul ediyor — bkz. §2.3'teki not. "Ne inşa edildi" ile
-  "güvenilir bir ev LAN'ının ötesine açmak için güvenli olan" arasındaki
-  en büyük fark budur.
 - Eşleştirme sonrası oturumlar için TLS materyali: eşleştirme anında
   sabitlenen kendinden imzalı sertifika (en basit, CA gerekmez) mı yoksa
   PIN değişimine bağlı daha hafif bir PSK şeması mı — ve sonra UDP/TCP
@@ -247,16 +266,19 @@ bağlanmadı (§5).
   edildiğinden, bu henüz pratikte geçerli değil.
 - `discovery.rs`/`file_server.rs`'teki `notify-send` kabuk çağrısını yerel
   bir `org.freedesktop.Notifications` D-Bus çağrısıyla (ör. `zbus` ile)
-  değiştirmek, `libnotify-bin` çalışma zamanı bağımlılığını kaldırmak.
-- **İki taraf birbiriyle hiç gerçekten konuşmadı.** İkisi de kendi
-  testlerini/lint'ini bağımsız olarak geçiyor, ama henüz kimse daemon ve
-  Android uygulamasını aynı ağda gerçek BacakOS + Android donanımına karşı
-  çalıştırmadı — yukarıdakilerin herhangi birine güvenmeden önce asıl
-  doğrulanması gereken bir sonraki şey bu.
-- `DeviceListScreen`'in "kaydedilmiş host'a bağlan" akışı, önce yeniden
+  değiştirmek, `libnotify-bin` çalışma zamanı bağımlılığını kaldırmak — ve
+  daha önemlisi, eşleştirme PIN'ini bir bildirim servisine bağımlı olmadan
+  *ekranda* göstermek. Gerçek donanım testi tam olarak buna denk geldi:
+  test oturumunda çalışan bir bildirim servisi yoktu, bu yüzden PIN
+  yalnızca daemon'ın kendi logunda görünüyordu — gerçek bir kullanıcı
+  deneyimi eksikliği, sadece güzel olur değil.
+- `DeviceListScreen`'in "Bağlan" (kayıtlı host) akışı, önce yeniden
   taramak yerine kalıcı IP'yi olduğu gibi kullanır; host'un adresi
-  kaydedildiğinden beri değiştiyse, bağlanma taze bir keşif yayınına
-  düşmek yerine sessizce başarısız olur.
+  kaydedildiğinden beri değiştiyse, yeniden eşleşme denemesi (artık her
+  seferinde gerekli, bkz. §2.3) taze bir keşif yayınına düşüp yeni adresi
+  bulmak yerine "PIN yanlış veya cihaz yanıt vermedi" ile zaman aşımına
+  uğrar — artık sessiz değil, ama bu özel neden için harika bir hata
+  mesajı da değil.
 - `FileTransferManager`, dosyayı iki kez okuyor (bir kez hash için, bir kez
   gönderim için) çünkü `FILE_META`'nın SHA-256'sı akış başlamadan önce
   bilinmek zorunda (§2.2) — artımlı hash'lenmiş bir gönderim (digest'i
@@ -267,3 +289,83 @@ bağlanmadı (§5).
   başladığında Android'in yeniden bağlanma/tekrar deneme davranışı —
   `InputChannel` şu an gönderim hatalarını sessizce yutuyor (kendi
   doc-comment'ine bakın), yeniden bağlanma mantığı yok.
+- Uzaktan görünürlük için özel bir imleç (dokunuşta büyüyüp küçülen
+  yuvarlak) — bu bir `bacak-compositor` imleç-render özelliği,
+  Uzakel'in kendisinin sağlayabileceği bir şey değil; kapsam dışı ama o
+  proje ele alındığında oraya bağlanmaya değer.
+
+---
+
+## 6. Gerçek donanım testinin bulduğu şeyler
+
+Her iki taraf da gerçek donanıma dokunmadan çok önce bağımsız olarak
+derlendi, birim test edildi ve lint'ten geçti — bunların hiçbiri gerçek bir
+telefon gerçek bir daemon'la ilk kez konuştuğunda asıl neyin bozulduğunu
+yakalamadı. Sırayla bulunup düzeltilen üç gerçek bug:
+
+1. **`DatagramSocket.connect()`, `ControlScreen` açılır açılmaz uygulamayı
+   çökertiyordu**, `IllegalArgumentException: connect: -1` ile, gerçek bir
+   Redmi Note 8'de (MIUI, Android 11) — her seferinde tekrarlanabilirdi.
+   `InputChannel`'ın eşin "bağlı" olmasına ihtiyacı yoktu (her `send()`
+   zaten hedefi kendi `DatagramPacket`'inde taşıyor), o yüzden düzeltme
+   `connect()`'i hiç çağırmamaktı.
+2. **Her tek girdi paketi sessizce başarısız oluyordu, %100 kayıp, hiç
+   görünür belirti yok.** `channel.mouseMove()` vb. doğrudan Compose jest
+   callback'lerinden çağrılıyor, bunlar ana thread'de çalışıyor — ama asıl
+   `DatagramSocket.send()` syscall'ı, Android'in StrictMode
+   `NetworkOnMainThreadException`'ının tam olarak engellemek için var
+   olduğu şey. Soketin kendisi sorunsuz açılıyordu (`withContext(Dispatchers.
+   IO)` ile oluşturulmuştu), o yüzden kurulumda hiçbir şey yanlış
+   görünmüyordu; yalnızca sonraki her tekil gönderim sessizce fırlatıyor ve
+   `InputChannel`'ın kasıtlı best-effort `catch (_: Exception) {}`'i
+   tarafından yutuluyordu. Düzeltme: `InputChannel`'a kendi arka plan
+   `CoroutineScope`'unu (`Dispatchers.IO`) vermek ve her `send()`'i
+   çağıranın thread'inde değil orada çalıştırmak.
+3. **`DeviceListScreen` zaten eşleştirilmiş bir host'u iki kez
+   gösteriyordu** — bir taze keşif yanıtından ("Eşleştir"), bir de
+   kaydedilmiş host listesinden ("Bağlan") — çünkü keşfedilenleri zaten
+   kaydedilmiş listeye göre filtreleyen hiçbir şey yoktu.
+
+Bug olmayan dördüncü bir bulgu bir ayar sorunuydu: varsayılan istemci-tarafı
+hassasiyeti (`TrackpadView`'in `sensitivity = 1.5f`'i), daemon'ın kendi
+ivme eğrisiyle (`input_manager.rs`'in `accelerate`'i) birleşince gerçek bir
+trackpad'de çok hızlı hissettiriyordu — gerçek yakalanan `REL_X`/`REL_Y`
+değerleri, mütevazı bir parmak sürüklemesi için 111'e ulaştı. `sensitivity
+= 0.4f`'e düşürüldü.
+
+Hiçbiri, çalışan uygulamayı doğrudan enstrümante etmeden mümkün olmazdı:
+`/proc/net/udp`, bunun için **işe yaramaz** çıktı (Android 10+, başka bir
+uygulamanın soketlerini `adb shell`'den bile gizliyor — araştırmayı kısa
+süreliğine yanlış yöne yönlendiren bir yanlış negatif), geçici ekran üstü
+sayaçlar (`moveCount`, `sendErrorCount`, `lastError`) ve telefon aktif
+olarak sürerken `/dev/input/eventN`'den ham çekirdek olayları yakalamak ise
+her bug'ı gerçekten sabitleyen şeydi.
+
+### Eşleştirme zorunluluğu (`trust.rs`), aynı şekilde doğrulandı
+
+Girdi yolu doğrulandıktan sonra, aynı gerçek telefon + gerçek daemon
+kurulumu, eşleştirme zorunluluğunu uyguladıktan hemen sonra doğrulamak için
+kullanıldı:
+
+1. Daemon yeniden başlatıldı (taze, boş `TrustStore`) — telefonda yeniden
+   başlatmadan önceki "bağlı" oturum hâlâ açıkken. Trackpad kaydırmaları:
+   daemon tarafında **0 çekirdek girdi olayı** — artık güvenilmeyen
+   adresten gelen trafik, tam olarak tasarlandığı gibi sessizce
+   düşürülüyor.
+2. Aynı telefon, kaydedilmiş host'ta `Bağlan` — artık doğrudan
+   bağlanmak yerine her zaman PIN diyaloğunu yeniden açıyor (§2.3) — PIN
+   girildi, `discovery.rs` `client paired successfully` kaydetti, hemen
+   ardından trackpad kaydırmaları: **224 gerçek çekirdek olayı**.
+3. Dosya transferi reddi bağımsız olarak kontrol edildi (hızlı olması için
+   telefondan değil): `127.0.0.1`'den gönderilen bir `FILE_META` el
+   sıkışması — gerçekten güvenilmiyordu, çünkü yalnızca telefonun LAN
+   adresi eşleşmişti — `FILE_REJECT { "cihaz eşleştirilmemiş" }` aldı ve
+   indirilenler dizinine hiçbir dosya yazılmadı.
+
+Düzeltme, daemon değişikliğinin yanında küçük bir Android-tarafı UX
+değişikliği gerektirdi: `DeviceListScreen`'in "Bağlan" butonu kaydedilmiş
+bir host için eskiden doğrudan bağlanıyordu; artık güven daemon'da bellek
+içi olduğundan ve yeniden başlatmada hayatta kalmadığından, her zaman PIN
+diyaloğunu yeniden çalıştırıyor — doğrudan bağlanmak, yukarıdaki 1.
+adımın kasıtlı olarak yeniden ürettiği tam olarak "her şey bağlı görünüyor
+ama hiçbir şey hareket etmiyor" belirtisini sessizce üretirdi.
