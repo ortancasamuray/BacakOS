@@ -4,15 +4,19 @@
 
 Bu, [ARCHITECTURE.md](ARCHITECTURE.md) dosyasının kısa Türkçe özetidir.
 
-> **Durum: gerçek donanımda uçtan uca doğrulandı, eşleştirme zorunlu.**
-> Gerçek bir telefon ve gerçek bir daemon birbirine karşı çalıştırıldı —
-> keşfetti, PIN ile eşleşti, gerçek imleci hareket ettirdi, gerçek bir
-> dosya transfer etti; hepsi çekirdek düzeyinde yakalamayla doğrulandı,
-> sadece uygulama loglarıyla değil (§6). Eşleştirme artık hem girdi hem
-> dosya transferi soketlerini koruyor: eşleşmemiş bir göndericinin trafiği
-> düşürülür/reddedilir, bu da aynı gerçek kurulumda hem eşleşme öncesi hem
-> sonrası doğrulandı. Hâlâ IP tabanlı, kriptografik değil — bkz.
-> `trust.rs`'in doc-comment'i ve §5.
+> **Durum: gerçek donanımda uçtan uca doğrulandı, eşleştirme zorunlu,
+> trafik şifreli.** Gerçek bir telefon ve gerçek bir daemon birbirine
+> karşı çalıştırıldı — keşfetti, PIN ile eşleşti, gerçek imleci hareket
+> ettirdi, gerçek bir dosya transfer etti; hepsi çekirdek düzeyinde
+> yakalamayla doğrulandı, sadece uygulama loglarıyla değil (§6).
+> Eşleştirme artık gerçek bir geçici X25519 ECDH değişimi ve PIN'e bağlı
+> bir onay etiketi çalıştırıyor, ve bundan sonraki her girdi/dosya
+> çerçevesi türetilen oturum anahtarları altında ChaCha20-Poly1305 ile
+> şifreleniyor (§2.3) — yalnızca IP ile kapılanmıyor. Rust ve Kotlin
+> türetimleri, birbirine bağlanmadan önce sabit bir bilinen-cevap test
+> vektörüyle bayt bayt karşılaştırıldı (`daemon/examples/kat.rs`). Bu
+> şemanın aktif bir saldırgana karşı tam olarak ne garanti edip
+> etmediği için §2.3'e bakın.
 
 İki bileşen, üç ağ kanalı, tek bir paylaşılan kablo protokolü.
 
@@ -87,48 +91,104 @@ yerine bunu gönderen taraftır, alıcının geri gönderdiği bir şey değil.
 `discovery.rs`, başlangıçta (ve her başarılı eşleştirmeden sonra tekrar —
 böylece yakalanan bir PIN tekrar oynatılamaz) taze bir 6 haneli PIN üretir
 ve masaüstü bildirimiyle gösterir. Bir istemci, keşif UDP soketi üzerinden
-`PAIR_REQUEST { pin }` gönderir; daemon karşılaştırır ve
-`PAIR_RESPONSE { accepted }` ile yanıtlar.
+`PAIR_REQUEST { pin, client_pubkey }` gönderir — `client_pubkey`, bu
+eşleştirme denemesi için üretilmiş taze, tek kullanımlık bir X25519 açık
+anahtarıdır. Daemon kendi geçici X25519 anahtar çiftini üretir, ECDH'yi
+yapar ve `PAIR_RESPONSE { accepted, daemon_pubkey, confirm_tag }` ile
+yanıtlar.
 
-**Bu IP tabanlı bir güven kapısı, kriptografik kimlik doğrulama değil.**
-Doğru bir PIN, istemcinin IP'sini paylaşılan bir
-[`TrustStore`](../daemon/src/trust.rs)'ta güvenilir işaretler — bunu hem
-`input_manager.rs` hem `file_server.rs` bir şey yapmadan önce kontrol eder:
-eşleşmemiş bir göndericinin UDP girdi paketleri sessizce düşürülür, TCP
-dosya transferi bağlantısı ise anında `FILE_REJECT` alır. Gerçek donanımda
-doğrulandı: eşleşmeden önce gerçek bir telefonun trackpad kaydırmaları
-daemon tarafında sıfır çekirdek girdi olayı üretti; eşleştikten sonra aynı
-kaydırmalar gerçek `REL_X`/`REL_Y` olayları üretti (§6).
+#### 2.3.1 Oturum anahtarı türetimi
 
-Hâlâ olmayan şey: bir adres, LAN'da zaten bulunan kasıtlı kötü niyetli bir
-cihaz tarafından sahtelenebilir, hiç TLS/sertifika materyali değişimi yok,
-ve güven **yalnızca bellekte** — daemon yeniden başlayınca hayatta kalmaz,
-bu yüzden Android'in "Bağlan"ı (kayıtlı host'a yeniden bağlanma) artık
-doğrudan bağlanmak yerine her zaman PIN diyaloğunu yeniden çalıştırıyor,
-çünkü daemon'ın onu hâlâ hatırlayıp hatırlamadığını bilmenin bir yolu yok.
-Gerçek bir TLS/PSK yaklaşımı seçmek (§5), bu "aynı LAN'daki başka bir
-cihaz"dan daha düşmanca bir şeye karşı dayanması gerekiyorsa bir sonraki
-adım.
+Her iki taraf da ECDH paylaşılan sırrından aynı anahtar materyalini
+HKDF-SHA256 ile türetir (`daemon/src/crypto.rs`, `android/.../crypto/
+UzakelCrypto.kt` tarafından bayt bayt yansıtılır):
+
+```
+shared      = X25519(kendi geçici gizli anahtarım, karşı tarafın geçici açık anahtarı)
+prk         = HKDF-Extract(salt = "uzakel-pairing-v1", ikm = shared)
+transcript  = client_pubkey || daemon_pubkey
+c2s_key     = HKDF-Expand(prk, info = "uzakel c2s" || transcript)
+s2c_key     = HKDF-Expand(prk, info = "uzakel s2c" || transcript)
+confirm_key = HKDF-Expand(prk, info = "uzakel confirm" || transcript || pin)
+confirm_tag = HMAC-SHA256(confirm_key, transcript)
+```
+
+`c2s_key` istemci→daemon trafiğini, `s2c_key` daemon→istemci trafiğini
+şifreler — yönlü anahtarlar, böylece bir yöndeki bozulmuş bir nonce
+sayacı diğer yöne karşı tekrar oynatılamaz. `confirm_tag`, değişimi
+gerçekten PIN'e bağlayan şeydir: daemon bunu `PAIR_RESPONSE`'a ekler, ve
+Android istemcisi kendi türetiminden bağımsız olarak yeniden hesaplayıp
+yanıta güvenmeden önce karşılaştırır. Bir uyuşmazlık (yanlış PIN, ya da
+ECDH değişimini yakalayan ama PIN'i bilmeyen bir ortadaki adam), istemcinin
+saldırgan kontrolündeki anahtarlar altında herhangi bir şeyi şifrelemek
+yerine eşleştirmeyi tamamen reddetmesine yol açar.
+
+Başarılı bir eşleştirmede daemon, `(c2s_key, s2c_key)`'i istemcinin IP'sine
+göre anahtarlanmış bir [`TrustStore`](../daemon/src/trust.rs) oturumunda
+saklar. O andan itibaren, **girdi ve dosya transferi soketlerindeki her
+çerçeve `ENCRYPTED_FRAME { nonce: [u8; 12], ciphertext }` içine
+sarmalanır** — gerçek iç çerçevenin bir ChaCha20-Poly1305 AEAD şifreli
+metni, nonce olarak düz bir little-endian sayaç (12 bayta sıfırla
+genişletilmiş) kullanılır. Hem `input_manager.rs` hem `file_server.rs` bu
+sarmalayıcıyı zorunlu kılar — bir oturum var olduğunda **düz metin yedeği
+yoktur**; şifresi çözülemeyen veya tekrar oynatılan (sayaç ≤ görülen en
+yüksek) bir çerçeve, eşleşmemiş bir çerçevenin her zaman olduğu gibi
+düşürülür. Gerçek donanımda doğrulandı: eşleşmeden önce gerçek bir
+telefonun trackpad kaydırmaları daemon tarafında sıfır çekirdek girdi
+olayı üretti; eşleştikten sonra aynı kaydırmalar gerçek `REL_X`/`REL_Y`
+olayları üretti (§6) — şimdi düz metin yerine şifreli çerçeveler olarak
+taşınıyor.
+
+**Bu şemanın tam olarak ne garanti edip etmediği:** bu, geçici X25519 +
+PIN'e bağlı bir onay etiketi, tam bir PAKE (Parola ile Doğrulanmış Anahtar
+Değişimi) değil. LAN'daki pasif bir dinleyiciye karşı gizlilik gerçek —
+trafik gerçekten şifreleniyor, yalnızca IP ile kapılanmıyor. Aktif
+saldırgan direnci tamamen PIN'e bağlı: ECDH değişimini yakalayan *ve*
+PIN'i zaten bilen (ör. omuz üstünden gören) bir saldırgan, hâlâ geçerli
+görünen bir el sıkışmayı tamamlayabilir, çünkü PIN'in kendisi kaba kuvvete
+karşı bir direnç taşımıyor (gerçek bir PAKE, örneğin SPAKE2, PIN'i anahtar
+değişiminin kendisine katar, böylece PIN üzerinde çevrimdışı bir
+tahmin-ve-dene saldırısını imkansız kılar; bu şema bunun yerine PIN'i
+yalnızca zaten gerçekleşmiş bir anahtar değişimini doğrulamak için
+kullanır). Oturum güveni de hâlâ **yalnızca bellekte** — daemon yeniden
+başlayınca hayatta kalmaz, bu yüzden Android'in "Bağlan"ı (kayıtlı host'a
+yeniden bağlanma) eski anahtarları yeniden kullanmak yerine her zaman tam
+PIN + ECDH el sıkışmasını yeniden çalıştırıyor, çünkü daemon'ın eski
+oturumu hâlâ hatırlayıp hatırlamadığını bilmenin bir yolu yok (ve daemon
+yeniden başlatmaları arasında anahtarları yeniden kullanmak zaten
+nonce-sayaç tekrarı riski taşırdı). Daha yetenekli bir aktif saldırgana
+karşı dayanması gerekiyorsa, gerçek bir TLS/PSK ya da SPAKE2 yaklaşımı
+(§5) hâlâ bir sonraki adım.
 
 ## 3. Daemon (Rust) — modül tasarımı
 
 ```
 daemon/src/
 ├── main.rs            # ortam değişkeni tabanlı yapılandırma, üç soketi bağlar, /dev/uinput'u açar, üç görevi başlatır
-├── discovery.rs        # UDP yayın yanıtlayıcısı; DISCOVER_REQUEST + PIN eşleştirmesini (§2.3) yanıtlar
-├── trust.rs             # TrustStore — eşleştirilmiş IP'lerin paylaşılan kaydı, input_manager + file_server'ın kontrol ettiği
+├── discovery.rs        # UDP yayın yanıtlayıcısı; DISCOVER_REQUEST'i yanıtlar + ECDH eşleştirme el sıkışmasını (§2.3) çalıştırır
+├── crypto.rs            # X25519 ECDH + HKDF-SHA256 anahtar türetimi + ChaCha20-Poly1305 seal/open (§2.3.1)
+├── trust.rs             # TrustStore — IP başına oturum (türetilmiş anahtarlar + AEAD durumu), input_manager + file_server'ın kontrol ettiği
 ├── protocol.rs          # paket başlığı/opcode tanımları + encode/decode, her modülün paylaştığı
-├── input_manager.rs     # UDP soketi → TrustStore kontrolü → girdi opcode'larını ayrıştırır → /dev/uinput üzerinden yeniden oynatır
-└── file_server.rs       # TCP dinleyici → TrustStore kontrolü → parçalı alım, SHA-256 doğrulama, ~/İndirilenler'e yazar
+├── input_manager.rs     # UDP soketi → TrustStore oturumunu arar → şifreyi çözer → girdi opcode'larını ayrıştırır → /dev/uinput üzerinden yeniden oynatır
+└── file_server.rs       # TCP dinleyici → TrustStore oturumunu arar → çerçeveleri şifreler/çözer → parçalı alım, SHA-256 doğrulama, ~/İndirilenler'e yazar
 ```
 
+`crypto.rs`, §2.3.1'deki ECDH/HKDF/AEAD ilkelleridir: el sıkışma için
+`EphemeralKeypair::generate()`/`derive()`, ve monoton bir sayaç-nonce'la
+ChaCha20-Poly1305'i sarmalayıp tekrar oynatmayı reddeden `Cipher`/`Opener`.
+Bir taraf diğerinin baytlarına güvenmeden önce, paralel bir Kotlin/
+BouncyCastle uygulamasına karşı sabit bir bilinen-cevap test vektörüyle
+(`daemon/examples/kat.rs`) bağımsız olarak bayt bayt karşılaştırıldı.
+
 `trust.rs`, tek bir `TrustStore`'dur (küçük bir API'nin arkasındaki bir
-`Arc<Mutex<HashSet<IpAddr>>>`), `main.rs`'te bir kez oluşturulur ve her üç
-göreve klonlanır. `discovery.rs` tek yazandır (başarılı bir PIN
-eşleşmesinde `trust()`); `input_manager.rs` ve `file_server.rs` yalnızca
-okuyan çağrıcılardır (`is_trusted()`). IP tabanlı, yalnızca bellekte —
-tam olarak ne garanti edip etmediği için kendi doc-comment'ine ve §2.3'e
-bakın.
+`Arc<Mutex<HashMap<IpAddr, Session>>>`), `main.rs`'te bir kez oluşturulur
+ve her üç göreve klonlanır. `discovery.rs` tek yazandır (onay etiketi
+doğrulanmış bir eşleştirmeden sonra `trust()`, türetilmiş `Cipher`/
+`Opener` çiftini saklayarak); `input_manager.rs` ve `file_server.rs`
+yalnızca okuyan çağrıcılardır (`session()`) ve saklanan anahtarları her
+çerçevenin şifresini çözmek/şifrelemek için kullanır. Hâlâ IP ile
+anahtarlanmış ve yalnızca bellekte — tam olarak ne garanti edip
+etmediği için kendi doc-comment'ine ve §2.3.1'e bakın.
 
 `input_manager.rs`, `input-linux` crate'iyle `/dev/uinput` üzerinden
 oluşturulmuş sanal bir fare ve klavye aygıtını sahiplenir (geçerli her
@@ -139,16 +199,20 @@ gönderen bir istemci için güvenlik ağı olarak — ama imleç konumunu
 kendisi sıkıştırmaz: her olay `REL_X`/`REL_Y` (göreli)'dir, bu yüzden
 ekran-kenarı sıkıştırması tamamen compositor'ın işidir, gerçek bir fare
 için olduğu gibi. Bir `tokio` görevinde UDP soketini sıkı bir döngüde
-okur, `TrustStore`'un tanımadığı bir adresten gelen her paketi düşürür, ve
-kaynak-adresi başına son görülen `seq`'i takip eder, böylece sırası bozuk
-veya yinelenen bir UDP paketi imleci geri hareket ettirmek yerine
+okur, `TrustStore`'un bir oturumu olmayan bir adresten gelen her paketi ve
+o oturumun anahtarı altında şifresi çözülüp doğrulanamayan her
+`ENCRYPTED_FRAME`'i (§2.3.1) düşürür, ve kaynak-adresi başına son görülen
+`seq`'i (şifresi çözülmüş iç paketten okunan) takip eder, böylece sırası
+bozuk veya yinelenen bir paket imleci geri hareket ettirmek yerine
 düşürülür.
 
-`file_server.rs`, düz bir `tokio` TCP dinleyicisidir; güvenilmeyen bir
-adresten gelen bağlantı, el sıkışma başlamadan anında `FILE_REJECT` alır
-ve düşürülür. Güvenilir bir bağlantı, §2.2'deki durum makinesinin alım
-tarafını çalıştıran kendi görevini alır, çakışmasız bir hedef dosya adı
-seçer (`ad`, sonra
+`file_server.rs`, düz bir `tokio` TCP dinleyicisidir; `TrustStore`'da
+oturumu olmayan bir adresten gelen bağlantı, el sıkışma başlamadan anında
+`FILE_REJECT` alır ve düşürülür — bu ilk ret, bu kanalda hâlâ düz metin
+gönderilen tek çerçevedir, çünkü henüz onu şifrelemek için bir oturum
+anahtarı yoktur. Güvenilir bir bağlantı, §2.2'deki durum makinesinin alım
+tarafını her iki yönde de `ENCRYPTED_FRAME`ile sarmalanmış trafik üzerinde
+çalıştıran kendi görevini alır, çakışmasız bir hedef dosya adı seçer (`ad`, sonra
 `ad (2)`, `ad (3)`, …) — `altay`'ın masaüstü tarafındaki transfer
 modülünün yaptığı aynı şekilde. Başarılı doğrulamada `notify-send`'e
 çıkar (kasıtlı bir kapsam kısıtlaması — bkz. §5 — `org.freedesktop.
@@ -170,8 +234,9 @@ yetki. Gerçek systemd birim dosyası henüz yazılmadı (§5).
 ```
 android/app/src/main/kotlin/org/anadolupanteri/uzakel/
 ├── protocol/      # Protocol.kt — daemon/src/protocol.rs'in bayt-bayt Kotlin karşılığı
+├── crypto/        # UzakelCrypto.kt — X25519/HKDF/ChaCha20-Poly1305, daemon/src/crypto.rs'in Kotlin ikizi (§2.3.1)
 ├── discovery/     # SavedHostsStore: SharedPreferences tabanlı eşleştirilmiş host listesi
-├── network/       # NetworkClient: keşif taraması, PIN eşleştirme, InputChannel (UDP), sendFile (TCP)
+├── network/       # NetworkClient: keşif taraması, ECDH+PIN eşleştirme, şifreli InputChannel (UDP), şifreli sendFile (TCP)
 ├── input/         # TrackpadView (çok dokunuşlu), KeyCodes (evdev tuş kodu tablosu), IME→typeChar köprüsü
 ├── transfer/      # FileTransferManager: SAF dosya seçimi, SHA-256, StateFlow ile ilerleme
 ├── ui/            # UzakelApp (kök), DeviceListScreen, ControlScreen, TransferScreen
@@ -216,13 +281,29 @@ doğrudan kernel'e yeniden oynattığından, IME köprüsüyle yazarken bir
 değiştirici çipini basılı tutmak, iki kod yolu hiç doğrudan koordine
 olmasa bile gerçek kombinasyonlar üretir (ör. Ctrl+C).
 
+`crypto/UzakelCrypto.kt`, `daemon/src/crypto.rs`'in (§2.3.1) Kotlin
+ikizidir — el sıkışma için `EphemeralKeypair.generate()`/`derive()`,
+BouncyCastle'ın ChaCha20-Poly1305'ini aynı sayaç-nonce ve tekrar-oynatma
+reddi şemasıyla sarmalayan `Cipher`/`Opener`. `javax.crypto` yerine
+BouncyCastle kullanılıyor, çünkü Android'in kendi X25519 desteği yalnızca
+API 33+'ta geliyor, bu uygulamanın `minSdk`'si ise 26. `NetworkClient`'a
+bağlanmadan önce Rust tarafına karşı sabit bir bilinen-cevap test
+vektörüyle bayt bayt karşılaştırıldı.
+
 `network/NetworkClient` — `discoverHosts()` `DISCOVER_REQUEST` yayınlar ve
-sabit bir pencere boyunca yanıtları toplar; `pair()` `PAIR_REQUEST { pin }`
-gönderir ve bir `PAIR_RESPONSE` bekler; `InputChannel`, §2.1'deki monoton
-`seq` sayacını sahiplenen küçük bir ateşle-unut UDP sarmalayıcısıdır;
-`sendFile()` §2.2'deki üç fazlı yüklemeyi çalıştırır ve trailer çerçevesi
-üzerinde okuma zaman aşımını başarı olarak ele alır, çünkü daemon yalnızca
-`FILE_CORRUPT`'ta konuşur.
+sabit bir pencere boyunca yanıtları toplar; `pair()` geçici bir anahtar
+çifti üretir, `PAIR_REQUEST { pin, client_pubkey }` gönderir, ve
+`PAIR_RESPONSE` üzerinde daemon'ın anahtarlarına güvenmeden önce
+`confirm_tag`'i yerel olarak yeniden hesaplayıp kontrol eder — bir düz
+boolean yerine bir `PairedSession` (adres + her iki yönlü oturum anahtarı)
+döndürür; bir onay etiketi uyuşmazlığı yanlış bir PIN ile aynı şekilde ele
+alınır. `InputChannel`, her paketi göndermeden önce bir `Cipher` ile
+şifreleyip `ENCRYPTED_FRAME` içine sarmalayan, ve §2.1'deki monoton `seq`
+sayacını (şifreli payload'ın içinde taşınan) sahiplenen küçük bir
+ateşle-unut UDP sarmalayıcısıdır; `sendFile()` §2.2'deki üç fazlı
+yüklemeyi her iki yönde de `Cipher`/`Opener` ile sarmalanmış/çözülmüş
+çerçevelerle çalıştırır ve trailer çerçevesi üzerinde okuma zaman aşımını
+başarı olarak ele alır, çünkü daemon yalnızca `FILE_CORRUPT`'ta konuşur.
 
 `transfer/FileTransferManager`, gönderilecek bir dosya seçmek için
 Android'in Storage Access Framework'ünü kullanır, böylece asla geniş
@@ -247,10 +328,12 @@ bağlanmadı (§5).
 
 ## 5. Açık sorular / henüz karara bağlanmadı
 
-- Eşleştirme sonrası oturumlar için TLS materyali: eşleştirme anında
-  sabitlenen kendinden imzalı sertifika (en basit, CA gerekmez) mı yoksa
-  PIN değişimine bağlı daha hafif bir PSK şeması mı — ve sonra UDP/TCP
-  soketlerini buna gerçekten bağlamak.
+- ~~Eşleştirme sonrası oturumlar için TLS materyali~~ — **tamamlandı**,
+  geçici X25519 ECDH + PIN'e bağlı onay + ChaCha20-Poly1305 ile (§2.3.1),
+  TLS/sertifika değil. Hâlâ açık: PIN kontrolünün kendisini gerçek bir
+  PAKE'ye (ör. SPAKE2) yükseltmek, böylece tek başına bir PIN, aktif bir
+  saldırganın zaten yakaladığı bir oturumu doğrulayamasın — bkz. §2.3.1'in
+  uyarısı.
 - Daemon-başlatımlı dosya gönderimleri (BacakOS → Android) —
   `file_server.rs` şu an yalnızca alım tarafını uyguluyor.
 - 45922'deki düz UDP yayın yanıtlayıcısı yerine gerçek mDNS/DNS-SD (bir
