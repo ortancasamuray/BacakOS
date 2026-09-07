@@ -1,5 +1,7 @@
 # Bacak OS — Design System
 
+🌐 [Türkçe](DESIGN_SYSTEM.tr.md) · **English**
+
 A premium, tech-forward visual language: glassmorphism on an Aegean gradient with a Rust accent. Touch-first interaction zones, spring physics motion, and 8pt rhythm throughout.
 
 ---
