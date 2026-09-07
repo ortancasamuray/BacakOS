@@ -2,9 +2,11 @@
 
 🌐 [Türkçe](README.tr.md) · **English**
 
-> **Status: design phase.** No code has been written yet — this document and
-> [ARCHITECTURE.md](ARCHITECTURE.md) describe the intended system. Nothing
-> below should be read as "done."
+> **Status: daemon implemented, client not started.** `daemon/` builds,
+> passes its unit tests, and implements discovery/pairing, input replay, and
+> file receive end-to-end. `android/` doesn't exist yet. Pairing isn't yet
+> enforced on the input/file sockets — see the security note in
+> [ARCHITECTURE.md](ARCHITECTURE.md) §"open questions."
 
 Uzakel ("remote hand" in Turkish) is a two-part remote-control and
 file-transfer ecosystem for BacakOS: an Android app that turns a phone into
@@ -50,16 +52,22 @@ uzakel/
         └── ui/                # Compose screens: trackpad, keyboard, device list, transfer panel
 ```
 
-## Build (once code exists)
+## Build
 
 ```sh
-# Daemon
-cd daemon && cargo build --release
-systemctl --user enable --now uzakel-daemon
+# Daemon (implemented)
+cd daemon && cargo build --release && cargo test
+UZAKEL_DOWNLOAD_DIR=~/İndirilenler ./target/release/uzakel-daemon   # or: systemctl --user enable --now uzakel-daemon (once packaged)
 
-# Android
+# Android (not started yet)
 cd android && ./gradlew assembleDebug
 ```
+
+The daemon needs the running user in the `uinput` group to open
+`/dev/uinput`; it logs a clear error naming that requirement if it can't. It
+also shells out to `notify-send` for the pairing-PIN and file-received
+notifications — install `libnotify-bin` (or equivalent) if notifications
+don't appear.
 
 ## License
 
