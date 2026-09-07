@@ -1,5 +1,7 @@
 # Belgeler — Document & Image Viewers
 
+🌐 [Türkçe](README.tr.md) · **English**
+
 Four small Rust + [Slint](https://slint.dev) viewer binaries for BacakOS. The
 one that actually ships as *the* document viewer is `bacak-belge`, a unified
 PDF + EPUB + image + text viewer with pen/marker annotation tools; the other
