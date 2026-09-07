@@ -4,10 +4,13 @@
 
 Bu, [ARCHITECTURE.md](ARCHITECTURE.md) dosyasının kısa Türkçe özetidir.
 
-> **Durum: `daemon/` (Rust) uygulandı ve bu belgeyle örtüşüyor;
-> `android/` henüz yok.** Bu belge daemon davranışını anlatırken gerçek
-> `daemon/src/` kodunu anlatıyordur. Android istemcisini anlatan kısımlar
-> hâlâ bir plandır.
+> **Durum: hem `daemon/` (Rust) hem `android/` (Kotlin) ilk sürümüyle
+> uygulandı ve bu belgeyle örtüşüyor.** Android derlemesi gerçek bir
+> Gradle + Android SDK ile uçtan uca doğrulandı (`assembleDebug` çalışan
+> bir debug APK üretiyor, `lintDebug` temiz geçiyor) — bkz. README.md.
+> Henüz doğrulanmayan şey, iki tarafın gerçek donanımda birbiriyle
+> gerçekten konuşması, ve eşleştirmenin hâlâ girdi/dosya soketlerinde
+> zorunlu kılınmaması (§2.3, §5).
 
 İki bileşen, üç ağ kanalı, tek bir paylaşılan kablo protokolü.
 
@@ -138,39 +141,85 @@ kurulumunun `bacak/packaging/bacak-session`'ın diğer kullanıcı-kapsamlı
 masaüstü servisleri için yaptığı gibi kullanıcıya vermesi gereken bir
 yetki. Gerçek systemd birim dosyası henüz yazılmadı (§5).
 
-## 4. Android istemcisi (Kotlin) — modül tasarımı
+## 4. Android istemcisi (Kotlin + Jetpack Compose) — modül tasarımı
 
 ```
 android/app/src/main/kotlin/org/anadolupanteri/uzakel/
-├── discovery/    # host tarama + daha önce eşleştirilmiş host'ların kalıcı listesi
-├── network/      # NetworkClient: coroutine/Flow tabanlı UDP girdi soketi + TCP dosya soketi
-├── input/        # TrackpadView: ham dokunma deltaları → hassasiyet/ivme → UDP paketleri
-├── transfer/     # FileTransferManager: SAF dosya seçimi, parçalı yükleme/indirme, ilerleme Flow'u
-└── ui/           # Compose ekranları: trackpad, sanal klavye, cihaz listesi, transfer paneli
+├── protocol/      # Protocol.kt — daemon/src/protocol.rs'in bayt-bayt Kotlin karşılığı
+├── discovery/     # SavedHostsStore: SharedPreferences tabanlı eşleştirilmiş host listesi
+├── network/       # NetworkClient: keşif taraması, PIN eşleştirme, InputChannel (UDP), sendFile (TCP)
+├── input/         # TrackpadView (çok dokunuşlu), KeyCodes (evdev tuş kodu tablosu), IME→typeChar köprüsü
+├── transfer/      # FileTransferManager: SAF dosya seçimi, SHA-256, StateFlow ile ilerleme
+├── ui/            # UzakelApp (kök), DeviceListScreen, ControlScreen, TransferScreen
+└── MainActivity.kt
 ```
 
-`input/TrackpadView`, ham dokunma olaylarını `input_manager.rs`'nin
-beklediği aynı `dx`/`dy` deltalarına çeviren bir Compose `pointerInput`
-yüzeyidir — tek parmak sürükleme = `MOUSE_MOVE`, tek parmak dokunuş =
-`MOUSE_CLICK` (sol), iki parmak dokunuş = `MOUSE_CLICK` (sağ), iki parmak
-sürükleme = `MOUSE_SCROLL`. Hassasiyet ve ivme, paket gönderilmeden önce
-istemci tarafında uygulanır, böylece daemon telefonun dokunma
-çözünürlüğünü hiç tahmin etmek zorunda kalmaz. `network/NetworkClient`,
-her iki soketi de bir coroutine/`Flow` API'sinin arkasında sahiplenir:
-girdi paketleri gönder-ve-unut'tur (onay beklenmez, §2.1'in UDP
-tasarımıyla uyumlu), dosya transferi ise transfer panelinin ilerleme
-çubuğunu sürüklemek için topladığı bir `Flow<TransferProgress>` sunar.
-`transfer/FileTransferManager`, hem gönderilecek bir dosya seçmek hem de
-bir indirme için hedef seçmek için Android'in Storage Access
-Framework'ünü kullanır, böylece asla geniş depolama izinlerine ihtiyaç
-duymaz — BacakOS'un masaüstü tarafındaki dosya işlemenin (`altay`'ın
-`security::Sandbox`'ı) izlediği "shell'e çıkma yok, tasarım gereği
-sandbox'lı" içgüdüsüyle örtüşür. `discovery/`, eşleştirilmiş host'ları
-(ad, son bilinen IP, PIN el sıkışmasından gelen güven anahtarı) kalıcı
-hale getirir, böylece geri dönen bir kullanıcının her oturumda yeniden
-eşleşmesi gerekmez, ve LAN cihazları oturumlar arasında sıkça adres
-değiştirdiğinden (DHCP kira döngüsü) her başlatmada mevcut IP'yi
-mDNS/yayın üzerinden yeniden çözer.
+Navigasyon kütüphanesi yok — `UzakelApp`, küçük bir `sealed class Screen`
+ve bir `when` ile üç ekran arasında geçiş yapar; bu kadar sığ bir grafik
+(cihaz listesi → kontrol → transfer, ve geri) için Navigation-Compose
+eklemekten daha basit.
+
+`protocol/Protocol.kt`, daemon ile gerçek etkileşim sözleşmesidir —
+içindeki her `ByteBuffer` yerleşimi (`Header`, `InputPacket.encode()`,
+`FileMeta.encode()`, `encodeChunk`, `DiscoverResponse.decodePayload`, …)
+`daemon/src/protocol.rs` ile bayt-bayt eşleşmek zorundadır, çünkü bu iki
+dosya hiç kod paylaşmaz, yalnızca bir kablo formatı paylaşır.
+`NetworkClient`, her UDP okumasını tampon'un kapasitesine değil,
+datagram'ın gerçek `packet.length`'ine sınırlar — tampon `receive()`
+çağrıları arasında yeniden kullanıldığından, aksi halde daha uzun bir
+paketten sonra gelen kısa bir paket eski baytları okurdu.
+
+`input/TrackpadView`, `pointerInput`/`awaitEachGesture` tabanlı bir Compose
+yüzeyidir (yalnızca tek parmağı takip eden `detectDragGestures` değil) —
+tek parmak sürükleme = `MOUSE_MOVE`, tek parmak dokunuş = sol tık, iki
+parmak dokunuş = sağ tık, iki parmak sürükleme = `MOUSE_SCROLL`. Deltalar
+aktif parmaklar arasında ortalanır ve paket oluşturulmadan önce istemci
+tarafında bir hassasiyet katsayısıyla ölçeklenir.
+
+**Klavye girdisi için özel bir ekran klavyesi yok.** `ControlScreen`, sıfır
+yükseklikte, isteğe bağlı odaklanan ve tek bir sıfır-genişlikli yer
+tutucu karakterle beslenen bir `BasicTextField` tutar; sistem IME'sinin bu
+alana yaptığı düzenlemeler (`input/Typing.kt`'nin `typeChar`'ı) 
+`input/KeyCodes.kt`'nin evdev tuş kodu tablosu üzerinden `KEY_PRESS`
+paketlerine çevrilir, ve *küçülen* bir değer (yer tutucu normal yazımla
+kısalamaz) bir `KEY_BACKSPACE` basışı olarak okunur. Bu, kullanıcının
+zaten sahip olduğu klavyeyi yeniden kullanır — otomatik düzeltme, kaydırma
+ile yazma, Latin olmayan düzenler dahil — uygulamanın kendi klavyesini
+çizmesi yerine. Ctrl/Alt/Super geçiş çipleri artı Esc/Tab/ok
+tuşları/Enter/Backspace butonlarından oluşan bir satır, yumuşak bir
+IME'nin üretemediklerini kapsar; daemon ham tuş yukarı/aşağı durumunu
+doğrudan kernel'e yeniden oynattığından, IME köprüsüyle yazarken bir
+değiştirici çipini basılı tutmak, iki kod yolu hiç doğrudan koordine
+olmasa bile gerçek kombinasyonlar üretir (ör. Ctrl+C).
+
+`network/NetworkClient` — `discoverHosts()` `DISCOVER_REQUEST` yayınlar ve
+sabit bir pencere boyunca yanıtları toplar; `pair()` `PAIR_REQUEST { pin }`
+gönderir ve bir `PAIR_RESPONSE` bekler; `InputChannel`, §2.1'deki monoton
+`seq` sayacını sahiplenen küçük bir ateşle-unut UDP sarmalayıcısıdır;
+`sendFile()` §2.2'deki üç fazlı yüklemeyi çalıştırır ve trailer çerçevesi
+üzerinde okuma zaman aşımını başarı olarak ele alır, çünkü daemon yalnızca
+`FILE_CORRUPT`'ta konuşur.
+
+`transfer/FileTransferManager`, gönderilecek bir dosya seçmek için
+Android'in Storage Access Framework'ünü kullanır, böylece asla geniş
+depolama izinlerine ihtiyaç duymaz — BacakOS'un masaüstü tarafındaki dosya
+işlemenin (`altay`'ın `security::Sandbox`'ı) izlediği "shell'e çıkma yok,
+tasarım gereği sandbox'lı" içgüdüsüyle örtüşür. SHA-256, el sıkışmadan
+önce SAF akışı üzerinde tam bir geçişte hesaplanır (protokol hash'i
+baştan ister), bu yüzden büyük bir dosya iki kez okunur; gönderimle
+birlikte artımlı bir digest bu maliyeti kaldırırdı — bkz. §5. Yalnızca
+gönderme uygulandı, daemon'ın alım-yalnızca `file_server.rs`'iyle uyumlu.
+
+`discovery/SavedHostsStore`, eşleştirilmiş host'ları (ad, son bilinen IP)
+`SharedPreferences`'ta tek bir JSON dizisi olarak kalıcı hale getirir — bir
+telefonun gerçekçi olarak eşleştiği birkaç host için fazlasıyla yeterli,
+gerçek bir veritabanı verinin hak ettiğinden daha fazla makine gibi
+hissettirdi. Adres, kaydedilmiş bir host için yalnızca bir *başlangıç
+noktasıdır*, körü körüne güvenilmez: `DeviceListScreen`, bağlanırken onu
+`InetAddress.getByName` ile yeniden çözer, çünkü LAN cihazları oturumlar
+arasında sıkça adres değiştirir (DHCP kira döngüsü) — "kaydedilmiş bir
+host'a bağlan" akışına henüz taze bir yayın yeniden taraması
+bağlanmadı (§5).
 
 ## 5. Açık sorular / henüz karara bağlanmadı
 
@@ -199,3 +248,22 @@ mDNS/yayın üzerinden yeniden çözer.
 - `discovery.rs`/`file_server.rs`'teki `notify-send` kabuk çağrısını yerel
   bir `org.freedesktop.Notifications` D-Bus çağrısıyla (ör. `zbus` ile)
   değiştirmek, `libnotify-bin` çalışma zamanı bağımlılığını kaldırmak.
+- **İki taraf birbiriyle hiç gerçekten konuşmadı.** İkisi de kendi
+  testlerini/lint'ini bağımsız olarak geçiyor, ama henüz kimse daemon ve
+  Android uygulamasını aynı ağda gerçek BacakOS + Android donanımına karşı
+  çalıştırmadı — yukarıdakilerin herhangi birine güvenmeden önce asıl
+  doğrulanması gereken bir sonraki şey bu.
+- `DeviceListScreen`'in "kaydedilmiş host'a bağlan" akışı, önce yeniden
+  taramak yerine kalıcı IP'yi olduğu gibi kullanır; host'un adresi
+  kaydedildiğinden beri değiştiyse, bağlanma taze bir keşif yayınına
+  düşmek yerine sessizce başarısız olur.
+- `FileTransferManager`, dosyayı iki kez okuyor (bir kez hash için, bir kez
+  gönderim için) çünkü `FILE_META`'nın SHA-256'sı akış başlamadan önce
+  bilinmek zorunda (§2.2) — artımlı hash'lenmiş bir gönderim (digest'i
+  parçalar giderken hesapla, yalnızca son parçadan sonra bilinen bir
+  değere karşı doğrula) doğrulamayı gönderenin hesapladığı bir trailer
+  çerçevesine taşıyan bir protokol değişikliği gerektirirdi.
+- Wi-Fi el değiştirmesinde veya daemon oturum ortasında yeniden
+  başladığında Android'in yeniden bağlanma/tekrar deneme davranışı —
+  `InputChannel` şu an gönderim hatalarını sessizce yutuyor (kendi
+  doc-comment'ine bakın), yeniden bağlanma mantığı yok.
