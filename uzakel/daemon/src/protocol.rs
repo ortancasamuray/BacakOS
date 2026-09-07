@@ -38,6 +38,11 @@ pub enum Opcode {
     DiscoverResponse = 21,
     PairRequest = 22,
     PairResponse = 23,
+
+    // Encrypted envelope (ARCHITECTURE.md §2.3.1) — wraps a full inner
+    // frame (its own 8-byte header + payload) once a session key exists.
+    // Carried on both the input (UDP) and file-transfer (TCP) channels.
+    EncryptedFrame = 30,
 }
 
 impl TryFrom<u8> for Opcode {
@@ -59,6 +64,7 @@ impl TryFrom<u8> for Opcode {
             21 => Opcode::DiscoverResponse,
             22 => Opcode::PairRequest,
             23 => Opcode::PairResponse,
+            30 => Opcode::EncryptedFrame,
             other => return Err(ProtocolError::UnknownOpcode(other)),
         })
     }
@@ -431,27 +437,105 @@ pub fn encode_discover_request() -> Vec<u8> {
     encode_simple(Opcode::DiscoverRequest)
 }
 
+/// `client_pubkey` is the client's ephemeral X25519 public key for this
+/// pairing attempt (§2.3.1) — sent alongside the PIN so a successful pair
+/// yields real key material, not just a boolean.
 #[derive(Debug, Clone, Copy)]
 pub struct PairRequest {
     pub pin: u32,
+    pub client_pubkey: [u8; 32],
 }
 
 impl PairRequest {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut payload = Vec::with_capacity(4 + 32);
+        payload.extend_from_slice(&self.pin.to_le_bytes());
+        payload.extend_from_slice(&self.client_pubkey);
+        frame(Opcode::PairRequest, &payload)
+    }
+
     pub fn decode_payload(payload: &[u8]) -> Result<Self, ProtocolError> {
-        if payload.len() < 4 {
+        if payload.len() < 4 + 32 {
             return Err(ProtocolError::BadPayload {
                 opcode: Opcode::PairRequest,
                 reason: "truncated PairRequest",
             });
         }
-        Ok(PairRequest {
-            pin: u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]),
+        let pin = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
+        let mut client_pubkey = [0u8; 32];
+        client_pubkey.copy_from_slice(&payload[4..36]);
+        Ok(PairRequest { pin, client_pubkey })
+    }
+}
+
+/// `daemon_pubkey` is the daemon's ephemeral X25519 public key;
+/// `confirm_tag` is `HMAC-SHA256(confirm_key, client_pubkey || daemon_pubkey)`
+/// where `confirm_key` is derived from the ECDH shared secret *and* the PIN
+/// (§2.3.1) — proof for the client that whoever answered actually knew the
+/// PIN, not just that they can do Diffie-Hellman. Both fields are
+/// all-zero when `accepted` is false; the client must not use them.
+#[derive(Debug, Clone, Copy)]
+pub struct PairResponse {
+    pub accepted: bool,
+    pub daemon_pubkey: [u8; 32],
+    pub confirm_tag: [u8; 32],
+}
+
+impl PairResponse {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut payload = Vec::with_capacity(1 + 32 + 32);
+        payload.push(self.accepted as u8);
+        payload.extend_from_slice(&self.daemon_pubkey);
+        payload.extend_from_slice(&self.confirm_tag);
+        frame(Opcode::PairResponse, &payload)
+    }
+
+    pub fn decode_payload(payload: &[u8]) -> Result<Self, ProtocolError> {
+        if payload.len() < 1 + 32 + 32 {
+            return Err(ProtocolError::BadPayload {
+                opcode: Opcode::PairResponse,
+                reason: "truncated PairResponse",
+            });
+        }
+        let accepted = payload[0] != 0;
+        let mut daemon_pubkey = [0u8; 32];
+        daemon_pubkey.copy_from_slice(&payload[1..33]);
+        let mut confirm_tag = [0u8; 32];
+        confirm_tag.copy_from_slice(&payload[33..65]);
+        Ok(PairResponse {
+            accepted,
+            daemon_pubkey,
+            confirm_tag,
         })
     }
 }
 
-pub fn encode_pair_response(accepted: bool) -> Vec<u8> {
-    frame(Opcode::PairResponse, &[accepted as u8])
+// ── Encrypted envelope (§2.3.1) ─────────────────────────────────────────────
+
+pub const NONCE_LEN: usize = 12;
+
+/// Wraps an already-encoded inner frame's ciphertext (produced by
+/// [`crate::crypto`]) for transmission. `nonce` is the 12-byte ChaCha20-
+/// Poly1305 nonce used to produce `ciphertext` (which includes the 16-byte
+/// Poly1305 tag appended, as the `aead` crate's `encrypt` already does).
+pub fn encode_encrypted_frame(nonce: [u8; NONCE_LEN], ciphertext: &[u8]) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(NONCE_LEN + ciphertext.len());
+    payload.extend_from_slice(&nonce);
+    payload.extend_from_slice(ciphertext);
+    frame(Opcode::EncryptedFrame, &payload)
+}
+
+/// Splits an `EncryptedFrame` payload back into `(nonce, ciphertext)`.
+pub fn decode_encrypted_frame_payload(payload: &[u8]) -> Result<([u8; NONCE_LEN], &[u8]), ProtocolError> {
+    if payload.len() < NONCE_LEN {
+        return Err(ProtocolError::BadPayload {
+            opcode: Opcode::EncryptedFrame,
+            reason: "truncated EncryptedFrame",
+        });
+    }
+    let mut nonce = [0u8; NONCE_LEN];
+    nonce.copy_from_slice(&payload[..NONCE_LEN]);
+    Ok((nonce, &payload[NONCE_LEN..]))
 }
 
 #[cfg(test)]
@@ -545,5 +629,48 @@ mod tests {
         assert_eq!(chunk_header.index, 9);
         assert_eq!(chunk_header.len, 5);
         assert_eq!(&payload[ChunkHeader::ENCODED_LEN..], &data[..]);
+    }
+
+    #[test]
+    fn pair_request_roundtrips() {
+        let req = PairRequest {
+            pin: 654321,
+            client_pubkey: [9u8; 32],
+        };
+        let bytes = req.encode();
+        let header = Header::decode(&bytes).unwrap();
+        assert_eq!(header.opcode, Opcode::PairRequest);
+        let decoded = PairRequest::decode_payload(&bytes[HEADER_LEN..]).unwrap();
+        assert_eq!(decoded.pin, 654321);
+        assert_eq!(decoded.client_pubkey, [9u8; 32]);
+    }
+
+    #[test]
+    fn pair_response_roundtrips() {
+        let resp = PairResponse {
+            accepted: true,
+            daemon_pubkey: [5u8; 32],
+            confirm_tag: [6u8; 32],
+        };
+        let bytes = resp.encode();
+        let header = Header::decode(&bytes).unwrap();
+        assert_eq!(header.opcode, Opcode::PairResponse);
+        let decoded = PairResponse::decode_payload(&bytes[HEADER_LEN..]).unwrap();
+        assert!(decoded.accepted);
+        assert_eq!(decoded.daemon_pubkey, [5u8; 32]);
+        assert_eq!(decoded.confirm_tag, [6u8; 32]);
+    }
+
+    #[test]
+    fn encrypted_frame_roundtrips() {
+        let nonce = [1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+        let ciphertext = vec![0xAAu8; 40]; // fake ciphertext+tag, shape-only test
+        let bytes = encode_encrypted_frame(nonce, &ciphertext);
+        let header = Header::decode(&bytes).unwrap();
+        assert_eq!(header.opcode, Opcode::EncryptedFrame);
+        let (decoded_nonce, decoded_ciphertext) =
+            decode_encrypted_frame_payload(&bytes[HEADER_LEN..]).unwrap();
+        assert_eq!(decoded_nonce, nonce);
+        assert_eq!(decoded_ciphertext, &ciphertext[..]);
     }
 }

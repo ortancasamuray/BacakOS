@@ -20,7 +20,7 @@ use input_linux::{
 use tokio::net::UdpSocket;
 use tracing::{debug, trace, warn};
 
-use crate::protocol::{InputPacket, Modifiers, MouseButton};
+use crate::protocol::{decode_encrypted_frame_payload, Header, InputPacket, Modifiers, MouseButton, Opcode, HEADER_LEN};
 use crate::trust::TrustStore;
 
 /// Every keyboard `KEY_PRESS` opcode carries a Linux evdev keycode directly
@@ -185,6 +185,13 @@ impl VirtualInput {
 /// in-order packet through `input`. Per-source sequence tracking means a
 /// packet from a phone that's still finishing its old connection while a new
 /// one starts doesn't get interleaved with (or overtake) the current one.
+///
+/// Every datagram accepted here must be an `EncryptedFrame` (ARCHITECTURE.md
+/// §2.3.1) from an address `trust` has a session for — there is no
+/// plaintext fallback. A client that hasn't paired, or a plaintext
+/// `InputPacket` sent to an IP that *has* paired (a downgrade attempt, or
+/// just a bug), is dropped identically to a garbled packet: silently, at
+/// trace level.
 pub async fn run(socket: UdpSocket, input: VirtualInput, trust: TrustStore) -> Result<()> {
     let mut last_seq: HashMap<SocketAddr, u32> = HashMap::new();
     let mut buf = [0u8; 2048];
@@ -198,7 +205,7 @@ pub async fn run(socket: UdpSocket, input: VirtualInput, trust: TrustStore) -> R
             }
         };
 
-        if !trust.is_trusted(from.ip()) {
+        let Some(session) = trust.session(from.ip()) else {
             // Not a "malformed packet" — a real client that just hasn't
             // paired (or paired before the last daemon restart, see
             // trust.rs). trace, not warn: this is the expected steady-state
@@ -206,12 +213,20 @@ pub async fn run(socket: UdpSocket, input: VirtualInput, trust: TrustStore) -> R
             // something the operator needs to see by default.
             trace!(%from, "dropping input packet from an unpaired address");
             continue;
-        }
+        };
 
-        let packet = match InputPacket::decode(&buf[..len]) {
+        let decrypted = match decrypt_frame(&session, &buf[..len]) {
+            Some(bytes) => bytes,
+            None => {
+                trace!(%from, "dropping input datagram that wasn't a valid encrypted frame");
+                continue;
+            }
+        };
+
+        let packet = match InputPacket::decode(&decrypted) {
             Ok(p) => p,
             Err(err) => {
-                trace!(?err, %from, "dropping malformed input packet");
+                trace!(?err, %from, "dropping malformed (decrypted) input packet");
                 continue;
             }
         };
@@ -230,6 +245,26 @@ pub async fn run(socket: UdpSocket, input: VirtualInput, trust: TrustStore) -> R
             warn!(?err, "failed to replay input packet via /dev/uinput");
         }
     }
+}
+
+/// Unwraps one `EncryptedFrame` datagram into the inner frame's bytes
+/// (header + payload), or `None` if it isn't a well-formed `EncryptedFrame`
+/// or fails to decrypt/authenticate under `session`'s key (wrong key,
+/// corrupted/forged ciphertext, or a replayed/stale nonce — see
+/// `crypto::Opener`). Shared by `input_manager.rs` and `file_server.rs`
+/// isn't worth a common module for two call sites this small; both just
+/// mirror this pattern.
+fn decrypt_frame(session: &crate::trust::Session, datagram: &[u8]) -> Option<Vec<u8>> {
+    let header = Header::decode(datagram).ok()?;
+    if header.opcode != Opcode::EncryptedFrame {
+        return None;
+    }
+    let payload = datagram.get(HEADER_LEN..)?;
+    if payload.len() != header.payload_len as usize {
+        return None;
+    }
+    let (nonce, ciphertext) = decode_encrypted_frame_payload(payload).ok()?;
+    session.opener.lock().unwrap().open(nonce, ciphertext)
 }
 
 fn packet_seq(packet: &InputPacket) -> u32 {

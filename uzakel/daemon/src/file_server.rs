@@ -7,22 +7,31 @@
 //! the architecture doc notes the state machine is meant to be symmetric,
 //! but daemon-initiated sends (BacakOS → Android) aren't wired up yet; see
 //! the "open questions" section there.
+//!
+//! Every frame after the initial trust check is wrapped in an
+//! `EncryptedFrame` (§2.3.1) using the paired session's keys — there is no
+//! plaintext fallback once a connection is accepted. The one deliberate
+//! exception is the immediate `FILE_REJECT` sent to an *unpaired* address:
+//! there's no session key to encrypt it with yet, and a rejection reason
+//! carries nothing sensitive.
 
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 use tokio::fs::File;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tracing::{info, warn};
 
 use crate::protocol::{
-    encode_file_reject, encode_simple, ChunkHeader, FileMeta, Header, Opcode, HEADER_LEN,
+    decode_encrypted_frame_payload, encode_encrypted_frame, encode_file_reject, encode_simple,
+    ChunkHeader, FileMeta, Header, Opcode, HEADER_LEN,
 };
-use crate::trust::TrustStore;
+use crate::trust::{Session, TrustStore};
 
 pub async fn run(listener: TcpListener, download_dir: PathBuf, trust: TrustStore) -> Result<()> {
     tokio::fs::create_dir_all(&download_dir)
@@ -35,50 +44,88 @@ pub async fn run(listener: TcpListener, download_dir: PathBuf, trust: TrustStore
             .await
             .context("accepting file-transfer connection")?;
 
-        if !trust.is_trusted(peer.ip()) {
+        let Some(session) = trust.session(peer.ip()) else {
             // Reject immediately, before the handshake even starts — unlike
             // the input (UDP) channel, TCP gives us a connection to write a
             // real reason back on, so the sender doesn't have to guess why
-            // its file went nowhere.
+            // its file went nowhere. Plaintext is correct here: there's no
+            // session key yet, and a rejection reason isn't sensitive.
             warn!(%peer, "rejecting file-transfer connection from an unpaired address");
             stream
                 .write_all(&encode_file_reject("cihaz eşleştirilmemiş"))
                 .await
                 .ok();
             continue;
-        }
+        };
 
         let download_dir = download_dir.clone();
         tokio::spawn(async move {
-            if let Err(err) = handle_receive(stream, &download_dir).await {
+            if let Err(err) = handle_receive(stream, &download_dir, session).await {
                 warn!(?err, %peer, "file transfer failed");
             }
         });
     }
 }
 
-async fn read_frame(stream: &mut TcpStream) -> Result<(Opcode, Vec<u8>)> {
+/// Reads one `EncryptedFrame` off `stream`, decrypts it under `session`,
+/// and returns the inner frame's opcode + payload — the same shape
+/// `read_frame` used to return directly, before every frame on this
+/// channel was encrypted.
+async fn read_encrypted_frame(
+    stream: &mut (impl AsyncRead + Unpin),
+    session: &Session,
+) -> Result<(Opcode, Vec<u8>)> {
     let mut header_buf = [0u8; HEADER_LEN];
     stream
         .read_exact(&mut header_buf)
         .await
-        .context("reading frame header")?;
-    let header = Header::decode(&header_buf)?;
+        .context("reading encrypted frame header")?;
+    let outer_header = Header::decode(&header_buf)?;
+    if outer_header.opcode != Opcode::EncryptedFrame {
+        anyhow::bail!("expected EncryptedFrame, got {:?} — no plaintext fallback on this channel", outer_header.opcode);
+    }
 
-    let mut payload = vec![0u8; header.payload_len as usize];
+    let mut outer_payload = vec![0u8; outer_header.payload_len as usize];
     stream
-        .read_exact(&mut payload)
+        .read_exact(&mut outer_payload)
         .await
-        .context("reading frame payload")?;
-    Ok((header.opcode, payload))
+        .context("reading encrypted frame payload")?;
+    let (nonce, ciphertext) = decode_encrypted_frame_payload(&outer_payload)?;
+
+    let inner_bytes = session
+        .opener
+        .lock()
+        .unwrap()
+        .open(nonce, ciphertext)
+        .ok_or_else(|| anyhow::anyhow!("failed to decrypt/authenticate frame (bad key, corrupted data, or replay)"))?;
+
+    let inner_header = Header::decode(&inner_bytes)?;
+    let inner_payload = inner_bytes[HEADER_LEN..].to_vec();
+    if inner_payload.len() != inner_header.payload_len as usize {
+        anyhow::bail!("inner frame's declared length doesn't match what decrypted");
+    }
+    Ok((inner_header.opcode, inner_payload))
 }
 
-async fn handle_receive(mut stream: TcpStream, download_dir: &Path) -> Result<()> {
+/// Encrypts `inner_frame` (a complete frame's bytes — header + payload, as
+/// produced by e.g. `encode_simple`/`encode_file_reject`) under `session`
+/// and writes the resulting `EncryptedFrame` to `stream`.
+async fn write_encrypted_frame(
+    stream: &mut (impl AsyncWrite + Unpin),
+    session: &Session,
+    inner_frame: &[u8],
+) -> Result<()> {
+    let (nonce, ciphertext) = session.cipher.lock().unwrap().seal(inner_frame);
+    let outer = encode_encrypted_frame(nonce, &ciphertext);
+    stream.write_all(&outer).await.context("writing encrypted frame")?;
+    Ok(())
+}
+
+async fn handle_receive(mut stream: TcpStream, download_dir: &Path, session: Arc<Session>) -> Result<()> {
     // Phase 1: handshake.
-    let (opcode, payload) = read_frame(&mut stream).await?;
+    let (opcode, payload) = read_encrypted_frame(&mut stream, &session).await?;
     if opcode != Opcode::FileMeta {
-        stream
-            .write_all(&encode_file_reject("expected FILE_META first"))
+        write_encrypted_frame(&mut stream, &session, &encode_file_reject("expected FILE_META first"))
             .await
             .ok();
         anyhow::bail!("first frame on a file-transfer connection was {opcode:?}, not FileMeta");
@@ -87,17 +134,17 @@ async fn handle_receive(mut stream: TcpStream, download_dir: &Path) -> Result<()
 
     let dest = unique_destination(download_dir, &meta.name);
     let Some(dest) = dest else {
-        stream
-            .write_all(&encode_file_reject(
-                "could not choose a destination filename",
-            ))
-            .await
-            .ok();
+        write_encrypted_frame(
+            &mut stream,
+            &session,
+            &encode_file_reject("could not choose a destination filename"),
+        )
+        .await
+        .ok();
         anyhow::bail!("destination filename resolution failed for {:?}", meta.name);
     };
 
-    stream
-        .write_all(&encode_simple(Opcode::FileAccept))
+    write_encrypted_frame(&mut stream, &session, &encode_simple(Opcode::FileAccept))
         .await
         .context("sending FILE_ACCEPT")?;
     info!(name = %meta.name, size = meta.size, dest = %dest.display(), "receiving file");
@@ -108,26 +155,29 @@ async fn handle_receive(mut stream: TcpStream, download_dir: &Path) -> Result<()
         .with_context(|| format!("creating {}", dest.display()))?;
     let mut hasher = Sha256::new();
     let mut received: u64 = 0;
-    let mut reader = BufReader::new(stream);
 
     loop {
         if received >= meta.size {
             break;
         }
 
-        let mut header_buf = [0u8; HEADER_LEN];
-        if let Err(err) = reader.read_exact(&mut header_buf).await {
-            if err.kind() == io::ErrorKind::UnexpectedEof {
-                anyhow::bail!(
-                    "connection closed mid-transfer at {received}/{} bytes",
-                    meta.size
-                );
+        let (opcode, chunk_payload) = match read_encrypted_frame(&mut stream, &session).await {
+            Ok(v) => v,
+            Err(err) => {
+                // read_encrypted_frame wraps io errors via `.context(...)`,
+                // so check the source chain for a clean EOF rather than
+                // matching on `io::ErrorKind` directly here.
+                if err
+                    .chain()
+                    .any(|cause| matches!(cause.downcast_ref::<io::Error>(), Some(e) if e.kind() == io::ErrorKind::UnexpectedEof))
+                {
+                    anyhow::bail!("connection closed mid-transfer at {received}/{} bytes", meta.size);
+                }
+                return Err(err);
             }
-            return Err(err).context("reading chunk frame header");
-        }
-        let header = Header::decode(&header_buf)?;
+        };
 
-        match header.opcode {
+        match opcode {
             Opcode::TransferCancel => {
                 warn!(name = %meta.name, "transfer cancelled by sender");
                 drop(file);
@@ -135,11 +185,6 @@ async fn handle_receive(mut stream: TcpStream, download_dir: &Path) -> Result<()
                 return Ok(());
             }
             Opcode::Chunk => {
-                let mut chunk_payload = vec![0u8; header.payload_len as usize];
-                reader
-                    .read_exact(&mut chunk_payload)
-                    .await
-                    .context("reading chunk payload")?;
                 let chunk_header = ChunkHeader::decode(&chunk_payload)?;
                 let data = &chunk_payload[ChunkHeader::ENCODED_LEN..];
                 if data.len() != chunk_header.len as usize {
@@ -151,9 +196,7 @@ async fn handle_receive(mut stream: TcpStream, download_dir: &Path) -> Result<()
                     );
                 }
 
-                file.write_all(data)
-                    .await
-                    .context("writing chunk to disk")?;
+                file.write_all(data).await.context("writing chunk to disk")?;
                 hasher.update(data);
                 received += data.len() as u64;
             }
@@ -169,9 +212,7 @@ async fn handle_receive(mut stream: TcpStream, download_dir: &Path) -> Result<()
     if digest != meta.sha256 {
         warn!(name = %meta.name, "checksum mismatch, deleting partial file");
         tokio::fs::remove_file(&dest).await.ok();
-        let mut stream = reader.into_inner();
-        stream
-            .write_all(&encode_simple(Opcode::FileCorrupt))
+        write_encrypted_frame(&mut stream, &session, &encode_simple(Opcode::FileCorrupt))
             .await
             .ok();
         anyhow::bail!("SHA-256 mismatch for {:?}", meta.name);
