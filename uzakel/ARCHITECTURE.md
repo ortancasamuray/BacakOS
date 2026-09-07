@@ -2,12 +2,15 @@
 
 🌐 [Türkçe özet](ARCHITECTURE.tr.md) · **English**
 
-> **Status: both `daemon/` (Rust) and `android/` (Kotlin) have a first pass
-> implemented and match this document.** The Android build was verified end
-> to end with a real Gradle + Android SDK (`assembleDebug` produces a debug
-> APK, `lintDebug` passes) — see README.md. What's *not* verified yet is the
-> two sides actually talking to each other on real hardware, and pairing
-> still isn't enforced on the input/file sockets (§2.3, §5).
+> **Status: verified end-to-end on real hardware, pairing enforced.** A
+> physical Android phone and a live BacakOS session have discovered,
+> PIN-paired, moved the real cursor, and transferred a real file — all
+> confirmed via kernel-level capture, not just app-level logs (§6). Pairing
+> now gates both the input and file-transfer sockets: an unpaired sender's
+> traffic is dropped/rejected, confirmed by re-running the same real-device
+> test both before and after pairing. It's still IP-based, not
+> cryptographic — see `trust.rs`'s doc comment and §5 for exactly what that
+> does and doesn't guarantee.
 
 Two components, three network channels, one shared wire protocol.
 
@@ -113,14 +116,24 @@ via a desktop notification. A client sends `PAIR_REQUEST { pin }` on the
 discovery UDP socket; the daemon compares it and replies
 `PAIR_RESPONSE { accepted }`.
 
-**This is not yet a security boundary.** A correct PIN today only proves
-the daemon logged a match — nothing ties that approval to the input (UDP)
-or file-transfer (TCP) sockets, which currently accept packets from *any*
-sender on the LAN, paired or not, and there's no TLS/cert material
-exchanged at all. Wiring a trust store through to those two channels and
-picking one of the TLS approaches in §5 is the actual security work still
-open here; treat the current PIN check as a UX nicety ("here's the PIN the
-phone should show you"), not a guarantee.
+**This is an IP-based trust gate, not cryptographic authentication.** A
+correct PIN marks the client's IP trusted in a shared
+[`TrustStore`](../daemon/src/trust.rs), which `input_manager.rs` and
+`file_server.rs` both check before acting on anything — an unpaired
+sender's UDP input packets are silently dropped, and its TCP file-transfer
+connection gets an immediate `FILE_REJECT`. Confirmed on real hardware:
+before pairing, a real phone's trackpad drags produced zero kernel input
+events on the daemon side; after pairing, the same drags produced real
+`REL_X`/`REL_Y` events (§6).
+
+What this still isn't: an address is spoofable by a deliberately hostile
+device already on the LAN, there's no TLS/cert material exchanged, and
+trust is **in-memory only** — it doesn't survive a daemon restart, so
+Android's "Bağlan" (saved-host reconnect) now always re-runs the PIN dialog
+rather than connecting straight through, since it has no way to know
+whether the daemon still remembers it. Picking a real TLS/PSK approach
+(§5) is the next step if this needs to hold up against something more
+adversarial than "another device on the same LAN by accident."
 
 ---
 
@@ -130,11 +143,18 @@ phone should show you"), not a guarantee.
 daemon/src/
 ├── main.rs            # env-based config, binds all three sockets, opens /dev/uinput, spawns the three tasks
 ├── discovery.rs        # UDP broadcast responder; answers DISCOVER_REQUEST + PIN pairing (§2.3)
+├── trust.rs             # TrustStore — shared record of paired IPs, checked by input_manager + file_server
 ├── protocol.rs          # packet header/opcode definitions + encode/decode, shared by every module
-├── input_manager.rs     # UDP socket → parses input opcodes → replays via /dev/uinput
-└── file_server.rs       # TCP listener → chunked receive, SHA-256 verify, writes into ~/İndirilenler
+├── input_manager.rs     # UDP socket → checks TrustStore → parses input opcodes → replays via /dev/uinput
+└── file_server.rs       # TCP listener → checks TrustStore → chunked receive, SHA-256 verify, writes into ~/İndirilenler
 ```
 
+- **`trust.rs`** is one `TrustStore` (an `Arc<Mutex<HashSet<IpAddr>>>` behind
+  a small API), constructed once in `main.rs` and cloned into all three
+  tasks. `discovery.rs` is the only writer (`trust()` on a successful PIN
+  match); `input_manager.rs` and `file_server.rs` are read-only callers
+  (`is_trusted()`). IP-based, in-memory-only — see its doc comment and §2.3
+  for exactly what that does and doesn't guarantee.
 - **`input_manager.rs`** owns a virtual mouse and keyboard device created
   through `/dev/uinput` via the `input-linux` crate (registering every valid
   evdev keycode up front, plus the three mouse buttons and the X/Y/wheel
@@ -143,12 +163,15 @@ daemon/src/
   safety net for a client that sends raw deltas — but does **not** clamp
   pointer position itself: every event is `REL_X`/`REL_Y` (relative), so
   screen-edge clamping is entirely the compositor's job, same as for a real
-  mouse. Runs on a `tokio` task reading the UDP socket in a tight loop, and
+  mouse. Runs on a `tokio` task reading the UDP socket in a tight loop,
+  drops every packet from an address `TrustStore` doesn't recognize, and
   tracks a per-source-address last-seen `seq` so an out-of-order or
   duplicate UDP packet is dropped instead of moving the pointer backwards.
-- **`file_server.rs`** is a plain `tokio` TCP listener; each accepted
-  connection gets its own task running the receive side of the state
-  machine from §2.2, picking a collision-safe destination filename
+- **`file_server.rs`** is a plain `tokio` TCP listener; a connection from an
+  untrusted address gets an immediate `FILE_REJECT` and is dropped before
+  the handshake even starts. A trusted connection gets its own task running
+  the receive side of the state machine from §2.2, picking a collision-safe
+  destination filename
   (`name`, then `name (2)`, `name (3)`, …) the same way `altay`'s transfer
   module does on the desktop side. On successful verification it shells out
   to `notify-send` (a deliberate scope cut — see §5 — rather than speaking
@@ -241,10 +264,6 @@ control → transfer, and back).
 
 ## 5. Open questions / not yet decided
 
-- **Pairing isn't enforced yet.** The input and file-transfer sockets accept
-  from any LAN sender regardless of PIN pairing state — see the caveat in
-  §2.3. This is the biggest gap between "what's built" and "what would be
-  safe to expose beyond a trusted home LAN."
 - TLS material for the post-pairing sessions: self-signed cert pinned at
   pairing time (simplest, no CA involved) vs. a lighter PSK scheme keyed off
   the PIN exchange — and then actually gating the UDP/TCP sockets on it.
@@ -267,10 +286,13 @@ control → transfer, and back).
   a notification daemon at all. Real-hardware testing hit exactly this: the
   test session had no notification service running, so the PIN was only
   ever visible in the daemon's own log — a real UX gap, not just a nice-to-have.
-- `DeviceListScreen`'s "connect to a saved host" path uses the persisted IP
+- `DeviceListScreen`'s "Bağlan" (saved host) path uses the persisted IP
   as-is rather than re-scanning first; if the host's address changed since
-  it was saved, connecting silently fails instead of falling back to a
-  fresh discovery broadcast.
+  it was saved, the re-pairing attempt (now required every time, see §2.3)
+  just times out with "PIN yanlış veya cihaz yanıt vermedi" rather than
+  falling back to a fresh discovery broadcast to find the new address —
+  not silent anymore, but not a great error message for this specific
+  cause either.
 - `FileTransferManager` reads the whole file twice (once to hash, once to
   send) since `FILE_META`'s SHA-256 has to be known before streaming
   starts (§2.2) — an incrementally-hashed send (compute the digest as
@@ -342,3 +364,32 @@ temporary on-screen counters (`moveCount`, `sendErrorCount`, `lastError`)
 and capturing raw kernel events off `/dev/input/eventN` while the phone was
 actively driving it were what actually pinned down each bug. Both are worth
 reaching for again before assuming "no visible errors" means "working."
+
+### Pairing enforcement (`trust.rs`), verified the same way
+
+Once the input path was confirmed working, the same real phone + real
+daemon setup was used to verify pairing enforcement immediately after
+implementing it:
+
+1. Daemon restarted (fresh, empty `TrustStore`) while the phone still had
+   an open "connected" session from before the restart. Trackpad drags:
+   **0 kernel input events** on the daemon side — traffic from the
+   now-untrusted address is silently dropped, exactly as designed.
+2. Same phone, `Bağlan` on the saved host — which now always re-opens the
+   PIN dialog rather than connecting straight through (§2.3) — PIN entered,
+   `discovery.rs` logged `client paired successfully`, trackpad drags
+   immediately after: **224 real kernel events**.
+3. File-transfer rejection checked independently (not from the phone, to
+   keep the check fast): a `FILE_META` handshake sent from `127.0.0.1` —
+   genuinely untrusted, since only the phone's LAN address had paired —
+   got back `FILE_REJECT { "cihaz eşleştirilmemiş" }` and no file was
+   written to the downloads directory.
+
+The fix needed a small Android-side UX change alongside the daemon change:
+`DeviceListScreen`'s "Bağlan" button used to connect straight through for a
+saved host; now that trust is in-memory on the daemon and doesn't survive
+a restart, it always re-runs the PIN dialog instead (see the doc comment on
+that `Button`'s `onClick` in `DeviceListScreen.kt`) — connecting straight
+through would have silently produced exactly the "everything looks
+connected but nothing moves" symptom step 1 above deliberately reproduced
+to confirm the fix.
