@@ -70,6 +70,10 @@ libc    = { workspace = true, optional = true }
 # XDG user dirs (~/Pictures, ~/ etc) for the file browser.
 dirs    = { version = "5", optional = true }
 
+# QR code encoding for the Uzakel pairing panel. Same optional/runtime
+# gating as the other rasterisation deps above.
+qrcode  = { workspace = true, optional = true }
+
 # NOTE: the udev backend uses smithay's re-exported `rustix` (see
 # `smithay::reexports::rustix`). Pinning our own copy creates a parallel
 # rustix in the dep graph and the OFlags types stop matching across calls.
@@ -79,7 +83,7 @@ default = []
 # Enable the live Smithay-based runtime. Pulls in libwayland-server, libinput,
 # libudev, libdrm, libxkbcommon, libgbm, libegl, libseat — system dev headers
 # are required (installed via apt: libegl-dev libseat-dev libsystemd-dev …).
-runtime = ["dep:smithay", "dep:calloop", "dep:winit", "dep:fontdue", "dep:cosmic-text", "dep:zbus", "dep:image", "dep:resvg", "dep:freedesktop-icons", "dep:notify", "dep:libc", "dep:ttf-parser", "dep:dirs"]
+runtime = ["dep:smithay", "dep:calloop", "dep:winit", "dep:fontdue", "dep:cosmic-text", "dep:zbus", "dep:image", "dep:resvg", "dep:freedesktop-icons", "dep:notify", "dep:libc", "dep:ttf-parser", "dep:dirs", "dep:qrcode"]
 # Native-session backend: libseat + libudev + libinput + DRM/KMS + GBM + EGL.
 # Pulls every dependency `runtime` does, plus the udev / DRM / session pieces
 # of Smithay. Requires the same headers as `runtime` AND the DRM/KMS stack:

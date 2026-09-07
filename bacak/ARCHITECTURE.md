@@ -36,6 +36,7 @@ bacak/
 │  ├─ bacak-plugin-network/           # packaging-only stub (real code: compositor plugins/network.rs)
 │  ├─ bacak-plugin-audio/             # packaging-only stub (real code: compositor plugins/audio.rs)
 │  ├─ bacak-plugin-desktop-settings/  # packaging-only stub (real code: compositor plugins/desktop_settings.rs)
+│  ├─ bacak-plugin-uzakel/            # packaging-only stub (real code: compositor plugins/uzakel.rs)
 │  ├─ bacak-icons/                    # icon theme (packaging-only)
 │  ├─ bacak-desktop-defaults/         # default compositor.json + wallpaper + Firefox policy
 │  ├─ bacak-grub-theme/               # GRUB theme (packaging-only)
@@ -71,7 +72,9 @@ Smithay dependency itself, gated behind the same features.
 Optional runtime pieces are individually feature-gated so a plain
 `cargo check` on the workspace stays cheap: `fontdue`/`cosmic-text` (text
 shaping), `zbus` (AT-SPI2 accessibility bridge), `image`/`resvg`/
-`freedesktop-icons` (app icon loading), `notify` (filesystem watching).
+`freedesktop-icons` (app icon loading), `notify` (filesystem watching),
+`qrcode` (module data for the Uzakel pairing panel's QR, rasterised to RGBA
+by `src/qr.rs` — see §3's `plugins/uzakel.rs` row).
 
 ---
 
@@ -92,6 +95,7 @@ pair called from the compositor's tick loop:
 |---|---|---|---|
 | `plugins/control_center.rs` | Quick-settings box — Wi-Fi, Bluetooth, audio, brightness, dark mode, screenshot, power | `bt_poll()`, `wifi_poll()`, `audio` state | `build_bt_panel()`, `build_wifi_panel()` |
 | `plugins/desktop_settings.rs` | Wallpaper, hostname, auto-login, password change | `ds_tick()` | `build_ds_panel()` |
+| `plugins/uzakel.rs` | "Uzakel'e Bağlan" tile — QR code of the `uzakel-daemon`'s current pairing PIN + LAN address, so the Android app can scan instead of typing a PIN (see `../../uzakel/ARCHITECTURE.md` §2.3.1) | `read_uzakel_pairing_state()` (reads `~/.cache/uzakel/pairing.json`, written by the daemon) | `open_uzakel_panel()` |
 | `plugins/dock.rs` | Dock — pinned apps, running apps, launcher | — | — |
 | `plugins/apps_menu.rs` | Full app list | — | — |
 | `plugins/network.rs` | Wi-Fi connection logic (`nmcli`) | `wifi_connect()` | — |
@@ -146,7 +150,7 @@ shipping UI. The dock and control center that actually ship are
 ## 6. Packaging-only crates
 
 `bacak-plugin-network`, `bacak-plugin-audio`, `bacak-plugin-desktop-settings`,
-`bacak-icons`, `bacak-desktop-defaults`, `bacak-grub-theme`,
+`bacak-plugin-uzakel`, `bacak-icons`, `bacak-desktop-defaults`, `bacak-grub-theme`,
 `bacak-plymouth-theme`, and `bacakos-meta` carry no logic — each is a
 `[package.metadata.deb]` manifest (asset files + Depends list) so `apt` can
 install/version a piece of the desktop (icon theme, GRUB/Plymouth branding,
