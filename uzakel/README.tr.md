@@ -2,9 +2,12 @@
 
 🌐 **Türkçe** · [English](README.md)
 
-> **Durum: tasarım aşaması.** Henüz hiç kod yazılmadı — bu belge ve
-> [ARCHITECTURE.tr.md](ARCHITECTURE.tr.md), hedeflenen sistemi anlatır.
-> Aşağıdakilerin hiçbiri "bitti" olarak okunmamalı.
+> **Durum: daemon uygulandı, istemci henüz başlamadı.** `daemon/` derleniyor,
+> birim testlerini geçiyor ve keşif/eşleştirme, girdi replay'i, dosya
+> alımını uçtan uca uyguluyor. `android/` henüz yok. Eşleştirme, girdi/dosya
+> soketlerinde henüz zorunlu kılınmıyor — bkz.
+> [ARCHITECTURE.tr.md](ARCHITECTURE.tr.md)'nin "açık sorular" bölümündeki
+> güvenlik notu.
 
 Uzakel, BacakOS için iki parçalı bir uzaktan kontrol ve dosya transferi
 ekosistemidir: bir telefonu BacakOS makinesi için trackpad/klavye/dosya
@@ -52,16 +55,22 @@ uzakel/
         └── ui/                # Compose ekranları: trackpad, klavye, cihaz listesi, transfer paneli
 ```
 
-## Derleme (kod yazıldığında)
+## Derleme
 
 ```sh
-# Daemon
-cd daemon && cargo build --release
-systemctl --user enable --now uzakel-daemon
+# Daemon (uygulandı)
+cd daemon && cargo build --release && cargo test
+UZAKEL_DOWNLOAD_DIR=~/İndirilenler ./target/release/uzakel-daemon   # veya (paketlendiğinde): systemctl --user enable --now uzakel-daemon
 
-# Android
+# Android (henüz başlamadı)
 cd android && ./gradlew assembleDebug
 ```
+
+Daemon'ın `/dev/uinput`'ı açabilmesi için çalıştıran kullanıcının `uinput`
+grubunda olması gerekir; açamazsa bu gereksinimi net şekilde belirten bir
+hata loglar. Eşleştirme PIN'i ve dosya-alındı bildirimleri için
+`notify-send`'e çıkar — bildirimler görünmüyorsa `libnotify-bin` (veya
+eşdeğerini) kurun.
 
 ## Lisans
 
