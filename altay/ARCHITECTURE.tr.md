@@ -41,6 +41,7 @@ Garantileri çalıştır: `cargo test` (37 test; güvenlik-kritik olanlar dahil)
 | `preview` | Önizleme paneli: görsel (küçük resim önbelleği) + **PDF** + **video karesi** + metin. |
 | `transfer` | Arka plan kopyala/taşı kuyruğu: duraklat/devam/iptal, canlı ilerleme. |
 | `ui` (`ui/main.slint`) | Kenar çubuğu, **tıklanır breadcrumb**, ızgara/liste/sıkışık, **yakınlaştırılabilir ızgara**, önizleme/transfer panelleri, **bağlam menüsü** (sağ-tık/uzun-basış), **klavye kısayolları**, **ayarlar** (gizli dosya, **koyu/açık tema**, varsayılan görünüm, **dil**). |
+| `userdirs` | İlk çalıştırmada standart XDG kullanıcı dizinlerini Türkçe adlara çevirir — var olan İngilizce dizini yeniden adlandırır veya Türkçe dizini oluşturur, `~/.config/user-dirs.dirs`'i günceller. Bir kez çalışır (işaretçi dosyasıyla korunur), var olan Türkçe dizinin üzerine asla yazmaz. |
 
 ## Dokunmatik / jest / klavye
 
