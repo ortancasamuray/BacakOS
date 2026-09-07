@@ -2,9 +2,10 @@
 
 🌐 [Türkçe özet](ARCHITECTURE.tr.md) · **English**
 
-> **Status: design phase — nothing here is implemented yet.** This document
-> is the target design the first implementation should follow; treat every
-> "will"/"is" below as intent, not a description of existing code.
+> **Status: `daemon/` (Rust) is implemented and matches this document;
+> `android/` doesn't exist yet.** Where this doc describes daemon behavior,
+> it's describing real code in `daemon/src/`. Where it describes the Android
+> client, it's still a plan.
 
 Two components, three network channels, one shared wire protocol.
 
@@ -24,9 +25,9 @@ Two components, three network channels, one shared wire protocol.
 │  │ File       │◀────────────┼──────────────────────▶│ file_server │──▶ ~/İndirilenler│
 │  │ Transfer   │             │  (reliable, chunked) │  └────────────┘               │
 │  └───────────┘             │                      │                               │
-│  ┌───────────┐  mDNS/UDP    │   discovery           │  ┌────────────┐               │
+│  ┌───────────┐  UDP bcast   │   discovery           │  ┌────────────┐               │
 │  │ Discovery  │◀────────────┼──────────────────────▶│ discovery   │               │
-│  └───────────┘  bcast :5353 │                      │  └────────────┘               │
+│  └───────────┘  :45922      │                      │  └────────────┘               │
 └─────────────────────────────┘                    └───────────────────────────────┘
 ```
 
@@ -34,9 +35,16 @@ Three independent channels, each suited to its traffic:
 
 | Channel | Transport | Why |
 |---|---|---|
-| Discovery | mDNS, falling back to UDP broadcast on port 5353 | Zero-config LAN pairing; a lost broadcast just means the next periodic one succeeds. |
-| Input (mouse/keyboard) | UDP, custom port (default 9876) | Latency matters more than reliability — a dropped `MOUSE_MOVE` delta is imperceptible; a retransmitted stale one would feel laggy. |
-| File transfer | TCP, custom port (default 9877) | Correctness matters more than latency — files must arrive byte-exact. |
+| Discovery + pairing | UDP broadcast, port 45922 (`UZAKEL_DISCOVERY_PORT`) | Zero-config LAN pairing; a lost broadcast just means the next periodic one succeeds. **Not real mDNS** — see the note below. |
+| Input (mouse/keyboard) | UDP, port 9876 (`UZAKEL_INPUT_PORT`) | Latency matters more than reliability — a dropped `MOUSE_MOVE` delta is imperceptible; a retransmitted stale one would feel laggy. |
+| File transfer | TCP, port 9877 (`UZAKEL_FILE_PORT`) | Correctness matters more than latency — files must arrive byte-exact. |
+
+**On the discovery port:** the original plan here was mDNS on the standard
+5353 port. The implementation is a plain UDP broadcast responder instead, on
+a dedicated port (45922) — `avahi-daemon` already owns 5353 on most desktop
+Linux systems, and a hand-rolled responder sharing that port with genuine
+mDNS/DNS-SD traffic would risk confusing (or being confused by) it. Real
+mDNS support, if wanted later, is still open — see §5.
 
 ---
 
@@ -87,19 +95,30 @@ A transfer is one TCP connection, one file, three phases:
    `FILE_CORRUPT` and the receiver deletes the partial file rather than
    keeping a silently-truncated one.
 
-Direction is symmetric — the same state machine runs whichever side is
-sending (Android → BacakOS or BacakOS → Android); only who initiates the
-TCP connection differs.
+Direction is meant to be symmetric — the same state machine on whichever
+side is sending — but **only the receive side (Android → BacakOS) is
+implemented in `file_server.rs` today**; a daemon-initiated send
+(BacakOS → Android) isn't wired up yet (§5). `TRANSFER_CANCEL` in the
+current code is read by the receiver in place of the next `CHUNK`, so
+today it's the sender that aborts a transfer by sending it instead of
+more data — not something the receiver sends back.
 
 ### 2.3 Pairing
 
-First contact between a client and a daemon goes through a PIN handshake
-before either side accepts input or file packets from the other: the
-daemon displays a short PIN (desktop notification), the client sends it
-back over the discovery response channel, and the daemon marks that
-client's certificate/key as trusted for future TLS-wrapped sessions. This
-is what stands between "any phone on the LAN" and "a phone the user
-actually approved."
+`discovery.rs` generates a fresh 6-digit PIN at startup (and again after
+every successful pairing, so a captured PIN can't be replayed) and shows it
+via a desktop notification. A client sends `PAIR_REQUEST { pin }` on the
+discovery UDP socket; the daemon compares it and replies
+`PAIR_RESPONSE { accepted }`.
+
+**This is not yet a security boundary.** A correct PIN today only proves
+the daemon logged a match — nothing ties that approval to the input (UDP)
+or file-transfer (TCP) sockets, which currently accept packets from *any*
+sender on the LAN, paired or not, and there's no TLS/cert material
+exchanged at all. Wiring a trust store through to those two channels and
+picking one of the TLS approaches in §5 is the actual security work still
+open here; treat the current PIN check as a UX nicety ("here's the PIN the
+phone should show you"), not a guarantee.
 
 ---
 
@@ -107,36 +126,40 @@ actually approved."
 
 ```
 daemon/src/
-├── main.rs            # arg parsing, systemd notify, wires the three services together
-├── discovery.rs        # mDNS/UDP broadcast responder; answers with daemon version + pairing state
-├── protocol.rs          # packet header/opcode definitions shared by input_manager and file_server
+├── main.rs            # env-based config, binds all three sockets, opens /dev/uinput, spawns the three tasks
+├── discovery.rs        # UDP broadcast responder; answers DISCOVER_REQUEST + PIN pairing (§2.3)
+├── protocol.rs          # packet header/opcode definitions + encode/decode, shared by every module
 ├── input_manager.rs     # UDP socket → parses input opcodes → replays via /dev/uinput
-└── file_server.rs       # TCP listener → chunked receive/send, SHA-256, writes into ~/İndirilenler
+└── file_server.rs       # TCP listener → chunked receive, SHA-256 verify, writes into ~/İndirilenler
 ```
 
 - **`input_manager.rs`** owns a virtual mouse and keyboard device created
-  through `/dev/uinput` (via the `input-linux` or `evdev` crate). It applies
-  an acceleration curve to raw deltas before injecting them, and clamps
-  synthesized pointer motion to the compositor's known screen bounds so a
-  burst of packets can't fling the cursor off-screen. Runs on a `tokio` task
-  reading the UDP socket in a tight loop — no channel/queueing layer between
-  socket and injection, since added latency there defeats the point of using
-  UDP in the first place.
+  through `/dev/uinput` via the `input-linux` crate (registering every valid
+  evdev keycode up front, plus the three mouse buttons and the X/Y/wheel
+  relative axes). It applies a mild acceleration curve to raw deltas before
+  injecting them — on top of whatever curve the client already applied, as a
+  safety net for a client that sends raw deltas — but does **not** clamp
+  pointer position itself: every event is `REL_X`/`REL_Y` (relative), so
+  screen-edge clamping is entirely the compositor's job, same as for a real
+  mouse. Runs on a `tokio` task reading the UDP socket in a tight loop, and
+  tracks a per-source-address last-seen `seq` so an out-of-order or
+  duplicate UDP packet is dropped instead of moving the pointer backwards.
 - **`file_server.rs`** is a plain `tokio` TCP listener; each accepted
-  connection gets its own task running the three-phase state machine from
-  §2.2. On successful verification it fires a desktop notification (via
-  `libnotify`/the freedesktop notification bus — the same mechanism
-  `bacak-compositor`'s `plugins/*` already use elsewhere in BacakOS) naming
-  the received file.
-- **`discovery.rs`** answers broadcast/mDNS queries with the daemon's
-  version and current pairing state (accepting new pairs / locked to
-  already-paired clients only), and is the channel the PIN handshake (§2.3)
-  rides on before the UDP/TCP channels are opened.
-- Runs as a `systemd --user` service (see README) so it starts with the
-  user's session and never needs root — it opens `/dev/uinput` via the
-  `uinput` group membership BacakOS's session setup grants the user, the
-  same pattern `bacak/packaging/bacak-session` uses for other user-scope
-  desktop services.
+  connection gets its own task running the receive side of the state
+  machine from §2.2, picking a collision-safe destination filename
+  (`name`, then `name (2)`, `name (3)`, …) the same way `altay`'s transfer
+  module does on the desktop side. On successful verification it shells out
+  to `notify-send` (a deliberate scope cut — see §5 — rather than speaking
+  `org.freedesktop.Notifications` over D-Bus directly).
+- **`discovery.rs`** answers `DISCOVER_REQUEST` with the daemon's name and
+  version, and runs the PIN pairing handshake from §2.3 — both on the same
+  UDP broadcast socket.
+- Intended to run as a `systemd --user` service (see README) so it starts
+  with the user's session and never needs root — it opens `/dev/uinput` via
+  `uinput` group membership, which BacakOS's session setup would need to
+  grant the user the same way `bacak/packaging/bacak-session` does for other
+  user-scope desktop services. The actual systemd unit file isn't written
+  yet (§5).
 
 ---
 
@@ -176,13 +199,25 @@ android/app/src/main/kotlin/org/anadolupanteri/uzakel/
 
 ## 5. Open questions / not yet decided
 
-- Exact crate choice for `/dev/uinput` access (`input-linux` vs. hand-rolled
-  ioctl bindings) — needs a spike against a real BacakOS session running
-  `bacak-compositor` under `udev`/DRM.
+- **Pairing isn't enforced yet.** The input and file-transfer sockets accept
+  from any LAN sender regardless of PIN pairing state — see the caveat in
+  §2.3. This is the biggest gap between "what's built" and "what would be
+  safe to expose beyond a trusted home LAN."
 - TLS material for the post-pairing sessions: self-signed cert pinned at
   pairing time (simplest, no CA involved) vs. a lighter PSK scheme keyed off
-  the PIN exchange.
+  the PIN exchange — and then actually gating the UDP/TCP sockets on it.
+- Daemon-initiated file sends (BacakOS → Android) — `file_server.rs` only
+  implements the receive side right now.
+- Real mDNS/DNS-SD instead of the plain UDP broadcast responder on 45922
+  (would need an mDNS crate or hand-rolled multicast DNS records).
+- A `systemd --user` unit file + packaging (`.deb`) — the daemon runs fine
+  from the shell today but isn't installed as a service anywhere yet.
 - Whether `MOUSE_SCROLL` needs its own acceleration curve distinct from
   `MOUSE_MOVE`'s, once real trackpad use surfaces a preference.
 - Multi-client behavior: can two phones control the same daemon
-  simultaneously, or does pairing a new client evict the previous one?
+  simultaneously, or does pairing a new client evict the previous one? Right
+  now every paired-or-not client is accepted equally, so this doesn't yet
+  apply in practice.
+- Replacing the `notify-send` shell-out in `discovery.rs`/`file_server.rs`
+  with a native `org.freedesktop.Notifications` D-Bus call (e.g. via
+  `zbus`), removing the runtime dependency on `libnotify-bin`.
