@@ -1,5 +1,7 @@
 # Uzakel — BacakOS Remote Control & File Transfer
 
+🌐 [Türkçe](README.tr.md) · **English**
+
 > **Status: design phase.** No code has been written yet — this document and
 > [ARCHITECTURE.md](ARCHITECTURE.md) describe the intended system. Nothing
 > below should be read as "done."
