@@ -1,5 +1,7 @@
 # kur — BacakOS System Installer
 
+🌐 [Türkçe](README.tr.md) · **English**
+
 `kur` ("install" in Turkish) is BacakOS's graphical system installer for
 Debian 13 (Trixie): a Slint UI wizard — locale, timezone, disk partitioning,
 account creation, install — over a pure-Rust backend with no shell-out for
