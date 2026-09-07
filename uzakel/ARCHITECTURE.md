@@ -2,15 +2,17 @@
 
 🌐 [Türkçe özet](ARCHITECTURE.tr.md) · **English**
 
-> **Status: verified end-to-end on real hardware, pairing enforced.** A
-> physical Android phone and a live BacakOS session have discovered,
-> PIN-paired, moved the real cursor, and transferred a real file — all
-> confirmed via kernel-level capture, not just app-level logs (§6). Pairing
-> now gates both the input and file-transfer sockets: an unpaired sender's
-> traffic is dropped/rejected, confirmed by re-running the same real-device
-> test both before and after pairing. It's still IP-based, not
-> cryptographic — see `trust.rs`'s doc comment and §5 for exactly what that
-> does and doesn't guarantee.
+> **Status: verified end-to-end on real hardware, pairing enforced,
+> traffic encrypted.** A physical Android phone and a live BacakOS
+> session have discovered, PIN-paired, moved the real cursor, and
+> transferred a real file — all confirmed via kernel-level capture, not
+> just app-level logs (§6). Pairing now runs a real ephemeral X25519 ECDH
+> exchange with a PIN-bound confirmation tag, and every input/file frame
+> after that is ChaCha20-Poly1305-encrypted under the derived session
+> keys (§2.3) — not just gated by IP. The Rust and Kotlin derivations were
+> cross-checked byte-for-byte with a fixed known-answer test vector before
+> being wired together (`daemon/examples/kat.rs`). See §2.3 for exactly
+> what this scheme does and doesn't guarantee against an active attacker.
 
 Two components, three network channels, one shared wire protocol.
 
@@ -112,28 +114,70 @@ more data — not something the receiver sends back.
 
 `discovery.rs` generates a fresh 6-digit PIN at startup (and again after
 every successful pairing, so a captured PIN can't be replayed) and shows it
-via a desktop notification. A client sends `PAIR_REQUEST { pin }` on the
-discovery UDP socket; the daemon compares it and replies
-`PAIR_RESPONSE { accepted }`.
+via a desktop notification. A client sends `PAIR_REQUEST { pin, client_pubkey }`
+on the discovery UDP socket — `client_pubkey` is a fresh, single-use X25519
+public key generated for this pairing attempt. The daemon generates its own
+ephemeral X25519 keypair, does the ECDH, and replies
+`PAIR_RESPONSE { accepted, daemon_pubkey, confirm_tag }`.
 
-**This is an IP-based trust gate, not cryptographic authentication.** A
-correct PIN marks the client's IP trusted in a shared
-[`TrustStore`](../daemon/src/trust.rs), which `input_manager.rs` and
-`file_server.rs` both check before acting on anything — an unpaired
-sender's UDP input packets are silently dropped, and its TCP file-transfer
-connection gets an immediate `FILE_REJECT`. Confirmed on real hardware:
-before pairing, a real phone's trackpad drags produced zero kernel input
-events on the daemon side; after pairing, the same drags produced real
-`REL_X`/`REL_Y` events (§6).
+#### 2.3.1 Session key derivation
 
-What this still isn't: an address is spoofable by a deliberately hostile
-device already on the LAN, there's no TLS/cert material exchanged, and
-trust is **in-memory only** — it doesn't survive a daemon restart, so
-Android's "Bağlan" (saved-host reconnect) now always re-runs the PIN dialog
-rather than connecting straight through, since it has no way to know
-whether the daemon still remembers it. Picking a real TLS/PSK approach
-(§5) is the next step if this needs to hold up against something more
-adversarial than "another device on the same LAN by accident."
+Both sides derive the same key material from the ECDH shared secret via
+HKDF-SHA256 (`daemon/src/crypto.rs`, mirrored bit-for-bit by
+`android/.../crypto/UzakelCrypto.kt`):
+
+```
+shared      = X25519(my_ephemeral_secret, their_ephemeral_pubkey)
+prk         = HKDF-Extract(salt = "uzakel-pairing-v1", ikm = shared)
+transcript  = client_pubkey || daemon_pubkey
+c2s_key     = HKDF-Expand(prk, info = "uzakel c2s" || transcript)
+s2c_key     = HKDF-Expand(prk, info = "uzakel s2c" || transcript)
+confirm_key = HKDF-Expand(prk, info = "uzakel confirm" || transcript || pin)
+confirm_tag = HMAC-SHA256(confirm_key, transcript)
+```
+
+`c2s_key` encrypts client→daemon traffic, `s2c_key` encrypts daemon→client
+traffic — directional keys so a compromised nonce counter on one direction
+can't be replayed against the other. `confirm_tag` is what actually ties the
+exchange to the PIN: the daemon includes it in `PAIR_RESPONSE`, and the
+Android client independently recomputes it from its own derivation before
+trusting the response. A mismatch (wrong PIN, or a man-in-the-middle who
+intercepted the ECDH exchange but doesn't know the PIN) makes the client
+reject the pairing outright rather than encrypting anything under
+attacker-controlled keys.
+
+On a successful pairing, the daemon stores `(c2s_key, s2c_key)` in a
+[`TrustStore`](../daemon/src/trust.rs) session keyed by the client's IP.
+From then on, **every frame on the input and file-transfer sockets is
+wrapped in `ENCRYPTED_FRAME { nonce: [u8; 12], ciphertext }`** — a
+ChaCha20-Poly1305 AEAD ciphertext of the real inner frame, with a plain
+little-endian counter (zero-extended to 12 bytes) as the nonce. Both
+`input_manager.rs` and `file_server.rs` require this wrapper — there is
+**no plaintext fallback** once a session exists; an un-decryptable or
+replayed (counter ≤ highest seen) frame is dropped exactly like an
+unpaired one always was. Confirmed on real hardware: before pairing, a
+real phone's trackpad drags produced zero kernel input events on the
+daemon side; after pairing, the same drags produced real `REL_X`/`REL_Y`
+events (§6) — now carried as encrypted frames rather than plaintext ones.
+
+**What this scheme does and doesn't guarantee:** it's ephemeral X25519 +
+a PIN-bound confirmation tag, not a full PAKE (Password-Authenticated Key
+Exchange). Confidentiality against a passive eavesdropper on the LAN is
+real — traffic is genuinely encrypted, not just IP-gated. Active-attacker
+resistance depends entirely on the PIN: an attacker who intercepts the
+ECDH exchange *and* already knows the PIN (e.g. shoulder-surfed it) can
+still complete a valid-looking handshake, because the PIN itself carries
+no brute-force resistance of its own (a real PAKE like SPAKE2 would fold
+the PIN into the key exchange itself, making an offline guess-and-check
+attack on it infeasible; this scheme instead uses the PIN only to
+authenticate a key exchange that already happened). Session trust is also
+still **in-memory only** — it doesn't survive a daemon restart, so
+Android's "Bağlan" (saved-host reconnect) always re-runs the full PIN +
+ECDH handshake rather than reusing old keys, since it has no way to know
+whether the daemon still remembers the old session (and reusing keys
+across daemon restarts would risk nonce-counter reuse anyway). A real
+TLS/PSK or SPAKE2 approach (§5) remains the next step if this needs to
+hold up against a more capable active attacker.
 
 ---
 
@@ -142,19 +186,29 @@ adversarial than "another device on the same LAN by accident."
 ```
 daemon/src/
 ├── main.rs            # env-based config, binds all three sockets, opens /dev/uinput, spawns the three tasks
-├── discovery.rs        # UDP broadcast responder; answers DISCOVER_REQUEST + PIN pairing (§2.3)
-├── trust.rs             # TrustStore — shared record of paired IPs, checked by input_manager + file_server
+├── discovery.rs        # UDP broadcast responder; answers DISCOVER_REQUEST + runs the ECDH pairing handshake (§2.3)
+├── crypto.rs            # X25519 ECDH + HKDF-SHA256 key derivation + ChaCha20-Poly1305 seal/open (§2.3.1)
+├── trust.rs             # TrustStore — per-IP session (derived keys + AEAD state), checked by input_manager + file_server
 ├── protocol.rs          # packet header/opcode definitions + encode/decode, shared by every module
-├── input_manager.rs     # UDP socket → checks TrustStore → parses input opcodes → replays via /dev/uinput
-└── file_server.rs       # TCP listener → checks TrustStore → chunked receive, SHA-256 verify, writes into ~/İndirilenler
+├── input_manager.rs     # UDP socket → looks up TrustStore session → decrypts → parses input opcodes → replays via /dev/uinput
+└── file_server.rs       # TCP listener → looks up TrustStore session → decrypts/encrypts frames → chunked receive, SHA-256 verify, writes into ~/İndirilenler
 ```
 
-- **`trust.rs`** is one `TrustStore` (an `Arc<Mutex<HashSet<IpAddr>>>` behind
-  a small API), constructed once in `main.rs` and cloned into all three
-  tasks. `discovery.rs` is the only writer (`trust()` on a successful PIN
-  match); `input_manager.rs` and `file_server.rs` are read-only callers
-  (`is_trusted()`). IP-based, in-memory-only — see its doc comment and §2.3
-  for exactly what that does and doesn't guarantee.
+- **`crypto.rs`** is the ECDH/HKDF/AEAD primitives from §2.3.1:
+  `EphemeralKeypair::generate()`/`derive()` for the handshake, and
+  `Cipher`/`Opener` wrapping ChaCha20-Poly1305 with a monotonic
+  counter-nonce and replay rejection. Independently cross-checked against
+  a parallel Kotlin/BouncyCastle implementation via a fixed known-answer
+  test vector (`daemon/examples/kat.rs`) before either side trusted the
+  other's bytes.
+- **`trust.rs`** is one `TrustStore` (an `Arc<Mutex<HashMap<IpAddr, Session>>>`
+  behind a small API), constructed once in `main.rs` and cloned into all
+  three tasks. `discovery.rs` is the only writer (`trust()` after a
+  confirm-tag-verified pairing, storing the derived `Cipher`/`Opener` pair);
+  `input_manager.rs` and `file_server.rs` are read-only callers (`session()`)
+  that use the stored keys to decrypt/encrypt every frame. Still IP-keyed
+  and in-memory-only — see its doc comment and §2.3.1 for exactly what that
+  does and doesn't guarantee.
 - **`input_manager.rs`** owns a virtual mouse and keyboard device created
   through `/dev/uinput` via the `input-linux` crate (registering every valid
   evdev keycode up front, plus the three mouse buttons and the X/Y/wheel
@@ -164,14 +218,19 @@ daemon/src/
   pointer position itself: every event is `REL_X`/`REL_Y` (relative), so
   screen-edge clamping is entirely the compositor's job, same as for a real
   mouse. Runs on a `tokio` task reading the UDP socket in a tight loop,
-  drops every packet from an address `TrustStore` doesn't recognize, and
-  tracks a per-source-address last-seen `seq` so an out-of-order or
-  duplicate UDP packet is dropped instead of moving the pointer backwards.
+  drops every packet from an address `TrustStore` has no session for and
+  every `ENCRYPTED_FRAME` that fails to decrypt/authenticate under that
+  session's key (§2.3.1), and tracks a per-source-address last-seen `seq`
+  (read from the *decrypted* inner packet) so an out-of-order or duplicate
+  packet is dropped instead of moving the pointer backwards.
 - **`file_server.rs`** is a plain `tokio` TCP listener; a connection from an
-  untrusted address gets an immediate `FILE_REJECT` and is dropped before
-  the handshake even starts. A trusted connection gets its own task running
-  the receive side of the state machine from §2.2, picking a collision-safe
-  destination filename
+  address `TrustStore` has no session for gets an immediate `FILE_REJECT`
+  and is dropped before the handshake even starts — this initial rejection
+  is the one frame on this channel still sent in plaintext, since no
+  session key exists yet to encrypt it under. A trusted connection gets its
+  own task running the receive side of the state machine from §2.2 over
+  `ENCRYPTED_FRAME`-wrapped traffic in both directions, picking a
+  collision-safe destination filename
   (`name`, then `name (2)`, `name (3)`, …) the same way `altay`'s transfer
   module does on the desktop side. On successful verification it shells out
   to `notify-send` (a deliberate scope cut — see §5 — rather than speaking
@@ -193,8 +252,9 @@ daemon/src/
 ```
 android/app/src/main/kotlin/org/anadolupanteri/uzakel/
 ├── protocol/      # Protocol.kt — byte-for-byte Kotlin mirror of daemon/src/protocol.rs
+├── crypto/        # UzakelCrypto.kt — X25519/HKDF/ChaCha20-Poly1305, the Kotlin twin of daemon/src/crypto.rs (§2.3.1)
 ├── discovery/     # SavedHostsStore: SharedPreferences-backed list of previously-paired hosts
-├── network/       # NetworkClient: discovery scan, PIN pairing, InputChannel (UDP), sendFile (TCP)
+├── network/       # NetworkClient: discovery scan, ECDH+PIN pairing, encrypted InputChannel (UDP), encrypted sendFile (TCP)
 ├── input/         # TrackpadView (multi-touch), KeyCodes (evdev keycode table), IME→typeChar bridge
 ├── transfer/      # FileTransferManager: SAF file picking, SHA-256, progress via StateFlow
 ├── ui/            # UzakelApp (root), DeviceListScreen, ControlScreen, TransferScreen
@@ -235,13 +295,28 @@ control → transfer, and back).
   key up/down state to the kernel, holding a modifier chip while typing via
   the IME bridge produces genuine combos (e.g. Ctrl+C) even though the two
   code paths never coordinate directly.
+- **`crypto/UzakelCrypto.kt`** is the Kotlin twin of `daemon/src/crypto.rs`
+  (§2.3.1) — `EphemeralKeypair.generate()`/`derive()` for the handshake,
+  `Cipher`/`Opener` wrapping BouncyCastle's ChaCha20-Poly1305 with the same
+  counter-nonce and replay-rejection scheme. BouncyCastle rather than
+  `javax.crypto`, since Android's own X25519 support only arrives on API
+  33+ while this app's `minSdk` is 26. Cross-checked byte-for-byte against
+  the Rust side via a fixed known-answer test vector before being wired
+  into `NetworkClient`.
 - **`network/NetworkClient`** — `discoverHosts()` broadcasts
   `DISCOVER_REQUEST` and collects responses for a fixed window; `pair()`
-  sends `PAIR_REQUEST { pin }` and waits for one `PAIR_RESPONSE`;
-  `InputChannel` is a small fire-and-forget UDP wrapper owning the
-  monotonic `seq` counter from §2.1; `sendFile()` runs the three-phase
-  upload from §2.2 and treats a read timeout on the trailer frame as
-  success, since the daemon only ever speaks up on `FILE_CORRUPT`.
+  generates an ephemeral keypair, sends `PAIR_REQUEST { pin, client_pubkey }`,
+  and on `PAIR_RESPONSE` locally recomputes and checks `confirm_tag` before
+  trusting the daemon's keys, returning a `PairedSession` (address + both
+  directional session keys) rather than a plain boolean — a confirm-tag
+  mismatch is treated the same as a wrong PIN. `InputChannel` is a small
+  fire-and-forget UDP wrapper that encrypts every packet via a `Cipher`
+  before sending, wrapping it in `ENCRYPTED_FRAME`, and owns the monotonic
+  `seq` counter from §2.1 (carried inside the encrypted payload); `sendFile()`
+  runs the three-phase upload from §2.2 with every frame in both directions
+  wrapped/unwrapped via `Cipher`/`Opener`, and treats a read timeout on the
+  trailer frame as success, since the daemon only ever speaks up on
+  `FILE_CORRUPT`.
 - **`transfer/FileTransferManager`** uses Android's Storage Access
   Framework for picking a file to send, so it never needs broad storage
   permissions — matching the "no shell-out, sandboxed by design" instinct
@@ -264,9 +339,11 @@ control → transfer, and back).
 
 ## 5. Open questions / not yet decided
 
-- TLS material for the post-pairing sessions: self-signed cert pinned at
-  pairing time (simplest, no CA involved) vs. a lighter PSK scheme keyed off
-  the PIN exchange — and then actually gating the UDP/TCP sockets on it.
+- ~~TLS material for the post-pairing sessions~~ — **done**, via ephemeral
+  X25519 ECDH + PIN-bound confirmation + ChaCha20-Poly1305 (§2.3.1), not
+  TLS/certs. Still open: upgrading the PIN check itself to a real PAKE
+  (e.g. SPAKE2) so a PIN alone can't authenticate a session an active
+  attacker already intercepted — see §2.3.1's caveat.
 - Daemon-initiated file sends (BacakOS → Android) — `file_server.rs` only
   implements the receive side right now.
 - Real mDNS/DNS-SD instead of the plain UDP broadcast responder on 45922
