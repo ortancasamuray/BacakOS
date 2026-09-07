@@ -30,6 +30,9 @@ pub mod text;
 pub mod icons;
 
 #[cfg(feature = "runtime")]
+pub mod qr;
+
+#[cfg(feature = "runtime")]
 pub mod blur;
 
 #[cfg(feature = "runtime")]

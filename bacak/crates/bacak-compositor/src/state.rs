@@ -341,6 +341,23 @@ pub struct TitleDrag {
 /// logical pixels.
 pub(crate) const LABEL_SUPERSAMPLE: i32 = 2;
 
+/// Minimal percent-encoding for a single query-string value — just enough
+/// for a daemon display name (spaces, Turkish characters, `&`/`=` if
+/// someone gets creative with `UZAKEL_DAEMON_NAME`) inside the Uzakel
+/// pairing QR's `uzakel://pair?...&name=` param. Not a general URI encoder.
+fn urlencode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for byte in s.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*byte as char)
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
 fn cc_rasterize(
     text: Option<&TextRenderer>,
     s: &str,
@@ -999,6 +1016,9 @@ pub struct BacakState {
     pub audio_panel: Option<AudioPanel>,
     /// Microphone input device picker, if open (tapping the Control Center's mic tile).
     pub mic_panel: Option<AudioPanel>,
+    /// Uzakel pairing QR panel, if open (tapping the Control Center's
+    /// "Uzakel'e Bağlan" tile) — see `plugins/uzakel.rs`.
+    pub uzakel_panel: Option<crate::plugins::control_center::UzakelPanel>,
     /// Persistent `bluetoothctl` coprocess, started when the BT panel first opens
     /// and kept alive for the session (so pairings/agent prompts work).
     pub btctl: Option<crate::bluetooth::BtCtl>,
@@ -1523,6 +1543,7 @@ impl BacakState {
             bt_panel: None,
             audio_panel: None,
             mic_panel: None,
+            uzakel_panel: None,
             btctl: None,
             bt_last_pk: None,
             bt_paired: std::collections::HashSet::new(),
@@ -4152,6 +4173,8 @@ impl BacakState {
         self.control_center = None;
         self.wifi_panel = None;
         self.bt_panel = None;
+        self.uzakel_panel = None;
+        self.uzakel_panel = None;
         self.close_overview();
         let all = crate::icons::list_desktop_apps();
         if all.is_empty() {
@@ -4602,6 +4625,7 @@ impl BacakState {
         self.apps_menu = None;
         self.wifi_panel = None;
         self.bt_panel = None;
+        self.uzakel_panel = None;
         self.close_overview();
         let bounds = self
             .wm
@@ -4639,12 +4663,14 @@ impl BacakState {
         let net_on = std::path::Path::new("/usr/share/bacak/plugins/network.plugin").exists();
         let aud_on = std::path::Path::new("/usr/share/bacak/plugins/audio.plugin").exists();
         let ds_on = std::path::Path::new("/usr/share/bacak/plugins/desktop-settings.plugin").exists();
+        let uzakel_on = std::path::Path::new(crate::plugins::uzakel::MANIFEST).exists();
 
-        // Dynamic panel height: core rows + optional network + optional audio + optional DS.
+        // Dynamic panel height: core rows + optional network + optional audio + optional DS + optional Uzakel.
         let net_h = if net_on { TR + GAP + EH + GAP } else { 0.0 };
         let aud_h = if aud_on { SL + GAP + AD + GAP + SL + GAP + AD + GAP } else { 0.0 };
         let ds_h = if ds_on { SH + GAP } else { 0.0 };
-        let panel_h = PAD + CH + GAP + net_h + DK + GAP + SL + GAP + aud_h + ds_h + SH + GAP + PR + PAD;
+        let uzakel_h = if uzakel_on { SH + GAP } else { 0.0 };
+        let panel_h = PAD + CH + GAP + net_h + DK + GAP + SL + GAP + aud_h + ds_h + uzakel_h + SH + GAP + PR + PAD;
 
         let m = 14.0;
         let bx = (bounds.x + bounds.w - W - m).max(bounds.x + m);
@@ -4758,6 +4784,16 @@ impl BacakState {
                 action: CcAction::DesktopSettings,
                 kind: CcKind::Button { danger: false },
                 label: cc_rasterize(text, "⚙  Masaüstü Ayarları", 15.0, LABEL, iw),
+                sub: None,
+            });
+            y += SH + GAP;
+        }
+        if uzakel_on {
+            tiles.push(CcTile {
+                rect: Rect::new(cx, y, inner, SH),
+                action: CcAction::UzakelConnect,
+                kind: CcKind::Button { danger: false },
+                label: cc_rasterize(text, "📱  Uzakel'e Bağlan", 15.0, LABEL, iw),
                 sub: None,
             });
             y += SH + GAP;
@@ -5640,6 +5676,7 @@ impl BacakState {
     fn open_bt_panel(&mut self, out: OutputId) {
         self.apps_menu = None;
         self.wifi_panel = None;
+        self.uzakel_panel = None;
         if self.btctl.is_none() {
             self.btctl = crate::bluetooth::BtCtl::start();
         }
@@ -6078,6 +6115,7 @@ impl BacakState {
         self.wifi_panel = None;
         self.bt_panel = None;
         self.control_center = None;
+        self.uzakel_panel = None;
 
         let bounds = self
             .wm
@@ -6195,6 +6233,7 @@ impl BacakState {
         self.wifi_panel = None;
         self.bt_panel = None;
         self.control_center = None;
+        self.uzakel_panel = None;
         self.audio_panel = None;
 
         let bounds = self
@@ -6296,6 +6335,121 @@ impl BacakState {
             Some(AudioAction::SelectSink(_)) | Some(AudioAction::Close) | None => {
                 self.mic_panel = None;
             }
+        }
+        true
+    }
+
+    /// Reads `~/.cache/uzakel/pairing.json` (written by `uzakel-daemon`'s
+    /// `pairing_state::publish` on the daemon side, every time it generates
+    /// a fresh pairing PIN) and returns `(daemon_name, address,
+    /// discovery_port, pin)`. `None` when the daemon has never run, or its
+    /// state file is otherwise missing/unparsable — the panel shows an
+    /// explanatory status line in that case instead of a QR.
+    fn read_uzakel_pairing_state(&self) -> Option<(String, String, u16, u32)> {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+        let path = std::path::PathBuf::from(home).join(".cache/uzakel/pairing.json");
+        let raw = std::fs::read_to_string(path).ok()?;
+        let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+        let daemon_name = v.get("daemon_name")?.as_str()?.to_string();
+        let address = v.get("address")?.as_str()?.to_string();
+        let discovery_port = v.get("discovery_port")?.as_u64()? as u16;
+        let pin = v.get("pin")?.as_u64()? as u32;
+        Some((daemon_name, address, discovery_port, pin))
+    }
+
+    /// Build and open the Uzakel pairing QR panel (Control Center's
+    /// "Uzakel'e Bağlan" tile). Re-reads the pairing-state file fresh on
+    /// every open, so the QR always reflects whatever PIN is actually live
+    /// right now — not one cached from a previous open.
+    fn open_uzakel_panel(&mut self, out: OutputId) {
+        self.wifi_panel = None;
+        self.bt_panel = None;
+        self.audio_panel = None;
+        self.mic_panel = None;
+        self.control_center = None;
+
+        let bounds = self
+            .wm
+            .output(out)
+            .map(|o| o.bounds)
+            .unwrap_or(Rect::new(0.0, 0.0, 1920.0, 1080.0));
+
+        const PAD: f32 = 18.0;
+        const GAP: f32 = 10.0;
+        const W: f32 = 320.0;
+        const TITLE_H: f32 = 28.0;
+        const QR_PX: f32 = 240.0;
+        const STATUS_H: f32 = 20.0;
+        const CLOSE_H: f32 = 40.0;
+
+        let text = self.text.as_ref();
+        const LABEL: [u8; 3] = [232, 236, 244];
+        const SUB: [u8; 3] = [170, 178, 196];
+        let inner = W - 2.0 * PAD;
+
+        let title = cc_rasterize(text, "Uzakel'e Bağlan", 16.0, LABEL, inner as usize);
+
+        let state = self.read_uzakel_pairing_state();
+        let (qr, status_text) = match &state {
+            Some((daemon_name, address, discovery_port, pin)) => {
+                // Kept in lockstep with the Android client's parser
+                // (`network/NetworkClient.kt`'s QR-scan path) and with
+                // ARCHITECTURE.md §2.3's "QR pairing" note — a `uzakel://`
+                // URI carrying exactly what manual entry asks for today
+                // (host, discovery port, PIN), plus the daemon's display
+                // name so the scan confirmation can show something
+                // human-readable instead of a bare IP.
+                let uri = format!(
+                    "uzakel://pair?host={address}&port={discovery_port}&pin={pin:06}&name={}",
+                    urlencode(daemon_name)
+                );
+                let bitmap = crate::qr::generate_qr_rgba(&uri, 6).map(|(rgba, w, h)| {
+                    let buf = smithay::backend::renderer::element::memory::MemoryRenderBuffer::from_slice(
+                        &rgba,
+                        smithay::backend::allocator::Fourcc::Abgr8888,
+                        (w as i32, h as i32),
+                        1,
+                        smithay::utils::Transform::Normal,
+                        None,
+                    );
+                    (buf, w as usize, h as usize)
+                });
+                let status = format!("{daemon_name} · {address} · PIN {pin:06}");
+                (bitmap, status)
+            }
+            None => (None, "Uzakel daemon çalışmıyor".to_string()),
+        };
+        let status = cc_rasterize(text, &status_text, 12.5, SUB, inner as usize);
+
+        let qr_h = if qr.is_some() { QR_PX + GAP } else { 0.0 };
+        let panel_h = PAD + TITLE_H + GAP + qr_h + STATUS_H + GAP + CLOSE_H + PAD;
+
+        let m = 14.0;
+        let bx = (bounds.x + bounds.w - W - m).max(bounds.x + m);
+        let by = (bounds.y + m).max(bounds.y);
+        let panel = Rect::new(bx, by, W, panel_h);
+        let cx = bx + PAD;
+        let close_y = by + panel_h - PAD - CLOSE_H;
+        let close_rect = Rect::new(cx, close_y, inner, CLOSE_H);
+        let close_label = cc_rasterize(text, "Kapat", 15.0, LABEL, inner as usize);
+
+        self.uzakel_panel = Some(crate::plugins::control_center::UzakelPanel {
+            output: out,
+            panel,
+            title,
+            qr,
+            status,
+            close_rect,
+            close_label,
+        });
+    }
+
+    /// Handle a pointer/touch press while the Uzakel panel is open. Any tap
+    /// dismisses it — there's only the one QR to look at, no rows to pick
+    /// between.
+    pub fn uzakel_panel_press(&mut self, _px: f32, _py: f32) -> bool {
+        if self.uzakel_panel.take().is_none() {
+            return false;
         }
         true
     }
@@ -7099,6 +7253,12 @@ impl BacakState {
                     self.open_desktop_settings(out);
                 }
             }
+            CcAction::UzakelConnect => {
+                if let Some(out) = self.control_center.as_ref().map(|c| c.output) {
+                    self.control_center = None;
+                    self.open_uzakel_panel(out);
+                }
+            }
             CcAction::PowerOff => crate::controls::power_off(),
             CcAction::Reboot => crate::controls::reboot(),
             CcAction::Logout => crate::controls::logout(),
@@ -7374,6 +7534,7 @@ impl BacakState {
         self.control_center = None;
         self.wifi_panel = None;
         self.bt_panel = None;
+        self.uzakel_panel = None;
         // Every window across all workspaces — the Overview is a global
         // "all open apps" view, not just the current workspace. Ordered
         // most-recently-used so the last-used app leads (and is centred).
@@ -9407,6 +9568,7 @@ impl BacakState {
         self.apps_menu = None;
         self.wifi_panel = None;
         self.bt_panel = None;
+        self.uzakel_panel = None;
         self.close_overview();
 
         let bounds = self

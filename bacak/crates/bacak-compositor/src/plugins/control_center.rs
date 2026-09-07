@@ -37,6 +37,8 @@ pub enum CcAction {
     MicSettings,
     /// Open the Desktop Settings panel.
     DesktopSettings,
+    /// Open the Uzakel pairing QR panel.
+    UzakelConnect,
 }
 
 /// Visual flavour of a tile, read by the renderer. State (on/off, level) lives
@@ -338,6 +340,30 @@ pub struct AudioPanel {
     pub rows: Vec<AudioRow>,
     /// Status line ("Cihazlar aranıyor…" or "Cihaz bulunamadı"), pre-rasterised.
     pub status: Option<(MemoryRenderBuffer, usize, usize)>,
+}
+
+// ----- Uzakel pairing panel ---------------------------------------------
+
+/// Opened from the Control-Center "Uzakel'e Bağlan" tile. Shows a QR code
+/// of the daemon's current pairing PIN + LAN address (read fresh from
+/// `~/.cache/uzakel/pairing.json` each time the panel opens — see
+/// `pairing_state.rs` on the daemon side) so the Android app can scan
+/// instead of the user typing a PIN. Any tap dismisses it, same as the
+/// other single-purpose Control Center panels.
+pub struct UzakelPanel {
+    pub output: OutputId,
+    pub panel: Rect,
+    pub title: Option<(MemoryRenderBuffer, usize, usize)>,
+    /// Either the rendered QR (found a live pairing-state file) or `None`
+    /// when the daemon hasn't published one yet (not running, or hasn't
+    /// generated a PIN since the panel last checked).
+    pub qr: Option<(MemoryRenderBuffer, usize, usize)>,
+    /// Human-readable status line: the daemon name + address when a QR is
+    /// showing, or an explanation of why it isn't ("Uzakel daemon
+    /// çalışmıyor").
+    pub status: Option<(MemoryRenderBuffer, usize, usize)>,
+    pub close_rect: Rect,
+    pub close_label: Option<(MemoryRenderBuffer, usize, usize)>,
 }
 
 /// Background-fetched Control-Center state (each field is a blocking subprocess),

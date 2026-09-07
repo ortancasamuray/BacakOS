@@ -8,6 +8,7 @@ members = [
     "crates/bacak-plugin-network",
     "crates/bacak-plugin-audio",
     "crates/bacak-plugin-desktop-settings",
+    "crates/bacak-plugin-uzakel",
     "crates/bacak-icons",
     "crates/bacak-desktop-defaults",
     "crates/bacak-grub-theme",
@@ -70,6 +71,11 @@ freedesktop-icons = { version = "0.4", default-features = false }
 
 # Signal handling (SIGTERM/SIGINT → flush session on clean shutdown).
 libc        = "0.2"
+
+# QR code encoding (pure-Rust, no C deps) for the Uzakel pairing panel —
+# turns the daemon's pairing-state file into module data we rasterise to
+# an RGBA buffer ourselves (see bacak-compositor/src/qr.rs).
+qrcode      = { version = "0.14", default-features = false }
 
 [profile.release]
 lto         = "thin"

@@ -46,6 +46,7 @@ pub mod onboarding;
 pub mod overview;
 pub mod screenshot;
 pub mod selection;
+pub mod uzakel;
 
 pub use ctx::PluginCtx;
 
@@ -155,6 +156,7 @@ pub static PLUGINS: &[&dyn Plugin] = &[
     &network::NetworkPlugin,
     &audio::AudioPlugin,
     &desktop_settings::DesktopSettingsPlugin,
+    &uzakel::UzakelPlugin,
     &keyboard::KeyboardPlugin,
     &dock::DockPlugin,
     &gestures::GesturePlugin,
