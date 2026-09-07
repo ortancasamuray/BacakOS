@@ -388,6 +388,16 @@ control → transfer, and back).
   via `InetAddress.getByName` on connect, since LAN devices commonly change
   address between sessions (DHCP lease churn) — there's no fresh broadcast
   re-scan wired into "connect to a saved host" yet (§5).
+- **The launcher icon** (`res/mipmap-anydpi-v26/ic_launcher.xml` +
+  `res/drawable/ic_launcher_{background,foreground,monochrome}.xml`) is a
+  hand-written vector adaptive icon, not a raster export — `minSdk` 26 is
+  exactly the version adaptive icons became mandatory-supported, so no
+  legacy per-density PNG mipmap set is needed at all. The glyph (a phone
+  with a cursor arrow breaking out of its top-right corner — literally
+  what this app does) and its colors follow `bacak/DESIGN_SYSTEM.md`'s
+  Aegean/Rust palette, on a plain white ground chosen after visual
+  iteration on a real device (an earlier Aegean-gradient background read
+  as too dark/muted next to other app icons).
 
 ---
 
