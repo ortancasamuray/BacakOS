@@ -1,308 +1,188 @@
-# Bacak OS — System Architecture
+# Bacak — Architecture
 
-> A next-generation desktop environment: Rust core, Tauri shell, React + Tailwind frontend, async GPU-friendly compositor, virtual archive filesystem, and a hybrid floating + snap window manager.
-
----
-
-## 1. High-level topology
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                       Frontend (React + TS + Tailwind)              │
-│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌──────────────┐   │
-│  │ Compositor  │ │   Dock      │ │  On-screen  │ │ File Manager │   │
-│  │  / WM UI    │ │             │ │  Keyboard   │ │              │   │
-│  └─────────────┘ └─────────────┘ └─────────────┘ └──────────────┘   │
-│                          ▲    Tauri IPC (commands + events)        │
-└──────────────────────────┼──────────────────────────────────────────┘
-                           ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                 Tauri Runtime  (Rust + WebView2/WKWebView/WebKitGTK)│
-│  ┌───────────────────────────────────────────────────────────────┐  │
-│  │                    bacak-core   (binary crate)                │  │
-│  │  Command dispatcher · Event bus · Permission broker           │  │
-│  └───────────────────────────────────────────────────────────────┘  │
-│  ┌────────────┬────────────┬────────────┬────────────┬───────────┐  │
-│  │   bacak-   │   bacak-   │   bacak-   │   bacak-   │  bacak-   │  │
-│  │     fs     │  archive   │   search   │    wm      │  preview  │  │
-│  └────────────┴────────────┴────────────┴────────────┴───────────┘  │
-│  ┌────────────┬────────────┬────────────┬─────────────────────────┐ │
-│  │   bacak-   │   bacak-   │   bacak-   │       bacak-input       │ │
-│  │   device   │  session   │  notify    │   (OSK · gestures)      │ │
-│  └────────────┴────────────┴────────────┴─────────────────────────┘ │
-│                           Tokio runtime (async)                     │
-└─────────────────────────────────────────────────────────────────────┘
-                           ▼
-                    OS / Kernel surfaces
-   (filesystem · libinput · pipewire · wpa_supplicant · upower · ...)
-```
+A native Rust Wayland compositor built on [Smithay](https://smithay.github.io/),
+not a webview/Electron/Tauri shell. The desktop's panels, dock, and settings
+UI are Rust code compiled straight into `bacak-compositor` and rendered by
+its own GL renderer — there is no HTML/CSS/JS anywhere in the stack.
 
 ---
 
-## 2. Cargo workspace layout
+## 1. Workspace layout
 
 ```
 bacak/
-├─ Cargo.toml                 # workspace
-├─ src-tauri/
-│  ├─ Cargo.toml              # bacak-core (bin)
-│  ├─ tauri.conf.json
-│  └─ src/
-│     ├─ main.rs              # tauri::Builder, plugin & service registration
-│     ├─ commands/            # #[tauri::command] surfaces, thin shims
-│     ├─ events.rs            # typed event channel definitions
-│     └─ permissions.rs       # capability tokens per window
+├─ Cargo.toml                         # workspace: 11 members
 ├─ crates/
-│  ├─ bacak-fs/               # async FS, watchers, VFS abstraction
-│  ├─ bacak-archive/          # ZIP/RAR/7Z/TAR/GZ/ISO via libarchive-rs + sevenz-rust
-│  ├─ bacak-search/           # tantivy index, content + metadata
-│  ├─ bacak-wm/               # window state, snap zones, workspaces
-│  ├─ bacak-preview/          # MIME sniffing, thumbnail pipeline (image, video, doc)
-│  ├─ bacak-device/           # network (NM dbus), battery (upower), audio (pipewire)
-│  ├─ bacak-session/          # workspace persistence, restore, multi-monitor
-│  ├─ bacak-notify/           # notifications, badges, do-not-disturb
-│  └─ bacak-input/            # OSK state machine, gesture recognizer
-└─ ui/
-   ├─ package.json            # vite + react + ts + tailwind + framer-motion
-   └─ src/
-      ├─ shell/               # Compositor, Dock, OSK, TaskSwitcher
-      ├─ apps/                # Files, Firefox-shim, Terminal, Settings
-      ├─ design/              # tokens.ts, motion.ts, primitives/
-      └─ bridge/              # typed wrappers over tauri::invoke
+│  ├─ bacak-compositor/               # the compositor binary — WM, input, render, panels
+│  │  └─ src/
+│  │     ├─ state.rs                  # BacakState — the god object, ~11.5k lines
+│  │     ├─ udev_runtime.rs           # native DRM/KMS main loop (production backend)
+│  │     ├─ runtime.rs                # winit backend (dev/nested-window backend)
+│  │     ├─ main.rs                   # entry point, backend selection
+│  │     ├─ wm.rs                     # window manager: tiling, workspaces, snap zones
+│  │     ├─ render.rs                 # GL rendering of the whole scene incl. panels
+│  │     ├─ input.rs / keyboard.rs    # pointer/touch/keyboard, OSK controller
+│  │     ├─ gestures.rs               # swipe/pinch/long-press recognizers
+│  │     ├─ bluetooth.rs              # bluetoothctl coprocess + OBEX receiver
+│  │     ├─ animation.rs              # spring-physics animation curves
+│  │     ├─ session.rs                # session save/restore
+│  │     ├─ xwayland.rs               # Xwayland spawn + X11 WM duties
+│  │     ├─ text.rs / text_input.rs / selection.rs / atspi.rs  # text layout, IME, selection, a11y
+│  │     ├─ screencopy.rs / foreign_toplevel.rs / decoration.rs / hotplug.rs / grab.rs / signals.rs / focus.rs / carousel.rs / blur.rs / emoji.rs / launcher.rs / icons.rs / config.rs / handlers.rs
+│  │     └─ plugins/                  # every desktop panel — see §3
+│  ├─ bacak-services/                 # fs, archive, device, network — see §4
+│  ├─ bacak-shell/                    # GTK4 layer-shell scaffold — see §5 (superseded)
+│  ├─ bacak-cli/                      # terminal harness over bacak-services
+│  ├─ bacak-plugin-network/           # packaging-only stub (real code: compositor plugins/network.rs)
+│  ├─ bacak-plugin-audio/             # packaging-only stub (real code: compositor plugins/audio.rs)
+│  ├─ bacak-plugin-desktop-settings/  # packaging-only stub (real code: compositor plugins/desktop_settings.rs)
+│  ├─ bacak-icons/                    # icon theme (packaging-only)
+│  ├─ bacak-desktop-defaults/         # default compositor.json + wallpaper + Firefox policy
+│  ├─ bacak-grub-theme/               # GRUB theme (packaging-only)
+│  ├─ bacak-plymouth-theme/           # Plymouth splash theme (packaging-only)
+│  └─ bacakos-meta/                   # meta-package, no code
 ```
 
-Workspace `Cargo.toml` pins one tokio + one tracing version across crates and gates platform-specific deps behind cfg flags.
+Workspace `Cargo.toml` pins shared dependency versions (`tokio`, `serde`,
+`thiserror`, `anyhow`, `parking_lot`, `tracing`, archive backends, …) once
+for every crate.
 
 ---
 
-## 3. Service modules — surfaces
+## 2. Compositor build profiles
 
-Each service crate exposes (1) a pure-Rust API consumable from Rust, and (2) a thin `#[tauri::command]` adapter registered in `bacak-core`. Frontend calls always go through the adapter; never through the raw FS or shell.
+`bacak-compositor` compiles three ways, chosen by cargo feature and dispatched
+at runtime by `$BACAK_BACKEND` (see the doc comment at the top of
+`src/main.rs`):
 
-### 3.1 `bacak-fs` — File System Service
+| Feature flags | Backend | Use case | System deps |
+|---|---|---|---|
+| *(none)* | skeleton — WM/OSK init only, no Wayland socket | fast `cargo check` | none |
+| `--features runtime` | `winit` — nested Wayland window | dev, runs inside a host WM | libwayland, libinput, libxkbcommon, EGL |
+| `--features udev` | `libseat` + DRM/KMS native session | real BacakOS session | + libdrm, libgbm, libseat |
+
+`udev` is a superset of `runtime` (see the `udev = ["runtime", "smithay?/backend_udev", …]`
+line in `crates/bacak-compositor/Cargo.toml`) — it adds the DRM/GBM/EGL/libinput/
+libseat Smithay backends on top of everything `runtime` already pulls in.
+XWayland support (spawning `Xwayland` and acting as its X11 window manager so
+legacy X11 clients map as ordinary Bacak windows) is compiled into the
+Smithay dependency itself, gated behind the same features.
+
+Optional runtime pieces are individually feature-gated so a plain
+`cargo check` on the workspace stays cheap: `fontdue`/`cosmic-text` (text
+shaping), `zbus` (AT-SPI2 accessibility bridge), `image`/`resvg`/
+`freedesktop-icons` (app icon loading), `notify` (filesystem watching).
+
+---
+
+## 3. `BacakState` and the plugin panels
+
+`state.rs` holds `BacakState` — one struct carrying every Wayland protocol's
+server-side state plus the Bacak-specific `WindowManager` and `OskController`.
+Smithay tracks `WlSurface`s; the Bacak WM tracks abstract `wm::WindowId`s and
+never touches a Wayland surface directly — the bridge is a
+`HashMap<WlSurface, WindowId>` inside `BacakState`, populated when an
+xdg-shell toplevel arrives and pruned on surface destruction.
+
+Every desktop panel is a module under `src/plugins/`, each owning its own
+state struct, rendered by `render.rs` and driven by a `*_poll()`/`build_*`
+pair called from the compositor's tick loop:
+
+| Module | Panel | Poll fn | Build fn |
+|---|---|---|---|
+| `plugins/control_center.rs` | Quick-settings box — Wi-Fi, Bluetooth, audio, brightness, dark mode, screenshot, power | `bt_poll()`, `wifi_poll()`, `audio` state | `build_bt_panel()`, `build_wifi_panel()` |
+| `plugins/desktop_settings.rs` | Wallpaper, hostname, auto-login, password change | `ds_tick()` | `build_ds_panel()` |
+| `plugins/dock.rs` | Dock — pinned apps, running apps, launcher | — | — |
+| `plugins/apps_menu.rs` | Full app list | — | — |
+| `plugins/network.rs` | Wi-Fi connection logic (`nmcli`) | `wifi_connect()` | — |
+| `plugins/audio.rs` | Audio device selection (`pactl`) | `audio_connect()`, `list_sinks()` | — |
+| `plugins/overview.rs` | Window/workspace overview | — | — |
+| `plugins/screenshot.rs` | Screen capture | — | — |
+| `plugins/keyboard.rs` | On-screen keyboard | — | — |
+| `plugins/selection.rs` | Text selection/copy | — | — |
+| `plugins/gestures.rs` | Gesture-to-action bindings | — | — |
+
+Bluetooth is the compositor talking to a `bluetoothctl` coprocess
+(`bluetooth.rs`) plus a Python OBEX agent (`start_obex_receiver()`,
+`~/.cache/bacak/obex-agent.py`) for incoming file transfers into
+`~/Downloads`. Wi-Fi shells out to `nmcli`; audio to `pactl`. None of this
+runs as a separate process the user would see in a task list — it's all
+inside the one `bacak-compositor` binary.
+
+**Convention:** a new desktop feature is a new (or extended) `plugins/*.rs`
+module wired into `state.rs` + `render.rs`, never a standalone application.
+
+---
+
+## 4. `bacak-services` — the non-graphical layer
 
 ```rust
-pub trait Vfs: Send + Sync {
-    async fn read_dir(&self, path: &VfsPath) -> Result<Vec<DirEntry>>;
-    async fn open(&self, path: &VfsPath) -> Result<VfsFile>;
-    async fn metadata(&self, path: &VfsPath) -> Result<Metadata>;
-    async fn watch(&self, path: &VfsPath, cb: WatchSink) -> Result<WatchHandle>;
-    async fn copy(&self, from: &VfsPath, to: &VfsPath, opts: CopyOpts) -> Result<JobId>;
-}
-
-pub enum VfsPath {
-    Native(PathBuf),
-    Archive { archive: PathBuf, inside: PathBuf },  // arch.tar.gz!/inside/foo.txt
-    Remote { scheme: String, url: String },         // sftp://, smb://, ...
-}
+pub mod archive;  // ZIP / TAR / TAR.GZ, uniform listing API
+pub mod fs;       // virtual filesystem: native + archive-backed paths
+pub mod device;   // audio / Wi-Fi / Bluetooth, pluggable provider trait
+pub mod network;  // connectivity diagnostics (stub)
 ```
 
-`watch` uses `notify` + a debouncer; events are coalesced and emitted on the Tauri event bus as `vfs:changed`. Heavy ops (`copy`, `move`, `delete`) return a `JobId`; progress is streamed on `vfs:job-progress`.
-
-### 3.2 `bacak-archive` — Virtual archive filesystem
-
-Archives behave like directories. Backed by:
-
-| Format          | Backend                                |
-| --------------- | -------------------------------------- |
-| ZIP             | `zip` crate                            |
-| TAR / .tar.gz   | `tar` + `flate2`                       |
-| 7Z              | `sevenz-rust`                          |
-| RAR             | `unrar` (read-only, dynamic link)      |
-| ISO             | `iso9660` crate                        |
-| Generic         | `compress-tools` (libarchive) fallback |
-
-```rust
-pub struct ArchiveHandle { /* lazily decoded directory tree */ }
-
-impl ArchiveHandle {
-    pub async fn open(path: &Path) -> Result<Self>;
-    pub fn list(&self, inside: &Path) -> &[Entry];      // O(1), cached
-    pub async fn stream(&self, inside: &Path) -> Result<AsyncRead>;
-    pub async fn extract(&self, inside: &Path, to: &Path) -> Result<JobId>;
-}
-```
-
-The VFS layer routes any `VfsPath::Archive` through this handle; the file manager UI never knows whether the directory it's rendering is on disk or inside a `.7z`.
-
-### 3.3 `bacak-search` — Indexing & query
-
-`tantivy`-backed inverted index, one segment per user-mounted root. Documents carry `(path, name, ext, mtime, size, mime, content_excerpt, archive_parent)` fields. The indexer is a Tokio task pool that dequeues from the FS watcher stream and respects a configurable I/O budget.
-
-Frontend issues `search.query { q, scope, filters }` → ranked stream of results delivered as `search:hit` events with a `query_id`.
-
-### 3.4 `bacak-wm` — Window Management
-
-Authoritative window state lives in Rust. The frontend renders, but state mutations (move, resize, snap, focus, workspace assignment) round-trip through the WM crate so multi-window invariants hold even when several React roots are alive.
-
-```rust
-pub struct Window {
-    pub id: WindowId,
-    pub app: AppId,
-    pub geom: Rect,         // logical CSS pixels
-    pub state: WinState,    // Floating | Snapped(Zone) | Maximized | Minimized | Fullscreen
-    pub workspace: WorkspaceId,
-    pub z: u32,
-    pub focused: bool,
-}
-
-pub enum SnapZone { Left, Right, Top, BottomLeft, BottomRight, TopLeft, TopRight }
-```
-
-Snap zones are computed against the monitor's *work area* (screen minus dock + reserved struts). The 24 px edge threshold and the spring curve (`cubic-bezier(0.34, 1.56, 0.64, 1)`) live in the crate so OSK and WM agree on motion.
-
-### 3.5 `bacak-preview` — MIME & thumbnails
-
-- MIME via magic bytes (`infer`) with extension fallback.
-- Image thumbs: `image` crate, downscaled with Lanczos, cached at `~/.cache/bacak/thumbs/`.
-- Video: `ffmpeg-next` or `gstreamer` for a single representative frame at 10% mark.
-- PDF / Office: `pdfium-render` for PDFs; office docs deferred to LibreOffice headless when available.
-
-Frontend asks for a thumbnail by VFS path + target size; the crate returns a stable URL (`asset://thumb/<hash>.webp`) that Tauri serves from cache.
-
-### 3.6 `bacak-device` — Network · battery · audio
-
-| Concern  | Linux backend           | macOS / Windows                    |
-| -------- | ----------------------- | ---------------------------------- |
-| Network  | NetworkManager via dbus | `SCNetworkConfiguration` / WMI     |
-| Battery  | `upower` via dbus       | `IOPMCopyBatteryInfo` / WMI        |
-| Audio    | PipeWire / PulseAudio   | CoreAudio / WASAPI                 |
-
-Each surface is exposed as a stream of typed events (`net:status`, `bat:level`, `audio:volume`); the dock subscribes once at boot.
-
-### 3.7 `bacak-session` — Workspaces & persistence
-
-Persists, per user:
-
-- Workspace layout (windows, geometry, focused, z-order)
-- Pinned dock apps
-- Recent files / archive bookmarks
-- OSK preferences (layout, predictive, position)
-
-Stored as TOML at `~/.config/bacak/session.toml`; written atomically through a tempfile + rename.
-
-### 3.8 `bacak-notify` — Notifications
-
-Bridges to `org.freedesktop.Notifications` on Linux and the OS-native equivalents elsewhere. Apps push via Tauri command; the dock receives badge updates via `notify:badge { app_id, count }`.
-
-### 3.9 `bacak-input` — OSK & gestures
-
-- **OSK state machine.** States: `Closed → Opening → Open → Closing`. Triggers: input focus events (from the WebView), explicit toggle, hardware keyboard detected (auto-close). Layout is layout-aware: when the OSK opens, it emits `wm:reserve-area` to the WM, which reduces the focused window's effective viewport so content above the keyboard stays visible.
-- **Gestures.** `libinput` taps for trackpad swipes (3-finger horizontal → workspace, 4-finger up → task overview). Touchscreen long-press → multi-select (file manager). Edge-reveal hit zones are 6 px tall along the bottom.
+`bacak-cli`, `bacak-compositor`, and `bacak-shell` all consume this crate
+instead of talking to the OS directly — the compositor never reaches inside
+`fs`/`archive` on its own, and the CLI exercises the exact code path the
+shell would use. This is the seam that keeps service logic testable outside
+a running Wayland session (`cargo run -p bacak-cli`).
 
 ---
 
-## 4. IPC — Tauri command catalog (excerpt)
+## 5. `bacak-shell` — GTK4 scaffold (largely superseded)
 
-Commands are named `<service>.<verb>`; events are `<service>:<noun>`. All payloads are `serde_json` and validated at the Rust boundary.
-
-```rust
-// fs
-#[tauri::command] async fn fs_read_dir(path: VfsPath) -> Result<Vec<DirEntry>, FsError>;
-#[tauri::command] async fn fs_copy(from: VfsPath, to: VfsPath) -> Result<JobId, FsError>;
-
-// archive
-#[tauri::command] async fn arc_open(path: PathBuf) -> Result<ArchiveSnapshot, ArcError>;
-#[tauri::command] async fn arc_extract(path: PathBuf, inside: PathBuf, to: PathBuf) -> Result<JobId, ArcError>;
-
-// wm
-#[tauri::command] async fn wm_move(id: WindowId, rect: Rect) -> Result<(), WmError>;
-#[tauri::command] async fn wm_snap(id: WindowId, zone: SnapZone) -> Result<(), WmError>;
-#[tauri::command] async fn wm_focus(id: WindowId) -> Result<(), WmError>;
-
-// input
-#[tauri::command] async fn osk_open(target_window: WindowId, target_rect: Rect) -> Result<(), InputError>;
-#[tauri::command] async fn osk_close() -> Result<(), InputError>;
-```
-
-Long-running commands return a `JobId`; the caller subscribes to `job:progress { id, pct, eta }` and `job:done { id, result }`.
+Three small GTK4 binaries (`bacak-panel`, `bacak-dock`, `bacak-launcher`)
+meant to layer on the compositor via `wlr-layer-shell`, each independently
+spawnable/restartable. This predates the decision to build every panel
+directly into `bacak-compositor` (§3) and has seen no further work since the
+initial monorepo merge — treat it as a reference/experiment, not the
+shipping UI. The dock and control center that actually ship are
+`plugins/dock.rs` and `plugins/control_center.rs` inside the compositor.
 
 ---
 
-## 5. Frontend architecture
+## 6. Packaging-only crates
 
-### 5.1 Stack
+`bacak-plugin-network`, `bacak-plugin-audio`, `bacak-plugin-desktop-settings`,
+`bacak-icons`, `bacak-desktop-defaults`, `bacak-grub-theme`,
+`bacak-plymouth-theme`, and `bacakos-meta` carry no logic — each is a
+`[package.metadata.deb]` manifest (asset files + Depends list) so `apt` can
+install/version a piece of the desktop (icon theme, GRUB/Plymouth branding,
+default `compositor.json` + wallpaper, or the whole desktop via the meta
+package) independently of the compositor binary itself.
 
-- **Vite + React 18 + TypeScript** (Svelte is a swap-in option — components are framework-light)
-- **TailwindCSS** with a custom token preset (see `DESIGN_SYSTEM.md`)
-- **Framer Motion** for spring physics; matches the WM crate's curve
-- **Zustand** for client-side ephemeral state; **Tauri events** for server-of-record state
+---
 
-### 5.2 Module boundaries
+## 7. Session flow
 
 ```
-ui/src/
-├─ shell/
-│  ├─ Compositor.tsx       # mounts <WindowFrame> per backend Window
-│  ├─ WindowFrame.tsx      # title bar, glow, resize handle, snap preview hook
-│  ├─ Dock.tsx             # magnification, indicators, tray
-│  ├─ OnScreenKeyboard.tsx # layout-aware, requests wm:reserve-area
-│  ├─ TaskSwitcher.tsx     # alt-tab card view
-│  └─ Workspaces.tsx       # horizontal pager
-├─ apps/                   # each app is a route inside its WindowFrame
-├─ design/                 # tokens, primitives, motion curves
-└─ bridge/
-   ├─ invoke.ts            # typed wrapper: invoke<TCmd, TArgs, TResp>(...)
-   └─ events.ts            # subscribe<TEvt>(...); cleanup on unmount
+display manager (turan/bacak-display-manager)
+        │
+        ▼
+packaging/bacak-session          # session script, execs into the compositor
+        │  start pipewire/wireplumber
+        │  wait for the wayland-* socket
+        │  spawn lxpolkit (polkit auth agent) in the background
+        ▼
+bacak-compositor (BACAK_BACKEND=udev)
+        │  DRM master, libinput, GBM/EGL
+        ▼
+plugins/* render the dock, control center, apps menu, OSK
 ```
 
-### 5.3 Compositor invariant
-
-The frontend never owns window geometry. On every drag/resize tick it:
-
-1. Optimistically updates `transform: translate3d(...)` locally for 60 fps response.
-2. Throttle-emits `wm.move`/`wm.resize` to the backend (16 ms).
-3. Reconciles against the backend's authoritative `wm:state` event on `pointerup`.
-
-This keeps state coherent across multi-monitor and prevents drift when the OSK reserves area mid-drag.
+See `turan/docs/SESSION_STARTUP.md` for the display-manager side of this
+handoff.
 
 ---
 
-## 6. Virtual archive filesystem — example data flow
+## 8. Testing
 
-User double-clicks `~/Downloads/release.tar.gz` in the file manager:
+```bash
+cargo test --workspace     # unit tests across every crate
+```
 
-1. **UI** calls `fs.read_dir({ Archive: { archive: ".../release.tar.gz", inside: "/" } })`.
-2. **`bacak-fs`** sees the `Archive` variant and delegates to **`bacak-archive`**.
-3. **`bacak-archive`** lazy-decodes the central directory (no full extraction). Returns `Vec<DirEntry>`.
-4. **UI** renders the directory listing with the same component used for native folders — no special case in the file manager.
-5. User drags `release/bin/bacak` to `~/Apps/`.
-6. **UI** calls `fs.copy(from: Archive{...}, to: Native("~/Apps/bacak"))`.
-7. **`bacak-fs`** opens an async read stream from `bacak-archive` and pipes it to a native write — zero intermediate temp file.
-
----
-
-## 7. Async, concurrency, performance notes
-
-- **Tokio current-thread** for IPC dispatch (low latency), **multi-thread Tokio** for `bacak-fs`, `bacak-archive`, `bacak-search`.
-- **Backpressure.** Search and watch streams use bounded channels (`tokio::sync::mpsc` capacity 256); when full, older events are coalesced rather than dropped on the floor.
-- **Virtualized lists.** The file manager renders huge directories with `@tanstack/virtual`. The Rust side returns directory entries in pages (`offset`, `limit`) and only sends `(name, ext, size, mtime)` until a thumbnail is actually requested.
-- **GPU.** WebView is the renderer; the Aegean background + glass blur stay on the compositor by avoiding `filter: blur` on large scroll areas (we blur a static layer beneath, not the moving content).
-- **Memory.** Archive directory trees are cached in an LRU keyed by `(path, mtime, size)` with a global cap (~50 MB).
-
----
-
-## 8. Security model
-
-- **Capability tokens.** Each Tauri command checks a per-window capability set declared in `permissions.rs`. The file manager has FS + archive + preview; the Firefox shim has only network + clipboard.
-- **VFS path normalization.** All `VfsPath` values are normalized and confined to user-mounted roots before any syscall — prevents `..` traversal out of an archive sandbox.
-- **No shell-out for archives.** All formats use in-process libraries; no `unzip`/`7z` subprocess. Removes a class of command-injection issues.
-- **Notifications can't execute.** Notification action handlers are command IDs the originating app pre-registered; no arbitrary code injection from the notify bus.
-
----
-
-## 9. Build, test, distribution
-
-- `cargo test --workspace` — unit + integration across crates; `bacak-fs` and `bacak-archive` have golden-fixture tests for each archive format.
-- `cargo bench` — `bacak-search` indexing throughput; `bacak-archive` cold-open latency.
-- `vitest` + `@testing-library/react` for UI; storybook for primitives.
-- **Distribution.** `tauri build` produces a deb/rpm/AppImage on Linux, a notarized `.app`/`.dmg` on macOS, an MSI on Windows. CI fans out via `tauri-action` on GitHub Actions.
-
----
-
-## 10. Open questions / deferred
-
-- Compositor mode on Linux: stay inside Tauri's WebView for v1, or graduate to a Wayland compositor (`smithay`) for v2? v2 unlocks true GPU window borders and shadow casting between windows.
-- Wayland vs X11 input grab semantics for the OSK reserve-area trick — needs prototyping under both.
-- ISO 9660 + UDF dual-layer images: pick a single backend or compose.
-- Predictive-text model for the OSK: ship a small on-device n-gram in v1, leave hooks for an ONNX language model later.
+`bacak-services` and `wm.rs`/`animation.rs` carry the bulk of the pure-logic
+unit tests; anything touching the live Wayland/DRM path needs a real session
+(see `turan/docs/PROTOTYPE.md` for VM-based smoke testing).
