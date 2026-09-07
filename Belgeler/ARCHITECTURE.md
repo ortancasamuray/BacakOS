@@ -1,5 +1,7 @@
 # Belgeler — Architecture
 
+🌐 [Türkçe özet](ARCHITECTURE.tr.md) · **English**
+
 Four independent Rust + Slint binaries, not a shared library with four thin
 frontends — each crate owns its full render pipeline. What they share is a
 common `[workspace.dependencies]` block (mainly the `slint` version/features)

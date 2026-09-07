@@ -1,5 +1,7 @@
 # kur — Architecture
 
+🌐 [Türkçe özet](ARCHITECTURE.tr.md) · **English**
+
 A Slint-UI wizard over a pure-Rust installer backend. The hard rule this
 codebase is built around, stated in `main.rs`'s own doc comment: **the
 backend never imports the UI, and the UI never runs a command.**
