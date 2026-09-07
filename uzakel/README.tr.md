@@ -2,16 +2,21 @@
 
 🌐 **Türkçe** · [English](README.md)
 
-> **Durum: hem `daemon/` hem `android/` ilk sürümüyle uygulandı.**
-> `daemon/` derleniyor, birim testlerini geçiyor ve keşif/eşleştirme, girdi
-> replay'i, dosya alımını uçtan uca uyguluyor. `android/` çalışan bir debug
-> APK üretiyor ve Android Lint'i geçiyor (gerçek bir Gradle + Android SDK
-> derlemesiyle doğrulandı, sadece yazılıp umut edilmedi) — cihaz keşfi, PIN
-> eşleştirme, trackpad + IME-köprülü klavye ve tek yönlü dosya gönderme
-> bağlı. İki taraf henüz gerçek donanımda birbirine karşı hiç
-> çalıştırılmadı, ve eşleştirme hâlâ girdi/dosya soketlerinde zorunlu
-> kılınmıyor — bkz. [ARCHITECTURE.tr.md](ARCHITECTURE.tr.md)'nin "açık
-> sorular" bölümündeki güvenlik notu.
+> **Durum: gerçek donanımda uçtan uca doğrulandı, eşleştirme zorunlu.**
+> `daemon/` ve `android/` gerçekten birbirine karşı çalıştırıldı — fiziksel
+> bir Android telefon (MIUI, Android 11), gerçek bir BacakOS oturumunun
+> `bacak-compositor`'ında gerçek Wi-Fi üzerinden keşfedip, PIN ile eşleşip,
+> gerçek imleci hareket ettirdi; sonuç çekirdek `REL_X`/`REL_Y` olayları
+> doğrudan `/dev/input/eventN`'den yakalanarak doğrulandı. Dosya transferi
+> de aynı şekilde doğrulandı (gerçek SHA-256 doğrulamalı bir dosya
+> `~/İndirilenler`'e indi). Bu süreçte hiçbir kod incelemesinin
+> yakalayamayacağı üç gerçek bug bulunup düzeltildi, ayrıca trackpad
+> hissiyatı ayarlandı — bkz. ARCHITECTURE.md §6. Eşleştirme artık hem
+> girdi hem dosya transferi soketlerini koruyor (IP tabanlı, kriptografik
+> değil — bkz. [ARCHITECTURE.md](ARCHITECTURE.md) §2.3'teki güvenlik
+> notu); bu da aynı gerçek kurulumda doğrulandı: eşleşmemiş bir
+> göndericinin trafiği hem eşleşme öncesi hem sonrası gerçek telefonla
+> teyit edilerek düşürülüyor/reddediliyor.
 
 Uzakel, BacakOS için iki parçalı bir uzaktan kontrol ve dosya transferi
 ekosistemidir: bir telefonu BacakOS makinesi için trackpad/klavye/dosya
@@ -47,6 +52,7 @@ uzakel/
 │   └── src/
 │       ├── main.rs           # daemon giriş noktası, üç soketi de bağlar, /dev/uinput'u açar
 │       ├── discovery.rs      # UDP yayın yanıtlayıcısı + PIN eşleştirme
+│       ├── trust.rs           # TrustStore — eşleştirilmiş IP'lerin paylaşılan kaydı
 │       ├── protocol.rs       # paylaşılan paket tanımları (başlık, opcode'lar) + encode/decode + testler
 │       ├── input_manager.rs  # /dev/uinput sanal fare + klavye
 │       └── file_server.rs    # parçalı TCP dosya alımı + SHA-256 doğrulama
