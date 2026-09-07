@@ -99,9 +99,16 @@ fun DeviceListScreen(
                     headlineContent = { Text(saved.name) },
                     supportingContent = { Text(saved.lastKnownAddress) },
                     trailingContent = {
+                        // Always re-pairs, never connects directly: the
+                        // daemon's pairing trust is in-memory only (see
+                        // uzakel-daemon/src/trust.rs) and resets on every
+                        // daemon restart, so a "saved" host from a previous
+                        // session can't be assumed still trusted — skipping
+                        // the PIN here would silently connect to a session
+                        // whose input/file traffic the daemon then drops.
                         Button(onClick = {
                             val addr = runCatching { InetAddress.getByName(saved.lastKnownAddress) }.getOrNull()
-                            if (addr != null) onConnected(saved.name, addr)
+                            if (addr != null) pairingTarget = saved.name to addr
                         }) { Text("Bağlan") }
                     },
                 )

@@ -7,14 +7,12 @@
 //! mDNS crate, at the cost of not working across routed subnets (fine for
 //! "same Wi-Fi network," which is the only case this needs to cover today).
 //!
-//! **Security note:** pairing here establishes a PIN match, which is what
-//! the desktop notification proves the user actually saw and approved — but
-//! nothing yet ties that approval to the input (UDP) or file-transfer (TCP)
-//! sockets, which currently accept from any sender on the LAN. Wiring a
-//! trust store through to those two channels (and picking the TLS approach
-//! from ARCHITECTURE.md's open questions) is the next security-relevant
-//! piece of work here, not a finished guarantee this module already
-//! provides.
+//! **Security note:** a successful PIN match here marks the client's IP
+//! trusted in the shared [`crate::trust::TrustStore`], which
+//! `input_manager.rs` and `file_server.rs` check before acting on anything.
+//! That's IP-based, not cryptographic — see `trust.rs`'s doc comment for
+//! exactly what that does and doesn't guarantee. Picking a real TLS/PSK
+//! approach is still open, see ARCHITECTURE.md §5.
 
 use std::net::SocketAddr;
 use std::process::Command;
@@ -25,6 +23,7 @@ use tokio::net::UdpSocket;
 use tracing::{info, warn};
 
 use crate::protocol::{DiscoverResponse, Header, Opcode, PairRequest, HEADER_LEN};
+use crate::trust::TrustStore;
 
 const DAEMON_NAME_ENV: &str = "UZAKEL_DAEMON_NAME";
 
@@ -47,7 +46,7 @@ fn new_pin() -> u32 {
     pin
 }
 
-pub async fn run(socket: UdpSocket) -> Result<()> {
+pub async fn run(socket: UdpSocket, trust: TrustStore) -> Result<()> {
     let daemon_name = std::env::var(DAEMON_NAME_ENV)
         .unwrap_or_else(|_| hostname().unwrap_or_else(|| "BacakOS".to_string()));
     let mut current_pin = new_pin();
@@ -62,7 +61,7 @@ pub async fn run(socket: UdpSocket) -> Result<()> {
             }
         };
 
-        if let Err(err) = handle(&socket, &buf[..len], from, &daemon_name, &mut current_pin).await {
+        if let Err(err) = handle(&socket, &buf[..len], from, &daemon_name, &mut current_pin, &trust).await {
             warn!(?err, %from, "error handling a discovery/pairing packet");
         }
     }
@@ -74,6 +73,7 @@ async fn handle(
     from: SocketAddr,
     daemon_name: &str,
     current_pin: &mut u32,
+    trust: &TrustStore,
 ) -> Result<()> {
     if buf.len() < HEADER_LEN {
         return Ok(()); // too short to even be a header — ignore, not an error
@@ -97,6 +97,7 @@ async fn handle(
             let req = PairRequest::decode_payload(payload)?;
             let accepted = req.pin == *current_pin;
             if accepted {
+                trust.trust(from.ip());
                 info!(%from, "client paired successfully");
                 // A fresh PIN for the *next* pairing attempt, so a captured
                 // PIN can't be replayed once it's been used.

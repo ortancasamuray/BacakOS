@@ -22,17 +22,32 @@ use tracing::{info, warn};
 use crate::protocol::{
     encode_file_reject, encode_simple, ChunkHeader, FileMeta, Header, Opcode, HEADER_LEN,
 };
+use crate::trust::TrustStore;
 
-pub async fn run(listener: TcpListener, download_dir: PathBuf) -> Result<()> {
+pub async fn run(listener: TcpListener, download_dir: PathBuf, trust: TrustStore) -> Result<()> {
     tokio::fs::create_dir_all(&download_dir)
         .await
         .with_context(|| format!("creating download dir {}", download_dir.display()))?;
 
     loop {
-        let (stream, peer) = listener
+        let (mut stream, peer) = listener
             .accept()
             .await
             .context("accepting file-transfer connection")?;
+
+        if !trust.is_trusted(peer.ip()) {
+            // Reject immediately, before the handshake even starts — unlike
+            // the input (UDP) channel, TCP gives us a connection to write a
+            // real reason back on, so the sender doesn't have to guess why
+            // its file went nowhere.
+            warn!(%peer, "rejecting file-transfer connection from an unpaired address");
+            stream
+                .write_all(&encode_file_reject("cihaz eşleştirilmemiş"))
+                .await
+                .ok();
+            continue;
+        }
+
         let download_dir = download_dir.clone();
         tokio::spawn(async move {
             if let Err(err) = handle_receive(stream, &download_dir).await {

@@ -2,17 +2,20 @@
 
 🌐 [Türkçe](README.tr.md) · **English**
 
-> **Status: verified end-to-end on real hardware.** `daemon/` and `android/`
-> have been run against each other for real — a physical Android phone
-> (MIUI, Android 11) discovering, PIN-pairing with, and moving the real
-> cursor on a live BacakOS session's `bacak-compositor` over real Wi-Fi, with
-> the resulting kernel `REL_X`/`REL_Y` events captured directly from
-> `/dev/input/eventN` to confirm it. File transfer was verified the same way
-> (real SHA-256-checked file landing in `~/İndirilenler`). This found and
-> fixed three real bugs no amount of code review would have caught — see
-> ARCHITECTURE.md §6. Pairing still isn't enforced on the input/file
-> sockets — see the security note in [ARCHITECTURE.md](ARCHITECTURE.md)
-> §"open questions."
+> **Status: verified end-to-end on real hardware, pairing enforced.**
+> `daemon/` and `android/` have been run against each other for real — a
+> physical Android phone (MIUI, Android 11) discovering, PIN-pairing with,
+> and moving the real cursor on a live BacakOS session's `bacak-compositor`
+> over real Wi-Fi, with the resulting kernel `REL_X`/`REL_Y` events captured
+> directly from `/dev/input/eventN` to confirm it. File transfer was
+> verified the same way (real SHA-256-checked file landing in
+> `~/İndirilenler`). This found and fixed three real bugs no amount of code
+> review would have caught, plus tuned the trackpad's feel — see
+> ARCHITECTURE.md §6. Pairing now gates both the input and file-transfer
+> sockets (IP-based, not cryptographic — see the security note in
+> [ARCHITECTURE.md](ARCHITECTURE.md) §2.3), also verified on the same real
+> setup: an unpaired sender's traffic is dropped/rejected, both before and
+> after confirmed with the real phone.
 
 Uzakel ("remote hand" in Turkish) is a two-part remote-control and
 file-transfer ecosystem for BacakOS: an Android app that turns a phone into

@@ -21,6 +21,7 @@ use tokio::net::UdpSocket;
 use tracing::{debug, trace, warn};
 
 use crate::protocol::{InputPacket, Modifiers, MouseButton};
+use crate::trust::TrustStore;
 
 /// Every keyboard `KEY_PRESS` opcode carries a Linux evdev keycode directly
 /// (the client is expected to translate its own platform's keycodes to
@@ -184,7 +185,7 @@ impl VirtualInput {
 /// in-order packet through `input`. Per-source sequence tracking means a
 /// packet from a phone that's still finishing its old connection while a new
 /// one starts doesn't get interleaved with (or overtake) the current one.
-pub async fn run(socket: UdpSocket, input: VirtualInput) -> Result<()> {
+pub async fn run(socket: UdpSocket, input: VirtualInput, trust: TrustStore) -> Result<()> {
     let mut last_seq: HashMap<SocketAddr, u32> = HashMap::new();
     let mut buf = [0u8; 2048];
 
@@ -196,6 +197,16 @@ pub async fn run(socket: UdpSocket, input: VirtualInput) -> Result<()> {
                 continue;
             }
         };
+
+        if !trust.is_trusted(from.ip()) {
+            // Not a "malformed packet" — a real client that just hasn't
+            // paired (or paired before the last daemon restart, see
+            // trust.rs). trace, not warn: this is the expected steady-state
+            // response to an unpaired sender probing the port, not
+            // something the operator needs to see by default.
+            trace!(%from, "dropping input packet from an unpaired address");
+            continue;
+        }
 
         let packet = match InputPacket::decode(&buf[..len]) {
             Ok(p) => p,
