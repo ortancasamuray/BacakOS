@@ -1,5 +1,7 @@
 # Uzakel — Architecture
 
+🌐 [Türkçe özet](ARCHITECTURE.tr.md) · **English**
+
 > **Status: design phase — nothing here is implemented yet.** This document
 > is the target design the first implementation should follow; treat every
 > "will"/"is" below as intent, not a description of existing code.
