@@ -9,6 +9,7 @@
 mod discovery;
 mod file_server;
 mod input_manager;
+mod trust;
 
 // The encode side of `protocol` (InputPacket::encode, FileMeta::encode,
 // encode_chunk, …) isn't called by this binary yet — only the Android
@@ -91,9 +92,15 @@ async fn main() -> Result<()> {
     let virtual_input = input_manager::VirtualInput::open()
         .context("setting up the virtual mouse/keyboard — is this user in the `uinput` group?")?;
 
-    let discovery_task = tokio::spawn(discovery::run(discovery_socket));
-    let input_task = tokio::spawn(input_manager::run(input_socket, virtual_input));
-    let file_task = tokio::spawn(file_server::run(file_listener, downloads));
+    // Shared across all three tasks: discovery::run populates it on a
+    // successful PIN pairing, input_manager::run and file_server::run check
+    // it before acting on anything (see trust.rs for exactly what that
+    // does and doesn't guarantee).
+    let trust = trust::TrustStore::new();
+
+    let discovery_task = tokio::spawn(discovery::run(discovery_socket, trust.clone()));
+    let input_task = tokio::spawn(input_manager::run(input_socket, virtual_input, trust.clone()));
+    let file_task = tokio::spawn(file_server::run(file_listener, downloads, trust));
 
     tokio::select! {
         res = discovery_task => res.context("discovery task panicked")??,
