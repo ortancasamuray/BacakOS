@@ -62,5 +62,19 @@ dependencies {
     // `daemon/src/crypto.rs`'s byte-for-byte HKDF/AEAD derivation exactly.
     implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
 
+    // Camera preview + frame analysis for QR-code pairing (scan the
+    // BacakOS panel's QR instead of typing a PIN + IP by hand).
+    val cameraxVersion = "1.3.4"
+    implementation("androidx.camera:camera-core:$cameraxVersion")
+    implementation("androidx.camera:camera-camera2:$cameraxVersion")
+    implementation("androidx.camera:camera-lifecycle:$cameraxVersion")
+    implementation("androidx.camera:camera-view:$cameraxVersion")
+    // ZXing's decoder core, not Google's ML Kit: pure-Java, no Google Play
+    // Services dependency at all (ML Kit's on-device barcode scanner still
+    // needs Play Services present to fetch/run its model) — this app talks
+    // to nothing but the LAN everywhere else, and pairing shouldn't be the
+    // one feature that silently fails on a Play-Services-less device.
+    implementation("com.google.zxing:core:3.5.3")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

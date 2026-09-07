@@ -10,6 +10,7 @@ mod crypto;
 mod discovery;
 mod file_server;
 mod input_manager;
+mod pairing_state;
 mod trust;
 
 // The encode side of `protocol` (InputPacket::encode, FileMeta::encode,

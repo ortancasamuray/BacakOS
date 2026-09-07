@@ -36,6 +36,7 @@ import org.anadolupanteri.uzakel.discovery.SavedHostsStore
 import org.anadolupanteri.uzakel.network.DiscoveredHost
 import org.anadolupanteri.uzakel.network.NetworkClient
 import org.anadolupanteri.uzakel.network.PairedSession
+import org.anadolupanteri.uzakel.network.ScannedPairingInfo
 import java.net.InetAddress
 
 /**
@@ -58,6 +59,11 @@ fun DeviceListScreen(
     var manualAddress by remember { mutableStateOf("") }
     var pairingTarget by remember { mutableStateOf<Pair<String, InetAddress>?>(null) }
     var pairingError by remember { mutableStateOf<String?>(null) }
+    var showQrScan by remember { mutableStateOf(false) }
+    // true while the in-flight pair() came from a scanned QR (has its PIN
+    // already) rather than the manual-entry dialog (still waiting on one).
+    var autoPairing by remember { mutableStateOf(false) }
+    var scanResolveError by remember { mutableStateOf<String?>(null) }
 
     fun scan() {
         scanning = true
@@ -71,6 +77,45 @@ fun DeviceListScreen(
         }
     }
 
+    // Shared by both the manual-PIN dialog and a successful QR scan (which
+    // just skips straight to this with the PIN the code carried).
+    fun submitPair(hostLabel: String, address: InetAddress, pin: Int) {
+        pairingTarget = hostLabel to address
+        pairingError = null
+        scope.launch {
+            val session = try {
+                client.pair(address, pin)
+            } catch (_: Exception) {
+                null
+            }
+            if (session != null) {
+                savedHosts.upsert(SavedHost(hostLabel, address.hostAddress ?: hostLabel))
+                savedList = savedHosts.list()
+                pairingTarget = null
+                onConnected(hostLabel, session)
+            } else {
+                pairingError = "PIN yanlış veya cihaz yanıt vermedi"
+            }
+        }
+    }
+
+    fun onQrScanned(info: ScannedPairingInfo) {
+        showQrScan = false
+        val addr = runCatching { InetAddress.getByName(info.host) }.getOrNull()
+        if (addr != null) {
+            scanResolveError = null
+            autoPairing = true
+            submitPair(info.name ?: info.host, addr, info.pin)
+        } else {
+            scanResolveError = "QR'daki adres çözümlenemedi: ${info.host}"
+        }
+    }
+
+    if (showQrScan) {
+        QrScanScreen(onScanned = ::onQrScanned, onCancel = { showQrScan = false })
+        return
+    }
+
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         Text("Uzakel — Cihaz Bul", style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(12.dp))
@@ -78,7 +123,13 @@ fun DeviceListScreen(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Button(onClick = ::scan, enabled = !scanning) { Text("Tara") }
             Spacer(Modifier.width(12.dp))
+            Button(onClick = { showQrScan = true }) { Text("QR ile Eşleştir") }
+            Spacer(Modifier.width(12.dp))
             if (scanning) CircularProgressIndicator(modifier = Modifier.size(20.dp))
+        }
+        if (scanResolveError != null) {
+            Spacer(Modifier.height(8.dp))
+            Text(scanResolveError!!, color = MaterialTheme.colorScheme.error)
         }
 
         Spacer(Modifier.height(16.dp))
@@ -90,7 +141,11 @@ fun DeviceListScreen(
                     headlineContent = { Text(host.response.daemonName) },
                     supportingContent = { Text(host.address.hostAddress ?: "") },
                     trailingContent = {
-                        Button(onClick = { pairingTarget = host.response.daemonName to host.address }) {
+                        Button(onClick = {
+                            autoPairing = false
+                            pairingTarget = host.response.daemonName to host.address
+                            pairingError = null
+                        }) {
                             Text("Eşleştir")
                         }
                     },
@@ -110,7 +165,11 @@ fun DeviceListScreen(
                         // whose input/file traffic the daemon then drops.
                         Button(onClick = {
                             val addr = runCatching { InetAddress.getByName(saved.lastKnownAddress) }.getOrNull()
-                            if (addr != null) pairingTarget = saved.name to addr
+                            if (addr != null) {
+                                autoPairing = false
+                                pairingTarget = saved.name to addr
+                                pairingError = null
+                            }
                         }) { Text("Bağlan") }
                     },
                 )
@@ -130,7 +189,11 @@ fun DeviceListScreen(
             Spacer(Modifier.width(8.dp))
             Button(onClick = {
                 val addr = runCatching { InetAddress.getByName(manualAddress) }.getOrNull()
-                if (addr != null) pairingTarget = manualAddress to addr
+                if (addr != null) {
+                    autoPairing = false
+                    pairingTarget = manualAddress to addr
+                    pairingError = null
+                }
             }) { Text("Eşleştir") }
         }
     }
@@ -140,32 +203,24 @@ fun DeviceListScreen(
         PairingDialog(
             hostLabel = target.first,
             error = pairingError,
+            auto = autoPairing,
             onDismiss = { pairingTarget = null; pairingError = null },
-            onSubmit = { pin ->
-                scope.launch {
-                    val session = try {
-                        client.pair(target.second, pin)
-                    } catch (_: Exception) {
-                        null
-                    }
-                    if (session != null) {
-                        savedHosts.upsert(SavedHost(target.first, target.second.hostAddress ?: target.first))
-                        savedList = savedHosts.list()
-                        pairingTarget = null
-                        onConnected(target.first, session)
-                    } else {
-                        pairingError = "PIN yanlış veya cihaz yanıt vermedi"
-                    }
-                }
-            },
+            onSubmit = { pin -> submitPair(target.first, target.second, pin) },
         )
     }
 }
 
+/**
+ * PIN entry, or — when [auto] (a QR scan already carried a PIN) — just a
+ * "Bağlanıyor…" status with no field, since [DeviceListScreen] has already
+ * called `submitPair` by the time this shows. Either way `onDismiss` cancels
+ * out of a pairing attempt that's stuck (wrong PIN, unreachable daemon).
+ */
 @Composable
 private fun PairingDialog(
     hostLabel: String,
     error: String?,
+    auto: Boolean,
     onDismiss: () -> Unit,
     onSubmit: (Int) -> Unit,
 ) {
@@ -175,22 +230,32 @@ private fun PairingDialog(
         title = { Text("$hostLabel ile eşleştir") },
         text = {
             Column {
-                Text("BacakOS masaüstünde gösterilen 6 haneli PIN'i gir.")
-                OutlinedTextField(
-                    value = pinText,
-                    onValueChange = { pinText = it.filter(Char::isDigit).take(6) },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                )
+                if (auto) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(12.dp))
+                        Text("Taranan PIN ile bağlanılıyor…")
+                    }
+                } else {
+                    Text("BacakOS masaüstünde gösterilen 6 haneli PIN'i gir.")
+                    OutlinedTextField(
+                        value = pinText,
+                        onValueChange = { pinText = it.filter(Char::isDigit).take(6) },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    )
+                }
                 if (error != null) {
                     Text(error, color = MaterialTheme.colorScheme.error)
                 }
             }
         },
         confirmButton = {
-            TextButton(
-                onClick = { pinText.toIntOrNull()?.let(onSubmit) },
-                enabled = pinText.length == 6,
-            ) { Text("Eşleştir") }
+            if (!auto) {
+                TextButton(
+                    onClick = { pinText.toIntOrNull()?.let(onSubmit) },
+                    enabled = pinText.length == 6,
+                ) { Text("Eşleştir") }
+            }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("İptal") } },
     )
