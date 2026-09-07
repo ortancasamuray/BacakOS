@@ -361,7 +361,7 @@ pub fn resolve_launch(app_id: &str) -> Option<Vec<String>> {
 }
 
 /// First terminal emulator found on `$PATH`, Wayland-native preferred.
-fn terminal_emulator() -> Option<String> {
+pub(crate) fn terminal_emulator() -> Option<String> {
     const CANDIDATES: &[&str] = &[
         "foot",
         "alacritty",
@@ -519,17 +519,44 @@ fn resolve_icon_path(icon: &str) -> Option<PathBuf> {
     None
 }
 
-/// The active icon theme name, read from GTK settings
+/// Desktop Settings' icon-theme override (`compositor.json` `icon_theme`),
+/// checked before GTK settings. `None` restores auto-detection. Global
+/// rather than threaded through every call site because [`resolve_icon_rgba`]
+/// is a free function called from render code with no `BacakState` access;
+/// [`crate::state::BacakState`] sets this at startup and whenever the picker
+/// changes the selection, clearing `icon_cache` in the same step so the new
+/// theme takes effect on the next resolve.
+static ICON_THEME_OVERRIDE: std::sync::OnceLock<std::sync::RwLock<Option<String>>> =
+    std::sync::OnceLock::new();
+
+/// Set (or clear, with `None`) the icon-theme override.
+pub fn set_icon_theme_override(theme: Option<String>) {
+    let lock = ICON_THEME_OVERRIDE.get_or_init(|| std::sync::RwLock::new(None));
+    if let Ok(mut w) = lock.write() {
+        *w = theme;
+    }
+}
+
+fn icon_theme_override() -> Option<String> {
+    ICON_THEME_OVERRIDE.get()?.read().ok()?.clone()
+}
+
+/// The active icon theme name: the Desktop Settings override if set,
+/// otherwise read from GTK settings
 /// (`<config>/gtk-4.0|gtk-3.0/settings.ini`, key `gtk-icon-theme-name`).
 /// Falls back to `hicolor` — which the resolver always includes anyway, so an
 /// unconfigured desktop simply gets the hicolor + pixmaps behaviour. Read live
 /// per resolution; that's rare since decoded textures are cached by app id on
-/// [`crate::state::BacakState`]. (A theme change therefore only takes effect
-/// for icons resolved after it — live invalidation is a follow-up.)
+/// [`crate::state::BacakState`].
 /// The user's configured GTK icon theme (`gtk-icon-theme-name` in the GTK 4/3
 /// `settings.ini`), or `None` when unset — there's no reliable system default
 /// to assume, so callers fall back to probing what's actually installed.
 fn configured_icon_theme() -> Option<String> {
+    if let Some(t) = icon_theme_override() {
+        if !t.is_empty() {
+            return Some(t);
+        }
+    }
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let cfg = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
@@ -553,8 +580,9 @@ fn configured_icon_theme() -> Option<String> {
 }
 
 /// Icon-theme directories (those with an `index.theme`) installed across the
-/// XDG data dirs, e.g. `Adwaita`, `breeze`, `hicolor`.
-fn installed_icon_themes() -> Vec<String> {
+/// XDG data dirs, e.g. `Adwaita`, `breeze`, `hicolor`. Public so the Desktop
+/// Settings icon-theme picker can list real choices instead of a fixed set.
+pub fn installed_icon_themes() -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for root in data_dirs() {
         let Ok(rd) = std::fs::read_dir(root.join("icons")) else {
@@ -573,11 +601,12 @@ fn installed_icon_themes() -> Vec<String> {
     out
 }
 
-/// Icon themes to try, best first: the configured GTK theme, then the most
-/// complete installed themes (so standard names like `utilities-terminal` or
-/// `preferences-system` resolve even with no GTK config — they live in a full
-/// theme such as Breeze/Adwaita, not in `hicolor`), then any other installed
-/// theme, with `hicolor` always last as the spec fallback.
+/// Icon themes to try, best first: the configured GTK theme or Desktop
+/// Settings override, then the most complete installed themes — BacakOS's
+/// own theme (see `bacak-icons`) first when installed, then third-party
+/// full themes like Breeze/Adwaita (so standard names such as
+/// `utilities-terminal` resolve even with no GTK config) — then any other
+/// installed theme, with `hicolor` always last as the spec fallback.
 fn icon_theme_candidates() -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     if let Some(cfg) = configured_icon_theme() {
@@ -585,6 +614,7 @@ fn icon_theme_candidates() -> Vec<String> {
     }
     let installed = installed_icon_themes();
     for pref in [
+        "BacakOS",
         "breeze",
         "Adwaita",
         "Papirus",

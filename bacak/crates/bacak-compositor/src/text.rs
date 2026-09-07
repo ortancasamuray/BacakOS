@@ -103,6 +103,51 @@ impl TextRenderer {
             .map(|font| Self { font })
     }
 
+    /// Load the user-chosen UI font (`compositor.json` `font`), falling back
+    /// to [`load`] when `path` is empty, missing, or unparsable. Used at
+    /// startup and whenever the Desktop Settings font picker changes the
+    /// selection.
+    pub fn load_with_override(path: &str) -> Option<Self> {
+        let path = path.trim();
+        if !path.is_empty() {
+            if let Ok(bytes) = std::fs::read(path) {
+                match Font::from_bytes(bytes, FontSettings::default()) {
+                    Ok(font) => {
+                        tracing::info!(font = path, "loaded UI font (user override)");
+                        return Some(Self { font });
+                    }
+                    Err(err) => tracing::warn!(font = path, ?err, "configured font failed to parse; falling back"),
+                }
+            } else {
+                tracing::warn!(font = path, "configured font not found; falling back");
+            }
+        }
+        Self::load()
+    }
+
+    /// Scan standard font directories for `.ttf`/`.otf`/`.ttc` files,
+    /// returning `(display name, absolute path)` pairs sorted by name. Backs
+    /// the Desktop Settings font picker. A shallow recursive walk (depth ≤
+    /// 4) — installed font packages never nest deeper than
+    /// `<root>/truetype/<family>/<file>`.
+    pub fn list_available_fonts() -> Vec<(String, String)> {
+        let mut roots = vec![
+            std::path::PathBuf::from("/usr/share/fonts"),
+            std::path::PathBuf::from("/usr/local/share/fonts"),
+        ];
+        if let Ok(home) = std::env::var("HOME") {
+            roots.push(std::path::PathBuf::from(&home).join(".local/share/fonts"));
+            roots.push(std::path::PathBuf::from(&home).join(".fonts"));
+        }
+        let mut out: Vec<(String, String)> = Vec::new();
+        for root in &roots {
+            scan_font_dir(root, 0, &mut out);
+        }
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out.dedup_by(|a, b| a.0 == b.0);
+        out
+    }
+
     /// Rasterise one line at `px` height into an `Abgr8888` buffer.
     ///
     /// * `color` is the straight-alpha RGB the glyphs tint to.
@@ -249,6 +294,34 @@ impl TextRenderer {
             }
         }
         Some((buf, width, height))
+    }
+}
+
+/// Recursive helper for [`TextRenderer::list_available_fonts`].
+fn scan_font_dir(dir: &std::path::Path, depth: u32, out: &mut Vec<(String, String)>) {
+    if depth > 4 {
+        return;
+    }
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    for ent in rd.flatten() {
+        let path = ent.path();
+        if path.is_dir() {
+            scan_font_dir(&path, depth + 1, out);
+            continue;
+        }
+        let is_font = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("ttf") || e.eq_ignore_ascii_case("otf") || e.eq_ignore_ascii_case("ttc"))
+            .unwrap_or(false);
+        if !is_font {
+            continue;
+        }
+        let Some(name) = path.file_stem().and_then(|s| s.to_str()) else { continue };
+        if name.is_empty() {
+            continue;
+        }
+        out.push((name.to_string(), path.to_string_lossy().into_owned()));
     }
 }
 

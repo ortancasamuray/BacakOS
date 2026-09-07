@@ -2,12 +2,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # SPDX-FileCopyrightText: 2026 Anadolu Panteri <bilgi@anadolupanteri.org.tr>
 #
-# kur-root — root tarafındaki sarmalayıcı. pkexec bunu çağırır; polkit kuralı
-# (org.anadolupanteri.kur.policy) tam olarak bu yola bağlıdır.
+# kur-root — root tarafındaki sarmalayıcı. `kur-baslat` bunu `sudo` ile çağırır.
 #
 # Doğrudan çalıştırmayın: /usr/bin/kur-baslat kullanın.
 #
-# Argümanlar, pkexec'in sildiği görüntü değişkenleri:
+# Argümanlar, sudo'nun sildiği görüntü değişkenleri:
 #   $1 WAYLAND_DISPLAY   $2 XDG_RUNTIME_DIR   $3 DISPLAY
 #
 # root, kullanıcının /run/user/<uid> dizinindeki Wayland soketini dosya izinleri

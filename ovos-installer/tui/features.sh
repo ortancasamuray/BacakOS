@@ -1,0 +1,289 @@
+#!/usr/bin/env bash
+# shellcheck source=tui/dialogs.sh
+source tui/dialogs.sh
+# shellcheck source=tui/locales/en-us/features.sh
+source "tui/locales/$LOCALE/features.sh"
+# shellcheck source=utils/llm_defaults.sh
+source "utils/llm_defaults.sh"
+# shellcheck source=tui/hardware_state.sh
+source tui/hardware_state.sh
+
+# Keep checklist row descriptions within the visible dialog width. Whiptail
+# does not wrap checklist items, so overlong text spills past the right border.
+function tui_features_fit_checklist_text() {
+  local tag="$1"
+  local text="$2"
+  local width="${TUI_WINDOW_WIDTH:-80}"
+  # 22 covers whiptail checklist overhead beyond the tag itself: checkbox,
+  # status column, spacing, and the right-side padding inside the dialog.
+  local max_length=$(( width - ${#tag} - 22 ))
+
+  if [ "$max_length" -lt 24 ]; then
+    max_length=24
+  fi
+
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$text" "$max_length" <<'PY'
+import sys
+
+text = sys.argv[1]
+max_length = int(sys.argv[2])
+
+if len(text) <= max_length:
+    sys.stdout.write(text)
+elif max_length <= 3:
+    sys.stdout.write(text[:max_length])
+else:
+    sys.stdout.write(text[: max_length - 3] + "...")
+PY
+    return
+  fi
+
+  awk -v str="$text" -v max="$max_length" '
+    BEGIN {
+      if (length(str) <= max) {
+        print str
+      } else if (max <= 3) {
+        print substr(str, 1, max)
+      } else {
+        print substr(str, 1, max - 3) "..."
+      }
+    }
+  '
+}
+
+export FEATURE_SKILLS="false"
+export FEATURE_EXTRA_SKILLS="false"
+export FEATURE_GUI="false"
+export FEATURE_HOMEASSISTANT="false"
+export FEATURE_LLM="false"
+export HOMEASSISTANT_URL="${HOMEASSISTANT_URL:-}"
+export LLM_API_URL="${LLM_API_URL:-}"
+export LLM_PERSONA="${LLM_PERSONA:-$LLM_DEFAULT_PERSONA}"
+
+_gui_supported="false"
+_gui_default_state="OFF"
+if [[ "$TUI_MARK2_OR_DEVKIT_DETECTED" == "true" ]] && \
+  [[ "${PROFILE:-}" != "server" ]] && \
+  [[ "${PROFILE:-}" != "satellite" ]] && \
+  [[ "${DISTRO_NAME:-}" == "debian" ]] && \
+  { [[ "${DISTRO_VERSION_ID:-}" == 13* ]] || [[ "${DISTRO_VERSION:-}" =~ [Tt]rixie ]]; }; then
+  _gui_supported="true"
+  _gui_default_state="ON"
+fi
+_skill_description="$(tui_features_fit_checklist_text "skills" "${SKILL_DESCRIPTION}")"
+_extra_skill_description="$(tui_features_fit_checklist_text "extra-skills" "${EXTRA_SKILL_DESCRIPTION}")"
+_gui_description="$(tui_features_fit_checklist_text "gui" "${GUI_DESCRIPTION:-Enable OVOS GUI support}")"
+if [ "${_gui_supported}" == "true" ]; then
+  _gui_description="$(tui_features_fit_checklist_text "gui" "${GUI_DESCRIPTION:-Enable OVOS GUI support (Mark II/DevKit on Debian Trixie)}")"
+  if [ "${_gui_default_state}" == "ON" ]; then
+    export FEATURE_GUI="true"
+  fi
+fi
+_homeassistant_description="$(tui_features_fit_checklist_text "homeassistant" "${HOMEASSISTANT_DESCRIPTION:-Enable Home Assistant integration (URL + token)}")"
+_llm_description="$(tui_features_fit_checklist_text "llm" "${LLM_DESCRIPTION:-Enable AI fallback for OVOS Persona (guided setup)}")"
+
+_ha_supported="false"
+if [[ "${METHOD:-virtualenv}" == "virtualenv" || "${METHOD:-virtualenv}" == "containers" ]] && \
+  [[ "${PROFILE:-}" != "server" ]] && \
+  [[ "${PROFILE:-}" != "satellite" ]]; then
+  _ha_supported="true"
+fi
+
+_llm_supported="false"
+if [[ "${METHOD:-virtualenv}" == "virtualenv" || "${METHOD:-virtualenv}" == "containers" ]] && \
+  [[ "${PROFILE:-}" != "server" ]] && \
+  [[ "${PROFILE:-}" != "satellite" ]]; then
+  _llm_supported="true"
+fi
+
+declare -a features
+features=("skills" "$_skill_description" "ON")
+features+=("extra-skills" "$_extra_skill_description" "OFF")
+if [ "${_gui_supported}" == "true" ]; then
+  features+=("gui" "${_gui_description}" "${_gui_default_state}")
+fi
+if [ "${_ha_supported}" == "true" ]; then
+  features+=("homeassistant" "${_homeassistant_description}" "OFF")
+fi
+if [ "${_llm_supported}" == "true" ]; then
+  features+=("llm" "${_llm_description}" "OFF")
+fi
+
+if [ -f "$INSTALLER_STATE_FILE" ] && \
+  jq -e '(.features? | type) == "array"' "$INSTALLER_STATE_FILE" >/dev/null 2>>"$LOG_FILE"; then
+  if jq -e '.features|any(. == "skills")' "$INSTALLER_STATE_FILE" >/dev/null 2>>"$LOG_FILE"; then
+    features=("skills" "$_skill_description" "ON")
+  else
+    features=("skills" "$_skill_description" "OFF")
+  fi
+  if jq -e '.features|any(. == "extra-skills")' "$INSTALLER_STATE_FILE" >/dev/null 2>>"$LOG_FILE"; then
+    features+=("extra-skills" "$_extra_skill_description" "ON")
+  else
+    features+=("extra-skills" "$_extra_skill_description" "OFF")
+  fi
+  if [ "${_gui_supported}" == "true" ]; then
+    if jq -e '.feature_gui_selected | type == "boolean"' "$INSTALLER_STATE_FILE" >/dev/null 2>>"$LOG_FILE"; then
+      if jq -e '.feature_gui_selected == true' "$INSTALLER_STATE_FILE" >/dev/null 2>>"$LOG_FILE"; then
+        features+=("gui" "${_gui_description}" "ON")
+        export FEATURE_GUI="true"
+      else
+        features+=("gui" "${_gui_description}" "OFF")
+        export FEATURE_GUI="false"
+      fi
+    elif jq -e '.features|any(. == "gui")' "$INSTALLER_STATE_FILE" >/dev/null 2>>"$LOG_FILE"; then
+      features+=("gui" "${_gui_description}" "ON")
+      export FEATURE_GUI="true"
+    else
+      # Legacy state without explicit GUI selection should follow Mark II default.
+      features+=("gui" "${_gui_description}" "${_gui_default_state}")
+      if [ "${_gui_default_state}" == "ON" ]; then
+        export FEATURE_GUI="true"
+      else
+        export FEATURE_GUI="false"
+      fi
+    fi
+  fi
+  if [ "${_ha_supported}" == "true" ]; then
+    if jq -e '.features|any(. == "homeassistant")' "$INSTALLER_STATE_FILE" >/dev/null 2>>"$LOG_FILE"; then
+      features+=("homeassistant" "${_homeassistant_description}" "ON")
+    else
+      features+=("homeassistant" "${_homeassistant_description}" "OFF")
+    fi
+  fi
+  if [ "${_llm_supported}" == "true" ]; then
+    if jq -e '.features|any(. == "llm")' "$INSTALLER_STATE_FILE" >/dev/null 2>>"$LOG_FILE"; then
+      features+=("llm" "${_llm_description}" "ON")
+    else
+      features+=("llm" "${_llm_description}" "OFF")
+    fi
+  fi
+fi
+
+# Whiptail requires (tag item status)*. If anything corrupts the list, fall back
+# to a safe default instead of rendering a blank window.
+if [ "${#features[@]}" -lt 3 ] || [ $(( ${#features[@]} % 3 )) -ne 0 ]; then
+  features=(
+    "skills" "$_skill_description" "ON"
+    "extra-skills" "$_extra_skill_description" "OFF"
+  )
+  if [ "${_gui_supported}" == "true" ]; then
+    features+=("gui" "${_gui_description}" "${_gui_default_state}")
+  fi
+  if [ "${_ha_supported}" == "true" ]; then
+    features+=("homeassistant" "${_homeassistant_description}" "OFF")
+  fi
+  if [ "${_llm_supported}" == "true" ]; then
+    features+=("llm" "${_llm_description}" "OFF")
+  fi
+fi
+
+list_height=$((${#features[@]} / 3))
+if [ "$list_height" -lt 1 ]; then
+  list_height=1
+fi
+if [ "$list_height" -lt 4 ]; then
+  list_height=4
+fi
+
+if [ "${DEBUG:-false}" == "true" ]; then
+  {
+    printf '[debug] features: options=%s list_height=%s\n' "$(( ${#features[@]} / 3 ))" "$list_height"
+    printf '[debug] features: args=%s\n' "${features[*]}"
+  } >>"$LOG_FILE" 2>/dev/null || true
+fi
+
+if ! tui_whiptail_capture OVOS_FEATURES --separate-output --title "$TITLE" \
+  --checklist "$CONTENT" --cancel-button "$BACK_BUTTON" --ok-button "$OK_BUTTON" \
+  "$TUI_WINDOW_HEIGHT" "$TUI_WINDOW_WIDTH" "$list_height" "${features[@]}"; then
+  source tui/profiles.sh
+  if [[ "$PROFILE" == "satellite" ]]; then
+    # Satellite doesn't have selectable features; collect satellite settings next.
+    export FEATURE_GUI="false" FEATURE_SKILLS="false" FEATURE_EXTRA_SKILLS="false" FEATURE_LLM="false"
+    source tui/satellite/main.sh
+    return
+fi
+  source tui/features.sh
+  return
+fi
+
+FEATURES_STATE=()
+if [ "${_gui_supported}" == "true" ]; then
+  export FEATURE_GUI="false"
+fi
+if [ "${_llm_supported}" == "true" ]; then
+  export FEATURE_LLM="false"
+fi
+for FEATURE in $OVOS_FEATURES; do
+  case "$FEATURE" in
+  "skills")
+    export FEATURE_SKILLS="true"
+    FEATURES_STATE+=("skills")
+    ;;
+  "extra-skills")
+    export FEATURE_EXTRA_SKILLS="true"
+    FEATURES_STATE+=("extra-skills")
+    ;;
+  "gui")
+    export FEATURE_GUI="true"
+    FEATURES_STATE+=("gui")
+    ;;
+  "homeassistant")
+    # Collect Home Assistant details; only enable if fully configured.
+    # shellcheck source=tui/homeassistant.sh
+    source tui/homeassistant.sh
+    if [ "${HOMEASSISTANT_BACK:-false}" == "true" ]; then
+      unset HOMEASSISTANT_BACK
+      source tui/features.sh
+      return
+    fi
+    if [ "${FEATURE_HOMEASSISTANT}" == "true" ]; then
+      FEATURES_STATE+=("homeassistant")
+    fi
+    ;;
+  "llm")
+    # Collect LLM details; only enable if fully configured.
+    # shellcheck source=tui/llm.sh
+    source tui/llm.sh
+    if [ "${LLM_BACK:-false}" == "true" ]; then
+      unset LLM_BACK
+      source tui/features.sh
+      return
+    fi
+    if [ "${FEATURE_LLM}" == "true" ]; then
+      FEATURES_STATE+=("llm")
+    fi
+    ;;
+  esac
+done
+
+# Persist selection (used for defaults when navigating back or re-running).
+features_json="$(jq -c -n --args '$ARGS.positional' "${FEATURES_STATE[@]}" 2>>"$LOG_FILE")"
+state_tmp="$(mktemp)"
+_feature_gui_selected_json="null"
+if [ "${_gui_supported}" == "true" ]; then
+  if [ "${FEATURE_GUI}" == "true" ]; then
+    _feature_gui_selected_json="true"
+  else
+    _feature_gui_selected_json="false"
+  fi
+fi
+if [ -f "$INSTALLER_STATE_FILE" ] && \
+  jq --argjson features "$features_json" \
+    --argjson feature_gui_selected "$_feature_gui_selected_json" \
+    'if type=="object" then . else {} end
+     | .features = $features
+     | if $feature_gui_selected == null then . else .feature_gui_selected = $feature_gui_selected end' \
+    "$INSTALLER_STATE_FILE" >"$state_tmp" 2>>"$LOG_FILE"; then
+  mv -f "$state_tmp" "$INSTALLER_STATE_FILE"
+else
+  jq -n --argjson features "$features_json" --argjson feature_gui_selected "$_feature_gui_selected_json" \
+    '{features: $features} | if $feature_gui_selected == null then . else .feature_gui_selected = $feature_gui_selected end' \
+    >"$state_tmp" 2>>"$LOG_FILE" && \
+    mv -f "$state_tmp" "$INSTALLER_STATE_FILE"
+fi
+
+# Keep state writable by the target user when running under sudo/root.
+if [ -n "${RUN_AS:-}" ] && [ -f "$INSTALLER_STATE_FILE" ]; then
+  chown "$RUN_AS":"$(id -ng "$RUN_AS" 2>>"$LOG_FILE")" "$INSTALLER_STATE_FILE" &>>"$LOG_FILE" || true
+fi

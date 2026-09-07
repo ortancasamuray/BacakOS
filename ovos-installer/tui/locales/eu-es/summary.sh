@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+CONTENT="
+Ia amaitu duzu, hona hemen Open Voice OS instalatzeko egin dituzun aukeren laburpena:
+
+    - Metodoa: $METHOD
+    - Bertsioa: $CHANNEL
+    - Profila: $PROFILE
+    - Trebetasunak: $FEATURE_SKILLS_SUMMARY_STATE
+    - Afinazioa: $TUNING_SUMMARY_STATE
+
+Open Voice OS instalazio-prozesuan egindako aukerak arretaz aztertu dira gure sistema zure behar eta lehentasun berezietara egokitzeko.
+
+Laburpen hau zuzena iruditzen zaizu? Hala ez bada, hautatu $BACK_BUTTON (edo sakatu ESC) atzera egiteko eta aldaketak egiteko.
+"
+TITLE="Ireki Voice OS instalazioa - Laburpena"
+
+export CONTENT TITLE

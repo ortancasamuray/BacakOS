@@ -113,7 +113,12 @@ pub fn wire_disks(ui: &MainWindow) {
             state.selection.select_disk(index as usize, disk);
             // Read once per selection, not on every keystroke: `build_plan`
             // runs on every UI refresh and must never shell out itself.
-            state.table = PartitionTable::read(&disk.path, disk.size_bytes).ok();
+            // A read failure leaves the manual editor with nothing to show
+            // (no existing partitions, no free-space gaps) — log it, or a
+            // real-hardware `sfdisk` quirk becomes an unexplained blank page.
+            state.table = PartitionTable::read(&disk.path, disk.size_bytes)
+                .inspect_err(|error| log::error!("{} bölüm tablosu okunamadı: {error:#}", disk.path))
+                .ok();
         });
         refresh_disk_view(&ui);
     });

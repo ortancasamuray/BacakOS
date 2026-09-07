@@ -48,8 +48,14 @@ impl Plugin for GesturePlugin {
                 ctx.toggle_overview(output);
                 true
             }
-            // ShowDesktop / LongPress / SecondaryTap / RevealDock are recognised
-            // but not yet routed (need shell surfaces / WM actions not built).
+            Gesture::SecondaryTap => {
+                // Four 2-finger taps in a row (mirrors the mouse LEFT+RIGHT
+                // double chord-press) → open a terminal.
+                ctx.state().secondary_tap_event();
+                true
+            }
+            // ShowDesktop / LongPress / RevealDock are recognised but not yet
+            // routed (need shell surfaces / WM actions not built).
             other => {
                 tracing::debug!(?other, "gesture recognised but not yet routed");
                 false

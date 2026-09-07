@@ -68,6 +68,7 @@ export component MainWindow inherits Window {
     in property <string> install-log;
     in property <string> install-summary;
     in property <bool> can-start;
+    in property <string> install-blocked-reason;
 
     // -- Callbacks into Rust
     callback step-selected(int);
@@ -194,6 +195,7 @@ export component MainWindow inherits Window {
                 log-tail: root.install-log;
                 summary: root.install-summary;
                 can-start: root.can-start;
+                blocked-reason: root.install-blocked-reason;
                 start => { root.install-start(); }
                 cancel => { root.install-cancel(); }
                 reboot => { root.reboot(); }

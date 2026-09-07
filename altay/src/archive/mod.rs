@@ -167,6 +167,8 @@ pub enum ArchiveError {
     PasswordRequired,
     #[error("backend error: {0}")]
     Backend(String),
+    #[error("operation cancelled")]
+    Cancelled,
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -177,6 +179,11 @@ pub struct Options {
     pub password: Option<String>,
     /// Split output into volumes of this many bytes (0 = single file).
     pub volume_bytes: u64,
+    /// Cooperative cancellation. When present and flipped to `true`, a
+    /// long-running create/extract aborts at its next checkpoint and
+    /// returns [`ArchiveError::Cancelled`]. Backends that don't support
+    /// mid-operation cancellation simply ignore it.
+    pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 /// Implemented by each format backend.

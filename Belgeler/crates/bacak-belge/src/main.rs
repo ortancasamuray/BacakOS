@@ -374,13 +374,17 @@ fn html_to_text(html: &str) -> String {
 // ── Main ───────────────────────────────────────────────────────────────────
 
 fn main() -> Result<()> {
-    let path: PathBuf = std::env::args()
-        .nth(1)
-        .map(PathBuf::from)
-        .context("Kullanım: bacak-belge <dosya>")?;
+    // Dock/menu launches pass no argument (there's no file to open yet), so
+    // show an empty-state window instead of erroring out before any window
+    // exists — a dock click must always produce a visible window.
+    let Some(path) = std::env::args().nth(1).map(PathBuf::from) else {
+        let ui = AppWindow::new()?;
+        ui.set_mode("error".into());
+        ui.set_status("Bir dosya açmak için Altay dosya yöneticisini kullanın.".into());
+        ui.run()?;
+        return Ok(());
+    };
     let path = path.canonicalize().unwrap_or(path);
-
-    let kind = detect(&path).context("Desteklenmeyen dosya türü")?;
 
     let filename = path
         .file_name()
@@ -390,6 +394,13 @@ fn main() -> Result<()> {
 
     let ui = AppWindow::new()?;
     ui.set_filename(filename.clone().into());
+
+    let Some(kind) = detect(&path) else {
+        ui.set_mode("error".into());
+        ui.set_status("Desteklenmeyen dosya türü".into());
+        ui.run()?;
+        return Ok(());
+    };
     ui.set_mode("loading".into());
 
     match kind {

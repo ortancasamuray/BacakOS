@@ -1,0 +1,55 @@
+---
+- name: Query EEPROM package install state (Debian)
+  ansible.builtin.command:
+    argv:
+      - "{{ ovos_performance_tuning_dpkg_query_path }}"
+      - -W
+      - "-f=${db:Status-Status}"
+      - "{{ ovos_performance_tuning_rpi_eeprom_package }}"
+  register: ovos_performance_tuning_rpi_eeprom_query
+  changed_when: false
+  failed_when: false
+  when: ansible_facts.os_family == "Debian"
+
+- name: Set EEPROM package-installed fact
+  ansible.builtin.set_fact:
+    ovos_performance_tuning_rpi_eeprom_installed: >-
+      {{
+        ovos_performance_tuning_rpi_eeprom_query.rc | default(1) == 0
+        and
+        (ovos_performance_tuning_rpi_eeprom_query.stdout | default('') | trim)
+        == ovos_performance_tuning_dpkg_installed_status
+      }}
+  when: ansible_facts.os_family == "Debian"
+
+- name: Set EEPROM package-installed fact (non-Debian)
+  ansible.builtin.set_fact:
+    ovos_performance_tuning_rpi_eeprom_installed: false
+  when: ansible_facts.os_family != "Debian"
+
+- name: Check rpi-eeprom-update binary
+  ansible.builtin.stat:
+    path: "{{ ovos_performance_tuning_rpi_eeprom_update_path }}"
+  register: ovos_performance_tuning_rpi_eeprom_update_bin
+  changed_when: false
+
+- name: Apply Raspberry Pi EEPROM updates
+  ansible.builtin.command:
+    cmd: "{{ ovos_performance_tuning_rpi_eeprom_update_cmd }}"
+  register: ovos_performance_tuning_rpi_eeprom_update
+  changed_when: >-
+    (
+      (
+        (ovos_performance_tuning_rpi_eeprom_update.stdout | default(''))
+        ~ ' '
+        ~ (ovos_performance_tuning_rpi_eeprom_update.stderr | default(''))
+      )
+      | lower
+      | regex_search(ovos_performance_tuning_rpi_eeprom_reboot_regex)
+      | default('', true)
+      | length
+    ) > 0
+  notify: Set Reboot
+  when:
+    - ovos_performance_tuning_rpi_eeprom_installed | default(false) | bool
+    - ovos_performance_tuning_rpi_eeprom_update_bin.stat.exists | default(false) | bool

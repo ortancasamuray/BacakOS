@@ -201,6 +201,45 @@ pub fn is_uefi_boot() -> bool {
     std::path::Path::new("/sys/firmware/efi").exists()
 }
 
+/// Force everything currently mounted or swapped-on under `disk`'s existing
+/// partitions to let go, right before an automatic plan wipes it.
+///
+/// The wizard reads the disk once, at selection time, and the automatic
+/// install may only start minutes later — long enough for the desktop's own
+/// automount (gvfs/udisks2) to have silently mounted a partition that was
+/// free when the user picked the disk (an old NTFS partition is exactly the
+/// kind of thing autofs mounts on sight). `sfdisk` then refuses outright:
+/// "This disk is currently in use — repartitioning is probably a bad idea."
+/// Best-effort and infallible by design, matching [`super::stages::unmount_all`]:
+/// a disk with nothing mounted has nothing to release, which is not an error.
+pub fn release(disk_path: &str, cancel: &cmd::Cancel) {
+    let Ok(json) = cmd::capture("lsblk", &["-J", "-o", "PATH,MOUNTPOINT,FSTYPE", disk_path]) else {
+        return;
+    };
+    let Ok(root) = serde_json::from_str::<serde_json::Value>(&json) else {
+        return;
+    };
+    if let Some(devices) = root["blockdevices"].as_array() {
+        release_tree(devices, cancel);
+    }
+}
+
+fn release_tree(devices: &[serde_json::Value], cancel: &cmd::Cancel) {
+    for device in devices {
+        if let Some(mountpoint) = device["mountpoint"].as_str() {
+            let _ = cmd::run("umount", &["-R", mountpoint], cancel);
+        }
+        if device["fstype"].as_str() == Some("swap") {
+            if let Some(path) = device["path"].as_str() {
+                let _ = cmd::run("swapoff", &[path], cancel);
+            }
+        }
+        if let Some(children) = device["children"].as_array() {
+            release_tree(children, cancel);
+        }
+    }
+}
+
 /// A gap between (or around) existing partitions, big enough to be worth
 /// offering the user in manual mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -247,10 +286,12 @@ struct SfdiskOutput {
 struct SfdiskTable {
     #[serde(default = "default_sector")]
     sectorsize: u64,
-    #[serde(default)]
-    firstlba: u64,
-    #[serde(default)]
-    lastlba: u64,
+    /// GPT-only: `sfdisk -J` on an MBR ("dos") label omits both fields
+    /// entirely rather than emitting a zero, so these must default to
+    /// `None`, not `0` — defaulting to `0` would collapse `last_usable_bytes`
+    /// to a single sector and hide the disk's free space from manual mode.
+    firstlba: Option<u64>,
+    lastlba: Option<u64>,
     #[serde(default)]
     partitions: Vec<SfdiskPartition>,
 }
@@ -305,8 +346,14 @@ impl PartitionTable {
 
         Ok(Self {
             sector_bytes: sector,
-            first_usable_bytes: table.firstlba * sector,
-            last_usable_bytes: (table.lastlba + 1).saturating_mul(sector).min(disk_size_bytes),
+            // MBR ("dos") labels report neither field (see `SfdiskTable`);
+            // fall back to the same margin/whole-disk bounds `Self::empty`
+            // uses for a disk with no partition table at all.
+            first_usable_bytes: table.firstlba.map_or(MIB, |lba| lba * sector),
+            last_usable_bytes: table
+                .lastlba
+                .map_or(disk_size_bytes, |lba| (lba + 1).saturating_mul(sector))
+                .min(disk_size_bytes),
             partitions,
         })
     }
@@ -567,6 +614,32 @@ mod tests {
         let last_usable_sector = 207848 + 100000;
         let table = PartitionTable::parse(&json, last_usable_sector * 512).unwrap();
         assert!(table.free_space().is_empty());
+    }
+
+    /// Captured shape of `sfdisk -J` against a real MBR ("dos") disk: unlike
+    /// GPT, it reports neither `firstlba` nor `lastlba` at all. A used Windows
+    /// disk with one NTFS partition and the rest of the drive free is exactly
+    /// the case a manual-mode user hits first.
+    #[test]
+    fn mbr_table_without_firstlba_lastlba_still_finds_the_trailing_gap() {
+        let json = r#"{
+           "partitiontable": {
+              "label": "dos",
+              "device": "/dev/sdb",
+              "unit": "sectors",
+              "sectorsize": 512,
+              "partitions": [
+                 {"node": "/dev/sdb1", "start": 2048, "size": 204800, "type": "7"}
+              ]
+           }
+        }"#;
+        let disk_size = 524288000_u64;
+        let table = PartitionTable::parse(json, disk_size).unwrap();
+        let free = table.free_space();
+
+        assert_eq!(free.len(), 1, "NTFS bölümünden sonraki tüm alan boş görünmeli");
+        assert_eq!(free[0].start_bytes, (2048 + 204800) * 512);
+        assert_eq!(free[0].size_bytes, disk_size - free[0].start_bytes);
     }
 
     #[test]
