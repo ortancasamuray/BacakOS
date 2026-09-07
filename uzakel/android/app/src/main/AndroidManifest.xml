@@ -16,11 +16,17 @@
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
 
-    <!-- No android:icon yet — a launcher icon asset (mipmap set) hasn't been
-         designed for this project; the system default is used until one is
-         added, matching bacak-icons' guidance to not improvise app icons. -->
+    <!-- Adaptive icon (res/mipmap-anydpi-v26/): an Aegean-gradient
+         background (matching bacak/DESIGN_SYSTEM.md's desktop background)
+         behind a phone + cursor glyph, following that doc's app-icon rule
+         (§5: primary glyph in Aegean pale, secondary detail in white at
+         60%, Rust accent for the one element meant to draw the eye first
+         — here, the cursor). No legacy mipmap PNGs needed: minSdk 26 is
+         exactly where adaptive icons became mandatory-supported. -->
     <application
         android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:label="@string/app_name"
         android:theme="@style/Theme.Uzakel"
         android:supportsRtl="true">
