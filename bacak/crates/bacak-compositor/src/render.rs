@@ -2290,6 +2290,65 @@ pub(crate) fn render_mic_panel(
     cc_card(out, renderer, p.panel, panel_col, 22.0, output_scale, off_x, off_y);
 }
 
+/// Render the Uzakel pairing QR panel when open. Front-to-back: title +
+/// status labels, the QR image (or nothing, when the daemon isn't
+/// publishing a pairing state), the Kapat button card, then the panel
+/// backdrop — same three-pass shape as `render_audio_panel`.
+pub(crate) fn render_uzakel_panel(
+    state: &BacakState,
+    renderer: &mut GlesRenderer,
+    output: OutputId,
+    output_scale: i32,
+    off_x: i32,
+    off_y: i32,
+    out: &mut Vec<BacakElements>,
+) {
+    let Some(p) = state.uzakel_panel.as_ref() else { return };
+    if p.output != output {
+        return;
+    }
+
+    const PAD: f32 = 18.0;
+    const TITLE_H: f32 = 28.0;
+    const GAP: f32 = 10.0;
+
+    cc_blit_label(out, renderer, &p.title, p.panel.x + PAD, p.panel.y + PAD, output_scale, off_x, off_y);
+
+    let mut y = p.panel.y + PAD + TITLE_H + GAP;
+    if let Some((_, qw, qh)) = &p.qr {
+        // White card behind the QR — dark modules need a light background to
+        // scan reliably, and the panel backdrop itself is near-black.
+        let qr_x = p.panel.x + (p.panel.w - *qw as f32) / 2.0;
+        let card_pad = 10.0;
+        cc_card(
+            out,
+            renderer,
+            Rect::new(qr_x - card_pad, y - card_pad, *qw as f32 + 2.0 * card_pad, *qh as f32 + 2.0 * card_pad),
+            Color32F::new(1.0, 1.0, 1.0, 1.0),
+            10.0,
+            output_scale,
+            off_x,
+            off_y,
+        );
+        cc_blit_label(out, renderer, &p.qr, qr_x, y, output_scale, off_x, off_y);
+        y += *qh as f32 + card_pad + GAP;
+    }
+    let status_x = p.panel.x + (p.panel.w - p.status.as_ref().map(|(_, w, _)| *w as f32).unwrap_or(0.0)) / 2.0;
+    cc_blit_label(out, renderer, &p.status, status_x, y, output_scale, off_x, off_y);
+
+    let cx = p.close_rect.x + (p.close_rect.w - p.close_label.as_ref().map(|(_, w, _)| *w as f32).unwrap_or(0.0)) / 2.0;
+    let cy = p.close_rect.y + (p.close_rect.h - p.close_label.as_ref().map(|(_, _, h)| *h as f32).unwrap_or(0.0)) / 2.0;
+    cc_blit_label(out, renderer, &p.close_label, cx, cy, output_scale, off_x, off_y);
+    cc_card(out, renderer, p.close_rect, Color32F::new(1.0, 1.0, 1.0, 0.12), 12.0, output_scale, off_x, off_y);
+
+    let panel_col = if state.dark_mode {
+        Color32F::new(0.05, 0.08, 0.13, 0.95)
+    } else {
+        Color32F::new(0.20, 0.22, 0.27, 0.95)
+    };
+    cc_card(out, renderer, p.panel, panel_col, 22.0, output_scale, off_x, off_y);
+}
+
 /// Render the screenshot options dialog (scope + delay) when open. Modal-style
 /// panel, centred. Front-to-back: labels, then button cards (selected scope /
 /// delay tinted accent, capture green), then the panel backdrop.
