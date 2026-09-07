@@ -384,6 +384,18 @@ arasında sıkça adres değiştirir (DHCP kira döngüsü) — "kaydedilmiş bi
 host'a bağlan" akışına henüz taze bir yayın yeniden taraması
 bağlanmadı (§5).
 
+**Launcher simgesi** (`res/mipmap-anydpi-v26/ic_launcher.xml` +
+`res/drawable/ic_launcher_{background,foreground,monochrome}.xml`), raster
+bir dışa aktarım değil, elle yazılmış bir vektör adaptive icon'dur —
+`minSdk` 26 tam olarak adaptive icon'ların zorunlu desteklendiği sürüm,
+bu yüzden ayrı bir yoğunluk-başına PNG mipmap setine hiç gerek yok. Glif
+(sağ üst köşesinden fırlayan bir imleç okuyla bir telefon — bu uygulamanın
+tam olarak yaptığı şey) ve renkleri `bacak/DESIGN_SYSTEM.md`'nin
+Aegean/Rust paletini takip ediyor, gerçek bir cihazda görsel yineleme
+sonrası seçilen düz beyaz bir zemin üzerinde (daha önceki bir Aegean
+degrade zemin, diğer uygulama simgelerinin yanında çok koyu/donuk
+okunuyordu).
+
 ## 5. Açık sorular / henüz karara bağlanmadı
 
 - ~~Eşleştirme sonrası oturumlar için TLS materyali~~ — **tamamlandı**,
