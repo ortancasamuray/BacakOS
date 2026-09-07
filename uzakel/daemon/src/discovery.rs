@@ -52,7 +52,9 @@ fn new_pin() -> u32 {
 pub async fn run(socket: UdpSocket, trust: TrustStore) -> Result<()> {
     let daemon_name = std::env::var(DAEMON_NAME_ENV)
         .unwrap_or_else(|_| hostname().unwrap_or_else(|| "BacakOS".to_string()));
+    let discovery_port = socket.local_addr().map(|a| a.port()).unwrap_or(0);
     let mut current_pin = new_pin();
+    crate::pairing_state::publish(&daemon_name, discovery_port, current_pin);
     let mut buf = [0u8; 512];
 
     loop {
@@ -64,7 +66,7 @@ pub async fn run(socket: UdpSocket, trust: TrustStore) -> Result<()> {
             }
         };
 
-        if let Err(err) = handle(&socket, &buf[..len], from, &daemon_name, &mut current_pin, &trust).await {
+        if let Err(err) = handle(&socket, &buf[..len], from, &daemon_name, discovery_port, &mut current_pin, &trust).await {
             warn!(?err, %from, "error handling a discovery/pairing packet");
         }
     }
@@ -75,6 +77,7 @@ async fn handle(
     buf: &[u8],
     from: SocketAddr,
     daemon_name: &str,
+    discovery_port: u16,
     current_pin: &mut u32,
     trust: &TrustStore,
 ) -> Result<()> {
@@ -116,6 +119,7 @@ async fn handle(
                 // A fresh PIN for the *next* pairing attempt, so a captured
                 // PIN can't be replayed once it's been used.
                 *current_pin = new_pin();
+                crate::pairing_state::publish(daemon_name, discovery_port, *current_pin);
                 PairResponse {
                     accepted: true,
                     daemon_pubkey,
