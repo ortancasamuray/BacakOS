@@ -13,6 +13,9 @@
 > cross-checked byte-for-byte with a fixed known-answer test vector before
 > being wired together (`daemon/examples/kat.rs`). See §2.3 for exactly
 > what this scheme does and doesn't guarantee against an active attacker.
+> QR pairing (§2.3.2) is real-hardware verified too — a phone scanning the
+> `bacak-compositor` panel's QR paired and drove the cursor, one rendering
+> bug found and fixed along the way (§6).
 
 Two components, three network channels, one shared wire protocol.
 
@@ -521,3 +524,44 @@ that `Button`'s `onClick` in `DeviceListScreen.kt`) — connecting straight
 through would have silently produced exactly the "everything looks
 connected but nothing moves" symptom step 1 above deliberately reproduced
 to confirm the fix.
+
+### QR pairing (§2.3.2), verified on real hardware — one real bug found
+
+Compiling and unit-testing `qr.rs`/`UzakelCrypto` proved the *bytes* were
+right (§2.3.1's KAT cross-check); it said nothing about whether the QR
+panel actually *displayed* correctly, since that's pure rendering with no
+unit-testable surface. Real verification needed the actual GLES render
+path: a nested `bacak-compositor --features runtime` (winit backend)
+instance running against the live session's own Wayland socket, so the
+panel's real code path ran without touching the production `udev`-backed
+session at all.
+
+**Bug found: the QR was invisible, hidden behind its own white background
+card.** `render_uzakel_panel` pushed the QR's opaque white backing card
+*before* the QR bitmap itself — this codebase's render element list is
+top-first (earliest push = frontmost, see `render_audio_panel`'s three-pass
+convention), so the card ended up drawn *in front of* the QR, not behind
+it. The panel opened and showed its title/status/Kapat button correctly
+(all pushed at points that happened not to overlap the card), which is
+exactly why this wasn't obvious from the code alone — only actually looking
+at the rendered panel showed a plain white box where the QR should be.
+Fixed by swapping the push order (`985a094`).
+
+After the fix, the full chain was verified with a real phone: the nested
+compositor's QR panel scanned successfully by the Uzakel Android app's new
+camera screen, `discovery.rs` logged `client paired successfully`, and a
+follow-up trackpad drag captured **329 `REL_X` + 315 `REL_Y`** real kernel
+events off `/dev/input/eventN` — confirming the entire
+scan → parse → ECDH handshake → confirm-tag check → encrypted-session chain
+from §2.3.2 works end to end, not just that each piece compiles.
+
+One methodology note for next time: capturing `/dev/input/eventN` via
+`cat … > file &` under a `timeout`, then asking the user to perform the
+action, produced **0 captured bytes twice** even though the user confirmed
+real cursor movement both times — `timeout` sends `cat` a `SIGTERM`, whose
+default disposition skips any pending buffered write, silently dropping
+whatever `cat` had already read but not yet flushed to the output file. A
+small Python capture loop (`os.read()` + immediate `write()` + `flush()`
+per chunk, driven by `select()` on a non-blocking fd) fixed it on the third
+attempt. Prefer that pattern over shelling out to `cat` for any future
+kernel-event capture in this project.
