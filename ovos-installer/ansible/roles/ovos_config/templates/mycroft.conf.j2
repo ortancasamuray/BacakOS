@@ -1,0 +1,180 @@
+#jinja2: lstrip_blocks: True
+{
+  "log_level": "INFO",
+{% if ovos_installer_method == "containers" %}
+  "logs": {
+    "path": "stdout"
+  },
+{% endif %}
+{% set _ovos_is_raspberry_pi_4 = (ovos_installer_raspberrypi | default('')) | regex_search(ovos_installer_raspberry_pi_4_regex) %}
+{% set _ovos_is_mark2_family = _ovos_is_raspberry_pi_4 and ('tas5806' in (ovos_installer_i2c_devices | default([]))) %}
+{% set _ovos_is_devkit = _ovos_is_mark2_family and ('attiny1614' in (ovos_installer_i2c_devices | default([]))) %}
+{% if ovos_installer_profile != "server" %}
+{% set _ovos_is_macos = (ansible_facts.system | default('')) == 'Darwin' %}
+{% set _ovos_is_mark2 = _ovos_is_mark2_family and ('attiny1614' not in (ovos_installer_i2c_devices | default([]))) %}
+{% set _ovos_use_sounddevice_mic = _ovos_is_macos or _ovos_is_mark2_family %}
+{% set _ovos_listener_has_wake_word = (_ovos_is_macos and ((ovos_installer_cpu_is_capable | default(false)) | bool)) or (ovos_installer_tuning | bool) %}
+{% set _ovos_hotword_sensitivity = ovos_config_mark2_hotword_sensitivity if _ovos_is_mark2 else ovos_config_hotword_sensitivity %}
+{% set _ovos_hotword_trigger_level = ovos_config_mark2_hotword_trigger_level if _ovos_is_mark2 else ovos_config_hotword_trigger_level %}
+{% set _ovos_mark2_ocp_legacy = _ovos_is_mark2_family %}
+{% set _ovos_persona_llm_enabled = ovos_installer_feature_llm | default(false) | bool %}
+  "play_wav_cmdline": "{{ 'afplay %1' if ansible_facts.system == 'Darwin' else 'play %1' }}",
+  "play_mp3_cmdline": "{{ 'afplay %1' if ansible_facts.system == 'Darwin' else 'play %1' }}",
+  "lang": "{{ ovos_installer_locale }}",
+  "system_unit": "{{ ovos_config_system_unit }}",
+  "temperature_unit": "{{ ovos_config_temperature_unit }}",
+  "precipitation_unit": "{{ ovos_config_precipitation_unit }}",
+  "windspeed_unit": "{{ ovos_config_windspeed_unit }}",
+  "time_format": "{{ ovos_config_time_format }}",
+  "spoken_time_format": "{{ ovos_config_spoken_time_format }}",
+  "date_format": "{{ ovos_config_date_format }}",
+{% if ovos_timezone_value is defined %}
+  "location": {
+    "timezone": {
+      "code": "{{ ovos_timezone_value | string | regex_replace('(?i)^\\s*time\\s*zone\\s*:\\s*', '') | trim }}",
+      "name": "{{ (ovos_timezone_name | default(ovos_timezone_value)) | string | regex_replace('(?i)^\\s*time\\s*zone\\s*:\\s*', '') | trim }}"
+    }
+  },
+{% endif %}
+  "listener": {
+    "VAD": {
+      "module": "{{ 'ovos-vad-plugin-silero' if (ovos_installer_cpu_is_capable | default(false)) | bool else 'ovos-vad-plugin-webrtcvad' }}"{{ ',' if ovos_installer_tuning | bool else '' }}
+{% if ovos_installer_tuning | bool %}
+      "ovos-vad-plugin-silero": {
+        "silence_duration": 0.5
+      }
+{% endif %}
+    }{% if _ovos_use_sounddevice_mic or _ovos_listener_has_wake_word %},{{ '\n' }}{% endif %}
+{% if _ovos_use_sounddevice_mic %}
+{% if _ovos_is_macos %}
+    "fake_barge_in": false,
+{% endif %}
+    "microphone": {
+      "module": "ovos-microphone-plugin-sounddevice"{% if _ovos_is_mark2 %},{{ '\n' }}
+      "ovos-microphone-plugin-sounddevice": {
+        "device": "default",
+        "latency": "high",
+        "blocksize": 2048,
+        "queue_maxsize": 32,
+        "auto_sample_rate_fallback": true,
+        "auto_channel_fallback": true,
+        "auto_latency_fallback": true
+      }{% endif %}
+    }{% if _ovos_listener_has_wake_word %},{{ '\n' }}{% endif %}
+{% endif %}
+{% if _ovos_listener_has_wake_word %}
+    "wake_word": "hey_mycroft",
+{% if _ovos_is_mark2 %}
+    "vad_pre_wake_enabled": {{ ovos_config_mark2_vad_pre_wake_enabled | bool | lower }},
+{% endif %}
+    "multiplier": {{ ovos_config_listener_multiplier }}{% if ovos_installer_tuning | bool %},
+    "patience": 0.5{% endif %}
+{% endif %}
+  },
+{% if _ovos_listener_has_wake_word %}
+  "hotwords": {
+    "hey_mycroft": {
+      "module": "ovos-ww-plugin-precise-onnx",
+      "sensitivity": {{ _ovos_hotword_sensitivity }},
+      "trigger_level": {{ _ovos_hotword_trigger_level }},
+      "listen": true,
+      "active": true
+    }
+  },
+{% endif %}
+{% if ansible_facts.architecture in (ovos_installer_supported_desktop_architectures | default(['x86_64', 'aarch64', 'arm64'])) %}
+  "skills": {
+    "installer": {
+      "allow_pip": true,
+      "allow_alphas": true
+    }
+  },
+{% endif %}
+{% if ovos_installer_feature_gui | bool %}
+  "gui": {
+    "idle_display_skill": "skill-ovos-homescreen.openvoiceos"
+  },
+{% endif %}
+{% if _ovos_mark2_ocp_legacy %}
+  "Audio": {
+    "backends": {
+      "OCP": {
+        "playback_mode": 40
+      }
+    }
+  },
+{% endif %}
+  "intents": {
+    "pipeline": [
+      "ovos-stop-pipeline-plugin-high",
+      "ovos-converse-pipeline-plugin",
+      "ovos-ocp-pipeline-plugin-high",
+      "ovos-persona-pipeline-plugin-high",
+      "ovos-padatious-pipeline-plugin-high",
+      "ovos-m2v-pipeline-high",
+      "ovos-fallback-pipeline-plugin-high",
+      "ovos-adapt-pipeline-plugin-high",
+      "ovos-stop-pipeline-plugin-medium",
+      "ovos-adapt-pipeline-plugin-medium",
+      "ovos-common-query-pipeline-plugin",
+      "ovos-fallback-pipeline-plugin-medium",
+      "ovos-persona-pipeline-plugin-low",
+      "ovos-fallback-pipeline-plugin-low"
+    ]{% if _ovos_mark2_ocp_legacy or _ovos_persona_llm_enabled %},{% endif %}
+{% if _ovos_mark2_ocp_legacy %}
+    "OCP": {
+      "legacy": true
+    }{{ ',' if _ovos_persona_llm_enabled else '' }}
+{% endif %}
+{% if _ovos_persona_llm_enabled %}
+    "persona": {
+      "handle_fallback": true,
+      "default_persona": "{{ ovos_installer_llm_persona_name }}"
+    }
+{% endif %}
+  },
+{% endif %}
+  "websocket": {
+    "host": "{{ '0.0.0.0' if ovos_installer_method == "containers" else '127.0.0.1' }}",
+    "max_msg_size": 25
+  },
+{% if _ovos_is_mark2_family %}
+  "network_tests": {
+    "ip_url": "{{ ovos_config_mark2_network_tests_ip_url }}"
+  },
+{% endif %}
+  "PHAL": {
+    "admin": {
+      "ovos-PHAL-plugin-system": {
+        "enabled": true
+      }
+    }{{ ',' if _ovos_is_mark2_family else '' }}
+{% if _ovos_is_mark2_family %}
+    "ovos-PHAL-plugin-hotkeys": {
+      "key_down": {
+        "mycroft.mic.listen": 582,
+        "mycroft.mic.mute": 248,
+        "mycroft.volume.increase": 115,
+        "mycroft.volume.decrease": 114
+      },
+      "key_up": {
+        "mycroft.mic.unmute": 248
+      }
+    },
+    "ovos-phal-plugin-ipgeo": {
+      "enabled": true
+    }{{ ',' if _ovos_is_devkit else '' }}
+{% if _ovos_is_devkit %}
+    "ovos-PHAL-plugin-mk2-v6-fan-control": {
+      "enabled": true
+    }
+{% endif %}
+{% endif %}
+  }{% if ovos_installer_usage_telemetry| bool %},
+  "open_data": {
+    "intent_urls": [
+      "https://metrics.tigregotico.pt/intents"
+    ]
+  }
+{% endif %}
+}

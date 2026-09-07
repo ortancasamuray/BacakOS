@@ -18,12 +18,12 @@ const MANIFEST: &str = "/usr/share/bacak/plugins/desktop-settings.plugin";
 /// the bottommost frame element when no Background layer-shell client is running.
 pub const WALLPAPER_PRESETS: [[u8; 3]; 8] = [
     [10, 14, 22],    // Gece Mavisi (varsayılan)
-    [8,  18, 10],    // Gece Yeşili
-    [22, 8,  8],     // Gece Kırmızısı
-    [8,  18, 22],    // Gece Camgöbeği
-    [18, 8,  22],    // Gece Moru
-    [20, 16, 4],     // Gece Sarısı
-    [16, 16, 16],    // Koyu Gri
+    [28, 65, 110],   // Okyanus Mavisi
+    [20, 78, 60],    // Çam Yeşili
+    [88, 42, 114],   // Mor
+    [128, 32, 48],   // Bordo
+    [176, 96, 22],   // Kehribar
+    [72, 76, 84],    // Kurşun Grisi
     [225, 225, 215], // Açık Krem
 ];
 
@@ -34,6 +34,30 @@ pub enum DsAction {
     SetWallpaper(usize),
     /// Open a text-entry for the wallpaper image path (PNG/JPEG).
     SetWallpaperImage,
+    /// Open the resolution list page for the panel's output.
+    OpenResolutionList,
+    /// Apply mode `i` from [`crate::state::OutputModes::modes`] to this output
+    /// (persisted to `compositor.json` `outputs.<connector>.mode`).
+    SetResolution(usize),
+    /// Clear the mode override — auto-pick the highest supported mode.
+    ResolutionAuto,
+    /// Open the font list page.
+    OpenFontList,
+    /// Apply font `i` from [`crate::state::BacakState::ds_font_list`]
+    /// (persisted to `compositor.json` `font`).
+    SetFont(usize),
+    /// Clear the font override — auto-detect a system font.
+    FontAuto,
+    /// Open the icon-theme list page.
+    OpenIconThemeList,
+    /// Apply icon theme `i` from
+    /// [`crate::state::BacakState::ds_icon_theme_list`] (persisted to
+    /// `compositor.json` `icon_theme`).
+    SetIconTheme(usize),
+    /// Clear the icon-theme override — auto-detect.
+    IconThemeAuto,
+    /// Return from a list page to the main settings page.
+    BackToMain,
     /// Root auth required: change the system hostname.
     EditHostname,
     /// Root auth required: toggle auto-login for the session user.
@@ -81,8 +105,6 @@ pub enum DsResult {
     AutoLoginSet(bool),
     /// Password change finished.
     PasswordSet(bool),
-    /// Wallpaper image loaded: `Ok(buf, w, h)` or `Err` on failure.
-    WallpaperLoaded(Result<(smithay::backend::renderer::element::memory::MemoryRenderBuffer, u32, u32), ()>),
 }
 
 /// The desktop settings panel (open when `Some` on `BacakState`).

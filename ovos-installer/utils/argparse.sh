@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Usage instruction for available arguments
+function usage() {
+    echo "Usage: $0 [OPTIONS]"
+    echo "Options:"
+    echo "  -h, --help          Display this help message"
+    echo "  -d, --debug         Enable debug mode for more verbosity"
+    echo "  -u, --uninstall     Uninstall Open Voice OS instance"
+    echo
+}
+
+# shellcheck source=utils/llm_defaults.sh
+source "utils/llm_defaults.sh"
+
+# Parse command line arguments, handling both short and long options
+# We are not using getopts as it only handles short arguments
+# such as -v where this method handles short and long arguments
+# such as --verbose
+function handle_options() {
+    while [ $# -gt 0 ]; do
+        case $1 in
+        -d | --debug)
+            export DEBUG="true"
+            ;;
+        -u | --uninstall)
+            export CONFIRM_UNINSTALL_CLI="true"
+            ;;
+        -h | --help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "Invalid option: $1" >&2
+            usage
+            exit 1
+            ;;
+        esac
+        shift
+    done
+
+    # To reduce UX clutter, the following options are not exposed as CLI flags,
+    # instead the user can specify them via environment variables.
+
+    # Always install and use uv instead of pip, which is significantly faster.
+    export USE_UV="true"
+
+    # Keep cached installer artifacts by default to speed repeated runs.
+    # Set REUSE_CACHED_ARTIFACTS=false for clean-room troubleshooting.
+    export REUSE_CACHED_ARTIFACTS="${REUSE_CACHED_ARTIFACTS:-true}"
+
+    # Set default values for variables that may not be set
+    export DEBUG="${DEBUG:-false}"
+    export HARDWARE_CONFIRMATION="${HARDWARE_CONFIRMATION:-}"
+    export METHOD="${METHOD:-virtualenv}"
+    export PROFILE="${PROFILE:-ovos}"
+    export CHANNEL="${CHANNEL:-testing}"
+    export TUNING="${TUNING:-yes}"
+    export TUNING_OVERCLOCK="${TUNING_OVERCLOCK:-no}"
+    export OVERCLOCK_ARM_BOOST="${OVERCLOCK_ARM_BOOST:-1}"
+    export OVERCLOCK_INITIAL_TURBO="${OVERCLOCK_INITIAL_TURBO:-60}"
+    export OVERCLOCK_OVER_VOLTAGE="${OVERCLOCK_OVER_VOLTAGE:-6}"
+    export OVERCLOCK_ARM_FREQ="${OVERCLOCK_ARM_FREQ:-}"
+    export OVERCLOCK_GPU_FREQ="${OVERCLOCK_GPU_FREQ:-750}"
+    export SHARE_TELEMETRY="${SHARE_TELEMETRY:-false}"
+    export SHARE_USAGE_TELEMETRY="${SHARE_USAGE_TELEMETRY:-false}"
+    export FEATURE_SKILLS="${FEATURE_SKILLS:-true}"
+    export FEATURE_EXTRA_SKILLS="${FEATURE_EXTRA_SKILLS:-false}"
+    export FEATURE_HOMEASSISTANT="${FEATURE_HOMEASSISTANT:-false}"
+    export FEATURE_LLM="${FEATURE_LLM:-false}"
+    export FEATURE_GUI="false"
+    export HOMEASSISTANT_URL="${HOMEASSISTANT_URL:-}"
+    export HOMEASSISTANT_API_KEY="${HOMEASSISTANT_API_KEY:-}"
+    export LLM_API_URL="${LLM_API_URL:-}"
+    export LLM_API_KEY="${LLM_API_KEY:-}"
+    export LLM_MODEL="${LLM_MODEL:-}"
+    export LLM_PERSONA="${LLM_PERSONA:-$LLM_DEFAULT_PERSONA}"
+    export LLM_MAX_TOKENS="${LLM_MAX_TOKENS:-$LLM_DEFAULT_MAX_TOKENS}"
+    export LLM_TEMPERATURE="${LLM_TEMPERATURE:-$LLM_DEFAULT_TEMPERATURE}"
+    export LLM_TOP_P="${LLM_TOP_P:-$LLM_DEFAULT_TOP_P}"
+    export OVOS_VENV_PYTHON="${OVOS_VENV_PYTHON:-3.11}"
+    export HIVEMIND_HOST="${HIVEMIND_HOST:-}"
+    export HIVEMIND_PORT="${HIVEMIND_PORT:-}"
+    export SATELLITE_KEY="${SATELLITE_KEY:-}"
+    export SATELLITE_PASSWORD="${SATELLITE_PASSWORD:-}"
+    export UNINSTALL="${UNINSTALL:-false}"
+    export CONFIRM_UNINSTALL="${CONFIRM_UNINSTALL:-false}"
+    export CONFIRM_UNINSTALL_CLI="${CONFIRM_UNINSTALL_CLI:-false}"
+    export INSTALLER_VERSION="${INSTALLER_VERSION:-unknown}"
+}

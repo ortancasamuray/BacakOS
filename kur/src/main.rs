@@ -258,13 +258,25 @@ fn build_summary(ui: &MainWindow, state: &AppState) -> String {
 
 /// The start button demands a valid plan and a valid account. Installing from
 /// the ISO's own squashfs needs no network, so there is nothing else to gate on.
+///
+/// Also surfaces *why* the button is disabled: a wizard step reached via the
+/// sidebar (which allows jumping past an unfinished step) can land on the
+/// install page with nothing selected or an invalid account and, before this,
+/// no visible explanation — just a dead button.
 fn refresh_can_start(ui: &MainWindow) {
-    let ready = with_state(|state| {
-        pages::build_plan(state).is_ok()
-            && pages::account_from_ui(ui).validate(&ui.get_password_confirm()).is_ok()
+    let reason = with_state(|state| {
+        if let Err(error) = pages::build_plan(state) {
+            return error;
+        }
+        if let Err(error) = pages::account_from_ui(ui).validate(&ui.get_password_confirm()) {
+            return format!("{error}");
+        }
+        String::new()
     })
-    .unwrap_or(false);
-    ui.set_can_start(ready && !ui.get_install_running());
+    .unwrap_or_default();
+
+    ui.set_install_blocked_reason(reason.clone().into());
+    ui.set_can_start(reason.is_empty() && !ui.get_install_running());
 }
 
 fn wire_install(ui: &MainWindow) {
@@ -307,7 +319,14 @@ fn wire_install(ui: &MainWindow) {
         ui.set_install_stage("İptal ediliyor…".into());
     });
 
-    ui.on_reboot(|| {
+    let weak = ui.as_weak();
+    ui.on_reboot(move || {
+        // Kur, systemctl reboot'u tetiklemeden önce kendi penceresini kapatıp
+        // event loop'tan çıkmalı — reboot sistemi kur açıkken vurursa pencere
+        // yarım saniyeliğine askıda kalmış gibi görünür.
+        if let Some(ui) = weak.upgrade() {
+            let _ = ui.hide();
+        }
         let cancel = backend::cmd::Cancel::new();
         if let Err(error) = backend::cmd::run("systemctl", &["reboot"], &cancel) {
             log::error!("yeniden başlatılamadı: {error:#}");

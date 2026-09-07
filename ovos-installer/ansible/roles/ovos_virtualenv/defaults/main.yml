@@ -1,0 +1,234 @@
+---
+ovos_virtualenv_tmp_dir: "{{ ovos_installer_tmp_dir | default('/tmp') }}"
+ovos_virtualenv_is_cleaning: "{{ ovos_installer_is_cleaning | default(ovos_installer_cleaning | default(false) | bool) | bool }}"
+ovos_virtualenv_desktop_profiles: "{{ ovos_installer_desktop_profiles | default(['ovos', 'listener']) }}"
+ovos_virtualenv_is_desktop_profile: "{{ ovos_installer_is_desktop_profile | default((ovos_installer_profile | default('ovos')) in ovos_virtualenv_desktop_profiles) | bool }}"
+ovos_virtualenv_path: >-
+  {{ ovos_installer_ovos_venv_path
+     | default(ovos_installer_user_home + '/.venvs/ovos') }}
+ovos_virtualenv_root_dir: "{{ ovos_installer_user_home }}/.venvs"
+ovos_virtualenv_force_remove: false
+ovos_virtualenv_requirements_files: >-
+  {{ ovos_installer_requirements_files | default(_ovos_virtualenv_requirements_files) }}
+
+ovos_virtualenv_venv_python: "{{ ovos_installer_venv_python | default('3.11') }}"
+ovos_virtualenv_venv_python_parts: "{{ ovos_virtualenv_venv_python | string | regex_findall('[0-9]+') }}"
+ovos_virtualenv_venv_python_major: "{{ (ovos_virtualenv_venv_python_parts | first | default('0')) | int }}"
+ovos_virtualenv_venv_python_minor: "{{ (ovos_virtualenv_venv_python_parts[1:] | first | default('0')) | int }}"
+ovos_virtualenv_uv_allow_prerelease: >-
+  {{
+    ovos_installer_uv_allow_prerelease
+    | default(
+        ((ovos_virtualenv_venv_python_major | int) == 3)
+        and ((ovos_virtualenv_venv_python_minor | int) >= 13)
+      )
+  }}
+ovos_virtualenv_uv_version: "{{ ovos_installer_uv_version | default('') }}"
+ovos_virtualenv_installer_venv_path: "{{ ovos_installer_venv | default(ovos_installer_user_home + '/.venvs/ovos-installer', true) }}"
+ovos_virtualenv_uv_cache_dir: "{{ ovos_installer_user_home }}/.ovos-installer/uv-cache"
+ovos_virtualenv_uv_exec_path: "{{ ovos_installer_user_home }}/.local/bin:{{ ovos_virtualenv_installer_venv_path }}/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+ovos_virtualenv_uv_install_retries: "{{ ovos_installer_uv_install_retries | default(3) }}"
+ovos_virtualenv_uv_install_delay: "{{ ovos_installer_uv_install_delay | default(2) }}"
+ovos_virtualenv_uv_environment: >-
+  {{
+    {
+      'HOME': ovos_installer_user_home,
+      'PATH': ovos_virtualenv_uv_exec_path,
+      'UV_CACHE_DIR': ovos_virtualenv_uv_cache_dir
+    }
+    | combine(
+        {'PIP_CONFIG_FILE': ovos_installer_pip_config_file}
+        if (ovos_installer_pip_config_file | default('') | length > 0)
+        else {}
+      )
+  }}
+ovos_virtualenv_constraints_url: "https://raw.githubusercontent.com/OpenVoiceOS/ovos-releases/refs/heads/main/constraints-{{ ovos_installer_channel }}.txt"
+ovos_virtualenv_constraints_path: "{{ ovos_virtualenv_tmp_dir }}/constraints-{{ ovos_installer_channel }}.txt"
+ovos_virtualenv_constraints_refresh_interval: "{{ ovos_installer_constraints_refresh_interval | default(21600) }}"
+ovos_virtualenv_constraints_force_sync: "{{ ovos_installer_constraints_force_sync | default(false) }}"
+ovos_virtualenv_shell_init_file: "{{ ovos_installer_user_home }}/{{ '.zshrc' if (ansible_facts.system | default('')) == 'Darwin' else '.bashrc' }}"
+ovos_virtualenv_run_ovos_config: "{{ ovos_installer_run_ovos_config | default(false) }}"
+ovos_virtualenv_numpy_package: >-
+  {{
+    ovos_installer_numpy_package
+    | default(
+        'numpy>=2.1,<3'
+        if ((ovos_virtualenv_venv_python_major | int) == 3 and (ovos_virtualenv_venv_python_minor | int) >= 13)
+        else 'numpy==1.26.4'
+      )
+  }}
+ovos_virtualenv_setuptools_package: "{{ ovos_installer_setuptools_package | default('setuptools<82') }}"
+ovos_virtualenv_repair_ownership: "{{ ovos_installer_repair_venv_ownership | default(false) }}"
+ovos_virtualenv_padatious_cache_repo_url: https://github.com/OpenVoiceOS/padatious_cache
+ovos_virtualenv_padatious_cache_repo_version: dev
+ovos_virtualenv_padatious_cache_repo_path: "{{ ovos_installer_user_home }}/.cache/ovos-installer/padatious_cache"
+ovos_virtualenv_padatious_cache_repo_refresh_interval: 21600
+ovos_virtualenv_gui_repo_refresh_interval: "{{ ovos_installer_gui_repo_refresh_interval | default(21600) }}"
+ovos_virtualenv_gui_repo_force_sync: "{{ ovos_installer_gui_repo_force_sync | default(false) }}"
+ovos_virtualenv_padatious_cache_dir: "{{ ovos_installer_user_home }}/.local/share/mycroft/intent_cache"
+ovos_virtualenv_padatious_cache_staging_dir: "{{ ovos_virtualenv_padatious_cache_dir }}.staged"
+ovos_virtualenv_padatious_cache_backup_dir: "{{ ovos_virtualenv_padatious_cache_dir }}.bak"
+ovos_virtualenv_padatious_cache_force_sync: "{{ ovos_installer_padatious_cache_force_sync | default(false) }}"
+ovos_virtualenv_messagebus_path: "{{ ovos_installer_user_home }}/.local/bin/ovos-messagebus"
+ovos_virtualenv_rust_messagebus_repo: https://github.com/OscillateLabsLLC/ovos-rust-messagebus
+ovos_virtualenv_rust_messagebus_version: v2.1.1
+ovos_virtualenv_rust_messagebus_target_arch: >-
+  {{ 'aarch64' if (ansible_facts.architecture | default('')) in ['aarch64', 'arm64']
+     else 'x86_64' if (ansible_facts.architecture | default('')) in ['x86_64', 'amd64']
+     else 'armv7' if (ansible_facts.architecture | default('')) in ['armv7', 'armv7l']
+     else 'arm' if (ansible_facts.architecture | default('')) in ['arm', 'armv6', 'armv6l']
+     else (ansible_facts.architecture | default('')) }}
+ovos_virtualenv_rust_messagebus_target_platform: >-
+  {{ 'apple-darwin' if (ansible_facts.system | default('')) == 'Darwin'
+     else 'unknown-linux-gnueabihf' if ovos_virtualenv_rust_messagebus_target_arch in ['arm', 'armv7']
+     else 'unknown-linux-gnu' }}
+ovos_virtualenv_rust_messagebus_binary_name: >-
+  ovos_messagebus-{{ ovos_virtualenv_rust_messagebus_target_arch }}-{{ ovos_virtualenv_rust_messagebus_target_platform }}
+ovos_virtualenv_rust_messagebus_archive_name: "{{ ovos_virtualenv_rust_messagebus_binary_name }}.tar.gz"
+ovos_virtualenv_rust_messagebus_archive_url: >-
+  {{ ovos_virtualenv_rust_messagebus_repo }}/releases/download/{{ ovos_virtualenv_rust_messagebus_version }}/{{ ovos_virtualenv_rust_messagebus_archive_name }}
+ovos_virtualenv_rust_messagebus_archive_checksums:
+  ovos_messagebus-aarch64-apple-darwin.tar.gz: d06e81c0e60d3d06aa83c02f75d78a3dea83bb6f5b98f52be25215d2f21d6a88
+  ovos_messagebus-aarch64-unknown-linux-gnu.tar.gz: 7d7a6d4fd348e437238dfa1cc5ea75c1fa2b5ca92faa39da980194c1e1002f48
+  ovos_messagebus-arm-unknown-linux-gnueabihf.tar.gz: 4029d2e69eae92aee138cb6690d692b0202699bf696c589fb6154ca4e233b8a7
+  ovos_messagebus-armv7-unknown-linux-gnueabihf.tar.gz: 1a1072e25a944ec2963b50d329381be33c7d0a1c4e4eff6cab566778ff6d4550
+  ovos_messagebus-x86_64-apple-darwin.tar.gz: 5d89f6f020eebb56453828c3cbce07c58caa5afa69ccc3159afe9a3a40a4a8c5
+  ovos_messagebus-x86_64-unknown-linux-gnu.tar.gz: 05c1e8e35041081750f2da9a0da0dc5ac884eb0212ba83c78b9f286db5384d01
+ovos_virtualenv_rust_messagebus_archive_checksum_value: >-
+  {{ ovos_virtualenv_rust_messagebus_archive_checksums[ovos_virtualenv_rust_messagebus_archive_name] | default('') }}
+ovos_virtualenv_rust_messagebus_archive_checksum: >-
+  {{ ('sha256:' ~ ovos_virtualenv_rust_messagebus_archive_checksum_value)
+     if (ovos_virtualenv_rust_messagebus_archive_checksum_value | length > 0)
+     else '' }}
+ovos_virtualenv_rust_messagebus_archive_path: "{{ ovos_virtualenv_tmp_dir }}/{{ ovos_virtualenv_rust_messagebus_archive_name }}"
+ovos_virtualenv_rust_messagebus_binary_path: >-
+  {{ ovos_installer_user_home }}/.local/bin/{{ ovos_virtualenv_rust_messagebus_binary_name }}
+ovos_virtualenv_homebrew_path: "/usr/local/bin:/opt/homebrew/bin:/home/linuxbrew/.linuxbrew/bin"
+ovos_virtualenv_macos_fann_source_lib_dir: >-
+  {{ '/opt/homebrew/lib'
+     if (ansible_facts.architecture | default('')) in ['aarch64', 'arm64']
+     else '/usr/local/lib' }}
+ovos_virtualenv_macos_fann_target_lib_dir: /usr/local/lib
+ovos_virtualenv_macos_fann_linker_flags: >-
+  -L{{ ovos_virtualenv_macos_fann_source_lib_dir }}{{ ' -L' ~ ovos_virtualenv_macos_fann_target_lib_dir if ovos_virtualenv_macos_fann_source_lib_dir != ovos_virtualenv_macos_fann_target_lib_dir else '' }}
+ovos_virtualenv_macos_fann_library_path: >-
+  {{ ovos_virtualenv_macos_fann_source_lib_dir }}{{ ':' ~ ovos_virtualenv_macos_fann_target_lib_dir if ovos_virtualenv_macos_fann_source_lib_dir != ovos_virtualenv_macos_fann_target_lib_dir else '' }}
+ovos_virtualenv_macos_fann_pkg_config_path: >-
+  {{ ovos_virtualenv_macos_fann_source_lib_dir }}/pkgconfig{{ ':' ~ ovos_virtualenv_macos_fann_target_lib_dir ~ '/pkgconfig' if ovos_virtualenv_macos_fann_source_lib_dir != ovos_virtualenv_macos_fann_target_lib_dir else '' }}
+ovos_virtualenv_packages_debian:
+  - build-essential
+  - swig
+  - libfann-dev
+  - libasound2-dev
+  - libpulse-dev
+  - libportaudio2
+  - mpg123
+  - music123
+  - sox
+  - libsox-fmt-all
+  - libespeak-ng1
+  - espeak-ng
+  - flac
+  - mpv
+  - libxslt1-dev
+  - libopenblas-dev
+  - pkg-config
+  - libicu-dev
+  - portaudio19-dev
+  - libjpeg-dev
+ovos_virtualenv_packages_redhat:
+  - gcc-c++
+  - swig
+  - fann-devel
+  - alsa-lib-devel
+  - pulseaudio-libs-devel
+  - portaudio
+  - mpg123
+  - sox
+  - flac
+  - mpv
+  - openblas-serial
+  - pkgconf-pkg-config
+  - libicu-devel
+  - portaudio-devel
+  - espeak-ng
+ovos_virtualenv_packages_suse:
+  - gcc-c++
+  - swig
+  - libfann-devel
+  - alsa-lib-devel
+  - libpulse-devel
+  - libportaudio2
+  - libespeak-ng1
+  - espeak-ng
+  - mpg123
+  - sox
+  - flac
+  - mpv
+  - libopenblas_serial-devel
+  - portaudio-devel
+ovos_virtualenv_packages_arch:
+  - base-devel
+  - swig
+  - alsa-lib
+  - portaudio
+  - mpg123
+  - sox
+  - flac
+  - mpv
+  - libxslt
+  - openblas
+  - espeak-ng
+ovos_virtualenv_packages_arch_aur:
+  - fann
+ovos_virtualenv_packages_arch_tracked: "{{ (ovos_virtualenv_packages_arch + ovos_virtualenv_packages_arch_aur) | unique }}"
+ovos_virtualenv_macos_packages:
+  - fann
+  - swig
+  - pkg-config
+  - portaudio
+  - mpg123
+  - sox
+  - flac
+  - mpv
+  - libxslt
+  - openblas
+  - icu4c
+  - jpeg-turbo
+  - espeak-ng
+  - brightness
+ovos_virtualenv_gui_packages_debian:
+  - cmake
+  - gettext
+  - pkg-kde-tools
+  - qtbase5-dev
+  - qtdeclarative5-dev
+  - libkf5kio-dev
+  - libqt5websockets5-dev
+  - libkf5i18n-dev
+  - libkf5notifications-dev
+  - libkf5plasma-dev
+  - libqt5webview5-dev
+  - qtmultimedia5-dev
+  - kdeconnect
+  - kirigami2-dev
+  - libkf5dbusaddons-dev
+  - libqt5webview5
+  - libkf5configcore5
+  - qml-module-qtwebengine
+  - qml-module-qtmultimedia
+  - qml-module-qtquick-shapes
+  - qtvirtualkeyboard-plugin
+  - libqt5multimedia5
+  - libqt5virtualkeyboard5
+  - breeze-icon-theme
+ovos_virtualenv_package_marker_path_linux: "{{ ovos_installer_package_tracking_dir }}/virtualenv-linux.json"
+ovos_virtualenv_package_marker_path_macos: "{{ ovos_installer_package_tracking_dir }}/virtualenv-macos.json"
+ovos_virtualenv_gui_package_marker_path: "{{ ovos_installer_package_tracking_dir }}/virtualenv-gui-debian-trixie.json"
+ovos_virtualenv_uninstall_extra_paths:
+  - "{{ ovos_hardware_mark1_working_directory | default('/opt/mark1') }}"
+  - "{{ ovos_hardware_mark2_working_dir | default('/opt/sj201') }}"
+  - "{{ ovos_virtualenv_padatious_cache_repo_path }}"
+  - "{{ ovos_virtualenv_padatious_cache_dir }}"
+  - "{{ ovos_virtualenv_padatious_cache_staging_dir }}"
+  - "{{ ovos_virtualenv_padatious_cache_backup_dir }}"

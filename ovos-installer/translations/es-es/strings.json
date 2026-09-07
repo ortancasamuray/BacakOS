@@ -1,0 +1,77 @@
+{
+  "misc.sh": {
+    "ok_button": "Siguiente",
+    "yes_button": "Sí",
+    "no_button": "No",
+    "back_button": "Atrás"
+  },
+  "channels.sh": {
+    "title": "Instalación de Open Voice OS - Versiones",
+    "content": "Open Voice OS tiene dos canales de lanzamiento principales:\n\n- testing (recomendado)\n- alpha (de vanguardia)\n\nEl canal testing se recomienda para la mayoría de los usuarios. Incluye funciones y mejoras más recientes y, en general, es estable, pero ocasionalmente puede incluir regresiones.\n\nEl canal alpha es el más experimental y contiene las últimas funciones y cambios que aún están en desarrollo. Puede ser inestable y no se recomienda para el uso diario.\n\nSeleccione un canal:"
+  },
+  "detection.sh": {
+    "title": "Instalación de Open Voice OS - Propiedades del sistema",
+    "content": "Propiedades del sistema reconocidas automáticamente:\n\n\n- OS: ${DISTRO_NAME^} $DISTRO_VERSION\n- Kernel: $KERNEL\n- RPi: $RASPBERRYPI_MODEL\n- Python: $(echo \"$PYTHON\" | awk '{ print $NF }')\n- AVX/SIMD: $CPU_IS_CAPABLE\n- Hardware: $HARDWARE_DETECTED\n- Venv: $VENV_PATH\n- Sound: $SOUND_SERVER\n- Display: ${DISPLAY_SERVER^}"
+  },
+  "features.sh": {
+    "title": "Instalación de Open Voice OS - Características",
+    "content": "Las habilidades permiten la interacción a través de la voz, lo que las hace eficaces para tareas como la domótica, la recuperación de información y el control de dispositivos inteligentes mediante comandos de voz.\n\nSelecciona las funciones que quieres activar:",
+    "skill_description": "Descargar una selección de competencias (skills) OVOS",
+    "extra_skill_description": "Descargar habilidades OVOS adicionales"
+  },
+  "finish.sh": {
+    "title": "Instalación de Open Voice OS - Finalización",
+    "content": "¡La instalación se ha completado con éxito! 🎉\n\nTu asistente de voz ya está listo. Estamos deseando que explores el amplio abanico de funciones y posibilidades de este asistente de voz.\n\nSi has activado la función de habilidades (skills), puedes interactuar con tu asistente diciendo:\n\n  - Hey Mycroft, ¿qué hora es?\n  - Hey Mycroft, ¿qué temperatura hace?\n  - Hey Mycroft, ¿pones un temporizador en tres minutos?\n  - Hey Mycroft, ¿quién te ha hecho?\n  - Hey Mycroft, ¿quién es Ada Lovelace?\n  - Hey Mycroft, ¿qué diría Duke Nukem?\n\nLos ajustes de tu asistente pueden modificarse en el fichero de configuración $CONFIG_FILE.\n\nSi necesitas soporte o actualizaciones en el futuro, no dudes en ponerte en contacto con nosotros. ¡Diviértete con Open Voice OS!"
+  },
+  "methods.sh": {
+    "title": "Instalación de Open Voice OS - Entorno de instalación",
+    "content": "Existen dos entornos para la instalación de Open Voice OS:\n\n    - Motor de contenedores como Docker\n    - Instalación en un entorno virtual Python\n\nLos contenedores proporcionan aislamiento y facilidad de despliegue, mientras que un entorno virtual Python proporciona más flexibilidad y control sobre la instalación.\n\nSi se selecciona el método de contenedor, Docker se instalará automáticamente si no está presente en el sistema.\n\nSelecciona un entorno de instalación:"
+  },
+  "profiles.sh": {
+    "title": "Instalación de Open Voice OS - Perfiles",
+    "content": "Para crear un sistema versátil y en red adecuado para muchas aplicaciones, existen tres fascinantes opciones:\n\n  - Open Voice OS Master: La experiencia clásica de Open Voice OS\n  - HiveMind Satellite: Componentes de audio de Open Voice OS conectados a HiveMind Listener\n  - HiveMind Listener: Hub para HiveMind Satellite, bots, etc. para conectarse\n  - Servidor: Open Voice OS Core y HiveMind Core únicamente, sin funciones de audio\n\nCada uno de estos perfiles ofrece características y capacidades únicas que pueden mejorar significativamente tu experiencia digital.\n\nLa única pregunta es qué perfil se adapta mejor a tus necesidades y preferencias.\n\nSelecciona un perfil:"
+  },
+  "satellite.sh": {
+    "title_host": "Open Voice OS Installation - Satélite 1/4",
+    "title_port": "Open Voice OS Installation - Satélite 2/4",
+    "title_key": "Open Voice OS Installation - Satélite 3/4",
+    "title_password": "Open Voice OS Installation - Satélite 4/4",
+    "content": "Al conectarse al HiveMind Listener, los satélites HiveMind acceden a una red de conocimientos y competencias compartidos que permite una asistencia lingüística y una automatización unificadas y eficaces.",
+    "content_host": "Introduce el host de escucha HiveMind (DNS o dirección IP):",
+    "content_port": "Introduce el puerto de escucha HiveMind:",
+    "content_key": "Introduce la clave de escucha HiveMind del satélite:",
+    "content_password": "Introduce la contraseña de escucha HiveMind del satélite:"
+  },
+  "summary.sh": {
+    "title": "Instalación de Open Voice OS - Resumen",
+    "content": "¡Ya casi has terminado! Aquí tienes un resumen de las opciones que has elegido para instalar Open Voice OS:\n\n- Method: $METHOD\n- Version: $CHANNEL\n- Profile: $PROFILE\n- Skills: $FEATURE_SKILLS\n- Tuning: $TUNING\n\nLas decisiones que has tomado durante el proceso de instalación de Open Voice OS han sido cuidadosamente consideradas para adaptar el sistema a tus necesidades y preferencias.\n\n¿Este resumen es correcto? Si no, selecciona $BACK_BUTTON (o pulsa ESC) para volver atrás y hacer cambios."
+  },
+  "telemetry.sh": {
+    "title": "Instalación de Open Voice OS - Telemetría",
+    "content": "Al compartir con nosotros tus datos telemétricos, desempeñas un papel fundamental al proporcionarnos información valiosa y anónima que nos permite comprender mejor la experiencia del usuario y mejorar el rendimiento de nuestro software.\n\nTus datos de telemetría nos proporcionan información importante sobre el funcionamiento del software en situaciones reales. Estos datos se recogen de forma anónima para proteger tu privacidad y confidencialidad.\n\nLa información recopilada nos ayuda a identificar posibles problemas, optimizar funciones y garantizar una experiencia de usuario más fluida y eficiente para todos.\n\nPuedes encontrar más información sobre los datos recogidos en: https://github.com/OpenVoiceOS/ovos-installer/tree/main/docs/telemetry.md\n\nEsta recogida de datos solo tiene lugar durante el proceso de instalación.\n\n¿Estás de acuerdo en compartir datos anónimos con nosotros?"
+  },
+  "tuning.sh": {
+    "title": "Instalación de Open Voice OS - Optimización",
+    "content": "Open Voice OS Tuning para Raspberry Pi optimiza el sistema operativo para que funcione de forma eficiente en el hardware de Raspberry Pi.\n\nEste proceso de ajuste tiene como objetivo mejorar el rendimiento, reducir la utilización de recursos y garantizar una experiencia de usuario más fluida, por lo que es una excelente opción para dispositivos con recursos limitados como la Raspberry Pi.\n\n¿Quieres habilitar el ajuste para Raspberry Pi (recomendado)?"
+  },
+  "uninstall.sh": {
+    "title": "Instalación de Open Voice OS - Desinstalación",
+    "content": "Se ha detectado una instancia existente de Open Voice OS.\n\nComo Docker y PipeWire pueden haber sido instalados por el sistema o manualmente, el programa de instalación no eliminará los siguientes paquetes:\n\n  - docker-ce\n  - docker-compose-plugin\n  - docker-ce-rootless-extras\n  - docker-buildx-plugin\n  - pipewire\n  - pipewire-alsa\n\n¿Quieres desinstalar Open Voice OS?"
+  },
+  "update.sh": {
+    "title": "Instalación de Open Voice OS - Actualización",
+    "content": "Se ha detectado una instancia existente de Open Voice OS/HiveMind.\n\nActualizar tu instancia existente de Open Voice OS o HiveMind a la última versión te garantiza estar a la vanguardia con las funciones más avanzadas, actualizaciones de seguridad críticas, correcciones de errores y optimizaciones de rendimiento.\n\nEsto no solo mejora la funcionalidad general y la experiencia del usuario, sino que también garantiza la compatibilidad con las integraciones y herramientas más recientes, manteniendo su sistema fiable, seguro y preparado para el futuro.\n\n¿Quieres actualizar Open Voice OS a la última versión?"
+  },
+  "usage_telemetry.sh": {
+    "title": "Instalación de Open Voice OS - Métricas de uso",
+    "content": "Al elegir compartir tus métricas de uso, te conviertes en un colaborador fundamental en nuestros esfuerzos continuos por mejorar el rendimiento y la experiencia del usuario de nuestro software. Los datos que proporciones serán anónimos y resultan esenciales para ayudarnos a perfeccionar la detección de intenciones, identificar debilidades del sistema y tomar decisiones fundamentadas sobre futuros desarrollos.\n\nA cambio de tu participación, te ofrecemos información valiosa sobre tendencias de uso, intenciones fallidas y análisis personalizados a través de un panel interactivo. Esta información puede ayudarte a ajustar el asistente para adaptarlo mejor a tus necesidades específicas, garantizando así una experiencia más agradable y eficiente.\n\nPara obtener más información sobre visualización de datos y opciones de descarga, visita nuestro portal de datos abiertos: https://opendata.tigregotico.pt\n\nValoramos tu participación y esperamos que nos acompañes en la creación de una mejor experiencia de software para todos.\n\n¿Aceptas compartir datos anónimos con nosotros?"
+  },
+  "welcome.sh": {
+    "title": "Instalación de Open Voice OS - Bienvenida",
+    "content": "¡Hola! Te damos la bienvenida a la instalación de Open Voice OS!\n\nNos complace presentarte Open Voice OS, el asistente de voz de código abierto.\n\nInstalar Open Voice OS es muy sencillo y abre un mundo de posibilidades para la comodidad controlada por voz. Tanto si eres un entusiasta de la tecnología como si simplemente quieres simplificar tus tareas diarias, Open Voice OS está aquí para hacerte la vida más fácil.\n\nEmpieza a instalarlo hoy mismo y deja que tu voz te guíe por el futuro de la tecnología. 🌟"
+  },
+  "overclock.sh": {
+    "title": "Instalación de Open Voice OS - Overclocking",
+    "content": "El overclocking aumenta la frecuencia de la CPU/GPU para obtener el máximo rendimiento, pero puede reducir la estabilidad y aumentar el calor.\n\nRequisitos:\n- Refrigeración activa (disipador/ventilador) y buen flujo de aire\n- Fuente de alimentación estable adecuada a tu modelo de Pi\n- Supervisa las temperaturas y detén si hay throttling o fallos\n\nRiesgos:\n- Reinicios aleatorios, fallos de audio, corrupción de datos\n- Mayor consumo y vida útil más corta\n\nOpen Voice OS no se hace responsable de ningún problema relacionado con el overclocking.\n\n¿Quieres habilitar el overclocking?"
+  }
+}

@@ -215,10 +215,14 @@ export component DiskPage inherits VerticalLayout {
             : "Otomatik kurulum seçili diski tamamen siler ve GPT + ESP + ext4 kök düzeni oluşturur.";
     }
 
-    // --- Disk chooser. Shrinks to a fixed strip once the manual editor appears.
+    // --- Disk chooser. Shrinks to a fixed strip once the manual editor
+    // appears, so the editor below has room; otherwise it fills the page.
+    // `max-height` (not `height`) enforces the cap: a literal `height` binding
+    // would override `vertical-stretch` and collapse the list in automatic
+    // mode instead of letting it fill the available space.
     ScrollView {
         vertical-stretch: root.manual-mode ? 0 : 1;
-        height: root.manual-mode ? 160px : 0px;
+        max-height: root.manual-mode ? 160px : 100000px;
         VerticalLayout {
             spacing: 8px;
             for disk[i] in disks: Card {
@@ -436,6 +440,7 @@ export component InstallPage inherits VerticalLayout {
     in property <string> log-tail;
     in property <string> summary;
     in property <bool> can-start;
+    in property <string> blocked-reason;
     callback start();
     callback cancel();
     callback reboot();
@@ -443,15 +448,17 @@ export component InstallPage inherits VerticalLayout {
     spacing: Theme.gap;
 
     Heading {
-        title: finished ? "Kurulum Tamamlandı" : (running ? "Kuruluyor…" : "Özet");
+        title: finished ? "Kurulum Tamamlandı" : (failed ? "Kurulum Başarısız" : (running ? "Kuruluyor…" : "Özet"));
         subtitle: finished
             ? "Kurulum ortamını çıkarıp yeniden başlatabilirsiniz."
-            : (running ? stage-label : "Başlamadan önce seçimlerinizi gözden geçirin. Bu işlem geri alınamaz.");
+            : ((running || failed) ? stage-label : "Başlamadan önce seçimlerinizi gözden geçirin. Bu işlem geri alınamaz.");
     }
 
-    if !running && !finished: VerticalLayout {
+    if !running && !finished && !failed: VerticalLayout {
         vertical-stretch: 1;
         spacing: 10px;
+
+        Notice { text: root.blocked-reason; kind: 2; }
 
         Card {
             vertical-stretch: 1;
@@ -470,7 +477,10 @@ export component InstallPage inherits VerticalLayout {
         }
     }
 
-    if running || finished: VerticalLayout {
+    // Kept visible after a failed install (not just while running/finished):
+    // the log tail is the only place the actual failure reason survives —
+    // `stage-label` above shows the one-line summary, this shows the detail.
+    if running || finished || failed: VerticalLayout {
         vertical-stretch: 1;
         spacing: 10px;
 

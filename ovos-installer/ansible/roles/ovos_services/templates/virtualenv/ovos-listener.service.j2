@@ -1,0 +1,31 @@
+[Unit]
+Documentation=https://openvoiceos.github.io/ovos-docker/about/glossary/components/#ovos-listener
+Description=Open Voice OS - Listener
+PartOf=ovos.service
+Requires=ovos.service ovos-messagebus.service ovos-core.service ovos-phal.service
+After=ovos.service ovos-messagebus.service ovos-core.service ovos-phal.service
+
+[Service]
+{% set _ovos_service_user_home = ovos_installer_user_home if (ovos_installer_systemd_scope | default('user')) == 'system' else '%h' %}
+{% if (ovos_installer_systemd_scope | default('user')) == 'system' %}
+User={{ ovos_installer_user }}
+Group={{ ovos_installer_group }}
+Environment=HOME={{ ovos_installer_user_home }}
+Environment=XDG_RUNTIME_DIR=/run/user/{{ ovos_installer_uid }}
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{{ ovos_installer_uid }}/bus
+EnvironmentFile=-{{ ovos_installer_user_home }}/.config/environment.d/99-ovos-tuning.conf
+{% endif %}
+WorkingDirectory={{ _ovos_service_user_home }}/.venvs/ovos
+ExecStart={{ _ovos_service_user_home }}/.venvs/ovos/bin/ovos-dinkum-listener
+ExecReload=/usr/bin/kill -s HUP $MAINPID
+Restart=on-failure
+RestartSec={{ '1s' if ovos_installer_tuning | bool else '5s' }}
+TimeoutStartSec=5min
+{% if ovos_installer_tuning_performance | bool and (ovos_installer_systemd_scope | default('user')) == 'system' %}
+Nice=-10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=0
+{% endif %}
+
+[Install]
+WantedBy=ovos.service

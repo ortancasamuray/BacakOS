@@ -1,0 +1,434 @@
+- name: Copy Python requirements.txt files
+  ansible.builtin.template:
+    src: "{{ item.file }}.j2"
+    dest: "{{ item.dest }}"
+    owner: "{{ ovos_installer_user }}"
+    group: "{{ ovos_installer_group }}"
+    mode: "0644"
+  loop: "{{ ovos_virtualenv_requirements_files }}"
+  loop_control:
+    label: "{{ item.file }}"
+  when: item.state | bool
+
+- name: Ensure dedicated uv cache directory exists
+  ansible.builtin.file:
+    path: "{{ ovos_virtualenv_uv_cache_dir }}"
+    state: directory
+    owner: "{{ ovos_installer_user }}"
+    group: "{{ ovos_installer_group }}"
+    mode: "0755"
+  when: not (ovos_virtualenv_is_cleaning | bool)
+
+- name: Ensure uv has requested Python available
+  become: true
+  become_user: "{{ ovos_installer_user }}"
+  ansible.builtin.command:
+    cmd: "uv python install {{ ovos_virtualenv_venv_python }}"
+  changed_when: false
+  environment: "{{ ovos_virtualenv_uv_environment }}"
+  when: not (ovos_virtualenv_is_cleaning | bool)
+
+- name: Check installer uv binary
+  ansible.builtin.stat:
+    path: "{{ ovos_virtualenv_installer_venv_path }}/bin/uv"
+  register: ovos_virtualenv_uv_bin
+  changed_when: false
+  when: not (ovos_virtualenv_is_cleaning | bool)
+
+- name: Ensure user local bin exists
+  ansible.builtin.file:
+    path: "{{ ovos_installer_user_home }}/.local/bin"
+    state: directory
+    owner: "{{ ovos_installer_user }}"
+    group: "{{ ovos_installer_group }}"
+    mode: '0755'
+  when: not (ovos_virtualenv_is_cleaning | bool)
+
+- name: Install uv for user from installer venv
+  ansible.builtin.copy:
+    src: "{{ ovos_virtualenv_installer_venv_path }}/bin/uv"
+    dest: "{{ ovos_installer_user_home }}/.local/bin/uv"
+    owner: "{{ ovos_installer_user }}"
+    group: "{{ ovos_installer_group }}"
+    mode: '0755'
+    remote_src: true
+  when:
+    - not (ovos_virtualenv_is_cleaning | bool)
+    - ovos_virtualenv_uv_bin.stat.exists | default(false)
+
+- name: Warn if installer uv binary missing
+  ansible.builtin.debug:
+    msg: "uv binary not found in installer venv; skipping user install."
+  when:
+    - not (ovos_virtualenv_is_cleaning | bool)
+    - not (ovos_virtualenv_uv_bin.stat.exists | default(false))
+
+- name: Ensure ovos Python venv exists with requested Python
+  become: true
+  become_user: "{{ ovos_installer_user }}"
+  ansible.builtin.command:
+    cmd: >-
+      uv venv
+      --python {{ ovos_virtualenv_venv_python }}
+      --python-preference managed
+      {{ ovos_virtualenv_path }}
+  args:
+    creates: "{{ ovos_virtualenv_path }}/bin/activate"
+  environment: "{{ ovos_virtualenv_uv_environment }}"
+  register: ovos_virtualenv_venv_create
+  when: not (ovos_virtualenv_is_cleaning | bool)
+
+- name: Resolve OVOS venv base interpreter with uv
+  become: true
+  become_user: "{{ ovos_installer_user }}"
+  ansible.builtin.command:
+    cmd: "uv python find {{ ovos_virtualenv_venv_python }}"
+  register: ovos_virtualenv_base_python_executable
+  changed_when: false
+  check_mode: false
+  environment: "{{ ovos_virtualenv_uv_environment }}"
+  when: not (ovos_virtualenv_is_cleaning | bool)
+
+- name: Check OVOS venv base interpreter target
+  ansible.builtin.stat:
+    path: "{{ ovos_virtualenv_base_python_executable.stdout | default('') | trim }}"
+    follow: true
+  register: ovos_virtualenv_base_python_target_stat
+  changed_when: false
+  failed_when: false
+  when:
+    - not (ovos_virtualenv_is_cleaning | bool)
+    - (ovos_virtualenv_base_python_executable.stdout | default('') | trim | length) > 0
+
+- name: Assert OVOS venv base interpreter is available
+  ansible.builtin.assert:
+    that:
+      - (ovos_virtualenv_base_python_executable.stdout | default('') | trim | length) > 0
+      - not ((ovos_virtualenv_base_python_executable.stdout | default('') | trim) is search('^' ~ (ovos_virtualenv_path | regex_escape) ~ '/bin/'))
+      - ((ovos_virtualenv_base_python_target_stat | default({})).stat | default({})).exists | default(false)
+      - ((ovos_virtualenv_base_python_target_stat | default({})).stat | default({})).isreg | default(false)
+      - ((ovos_virtualenv_base_python_target_stat | default({})).stat | default({})).executable | default(false)
+    fail_msg: >-
+      Unable to locate a valid external base Python interpreter for {{ ovos_virtualenv_path }}.
+      Check uv-managed Python availability for {{ ovos_virtualenv_venv_python }} and recreate the venv if needed.
+  when: not (ovos_virtualenv_is_cleaning | bool)
+
+- name: Ensure OVOS venv versioned python points to base interpreter
+  ansible.builtin.file:
+    src: "{{ ovos_virtualenv_base_python_executable.stdout | trim }}"
+    dest: "{{ ovos_virtualenv_path }}/bin/python{{ ovos_virtualenv_venv_python }}"
+    state: link
+    owner: "{{ ovos_installer_user }}"
+    group: "{{ ovos_installer_group }}"
+    force: true
+    follow: false
+  when: not (ovos_virtualenv_is_cleaning | bool)
+
+- name: Ensure OVOS venv python3 symlink points to versioned executable
+  ansible.builtin.file:
+    src: "{{ ovos_virtualenv_path }}/bin/python{{ ovos_virtualenv_venv_python }}"
+    dest: "{{ ovos_virtualenv_path }}/bin/python3"
+    state: link
+    owner: "{{ ovos_installer_user }}"
+    group: "{{ ovos_installer_group }}"
+    force: true
+    follow: false
+  when: not (ovos_virtualenv_is_cleaning | bool)
+
+- name: Ensure OVOS venv python command points to versioned executable
+  ansible.builtin.file:
+    src: "{{ ovos_virtualenv_path }}/bin/python{{ ovos_virtualenv_venv_python }}"
+    dest: "{{ ovos_virtualenv_path }}/bin/python"
+    state: link
+    owner: "{{ ovos_installer_user }}"
+    group: "{{ ovos_installer_group }}"
+    force: true
+    follow: false
+  when: not (ovos_virtualenv_is_cleaning | bool)
+
+- name: Ensure OVOS virtualenv ownership is aligned before package installs
+  ansible.builtin.file:
+    path: "{{ ovos_virtualenv_path }}"
+    state: directory
+    owner: "{{ ovos_installer_user }}"
+    group: "{{ ovos_installer_group }}"
+    recurse: true
+  when:
+    - not (ovos_virtualenv_is_cleaning | bool)
+    - ovos_virtualenv_repair_ownership | bool or (ovos_virtualenv_venv_create is changed)
+
+- name: Ensure pip is available in OVOS venv
+  become: true
+  become_user: "{{ ovos_installer_user }}"
+  ansible.builtin.command:
+    cmd: "{{ ovos_virtualenv_path }}/bin/python{{ ovos_virtualenv_venv_python }} -m ensurepip --upgrade"
+  args:
+    creates: "{{ ovos_virtualenv_path }}/bin/pip"
+  environment:
+    HOME: "{{ ovos_installer_user_home }}"
+  register: ovos_virtualenv_pip_bootstrap
+  when: not (ovos_virtualenv_is_cleaning | bool)
+
+- name: Upgrade pip tooling in OVOS venv
+  become: true
+  become_user: "{{ ovos_installer_user }}"
+  ansible.builtin.command:
+    cmd: >-
+      {{ ovos_virtualenv_path }}/bin/python{{ ovos_virtualenv_venv_python }} -m pip install -U
+      pip wheel
+      "{{ ovos_virtualenv_setuptools_package }}"
+  environment: >-
+    {{
+      {'HOME': ovos_installer_user_home}
+      | combine(
+          {'PIP_CONFIG_FILE': ovos_installer_pip_config_file}
+          if (ovos_installer_pip_config_file | default('') | length > 0)
+          else {}
+        )
+    }}
+  changed_when: false
+  when:
+    - not (ovos_virtualenv_is_cleaning | bool)
+    - ovos_virtualenv_pip_bootstrap is defined
+    - ovos_virtualenv_pip_bootstrap is changed
+
+- name: Install wheel bootstrap package (macOS or non-AVX/SIMD hosts)
+  become: true
+  become_user: "{{ ovos_installer_user }}"
+  moreati.uv.pip:
+    name: wheel
+    virtualenv: "{{ ovos_virtualenv_path }}"
+  environment: "{{ ovos_virtualenv_uv_environment }}"
+  when:
+    - not (ovos_virtualenv_is_cleaning | bool)
+    - ansible_facts.system == 'Darwin' or not (ovos_installer_cpu_is_capable | bool)
+
+- name: Install ggwave Python library
+  become: true
+  become_user: "{{ ovos_installer_user }}"
+  moreati.uv.pip:
+    name: ggwave
+    virtualenv: "{{ ovos_virtualenv_path }}"
+    extra_args: "--trusted-host whl.smartgic.io -f 'https://whl.smartgic.io'"
+  environment: "{{ ovos_virtualenv_uv_environment }}"
+  when:
+    - not (ovos_virtualenv_is_cleaning | bool)
+    - ovos_installer_enable_ggwave | bool
+
+- name: Check cached OVOS constraints file
+  ansible.builtin.stat:
+    path: "{{ ovos_virtualenv_constraints_path }}"
+  register: ovos_virtualenv_constraints_file
+  changed_when: false
+  when: not (ovos_virtualenv_is_cleaning | bool)
+
+- name: Decide whether OVOS constraints refresh is required
+  ansible.builtin.set_fact:
+    ovos_virtualenv_constraints_refresh_required: >-
+      {{
+        ovos_virtualenv_constraints_force_sync | bool
+        or not (ovos_virtualenv_constraints_file.stat.exists | default(false))
+        or (
+          (lookup('pipe', 'date +%s') | int)
+          - (ovos_virtualenv_constraints_file.stat.mtime | default(0) | int)
+          > (ovos_virtualenv_constraints_refresh_interval | int)
+        )
+      }}
+  changed_when: false
+  when: not (ovos_virtualenv_is_cleaning | bool)
+
+- name: Cache OVOS constraints file
+  ansible.builtin.get_url:
+    url: "{{ ovos_virtualenv_constraints_url }}"
+    dest: "{{ ovos_virtualenv_constraints_path }}"
+    owner: "{{ ovos_installer_user }}"
+    group: "{{ ovos_installer_group }}"
+    mode: "0644"
+  when:
+    - not (ovos_virtualenv_is_cleaning | bool)
+    - ovos_virtualenv_constraints_refresh_required | bool
+
+- name: Install Open Voice OS in Python venv
+  become: true
+  become_user: "{{ ovos_installer_user }}"
+  vars:
+    _pip_constraints: "--constraint {{ ovos_virtualenv_constraints_path }}"
+    _uv_extra_args: "{{ _pip_constraints }}{{ ' --prerelease=allow' if ovos_virtualenv_uv_allow_prerelease | bool else '' }}"
+    _ovos_virtualenv_install_env: >-
+      {{
+        ovos_virtualenv_uv_environment
+        | combine(
+            {
+              'LDFLAGS': ovos_virtualenv_macos_fann_linker_flags,
+              'LIBRARY_PATH': ovos_virtualenv_macos_fann_library_path,
+              'PKG_CONFIG_PATH': ovos_virtualenv_macos_fann_pkg_config_path
+            } if ansible_facts.system == 'Darwin' else {}
+          )
+      }}
+  moreati.uv.pip:
+    requirements: "{{ item.dest }}"
+    virtualenv: "{{ ovos_virtualenv_path }}"
+    extra_args: "{{ _uv_extra_args }}"
+    state: latest
+  environment: "{{ _ovos_virtualenv_install_env }}"
+  register: ovos_virtualenv_install
+  until: ovos_virtualenv_install is success
+  retries: "{{ ovos_virtualenv_uv_install_retries | int }}"
+  delay: "{{ ovos_virtualenv_uv_install_delay | int }}"
+  loop: "{{ ovos_virtualenv_requirements_files }}"
+  loop_control:
+    label: "{{ item.file }}"
+  when: item.state | bool
+
+- name: Include intent cache sync tasks
+  ansible.builtin.import_tasks: intent_cache.yml
+  when: not (ovos_virtualenv_is_cleaning | bool)
+
+- name: Detect OVOS venv runtime Python version
+  become: true
+  become_user: "{{ ovos_installer_user }}"
+  ansible.builtin.command:
+    argv:
+      - "{{ ovos_virtualenv_path }}/bin/python"
+      - -c
+      - "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"
+  register: ovos_virtualenv_runtime_python_version
+  changed_when: false
+  when: not (ovos_virtualenv_is_cleaning | bool)
+
+- name: Resolve runtime bootstrap numpy package from OVOS venv Python
+  ansible.builtin.set_fact:
+    ovos_virtualenv_runtime_numpy_package: >-
+      {{
+        ovos_installer_numpy_package
+        | default(
+            'numpy>=2.1,<3'
+            if (
+              (ovos_virtualenv_runtime_python_parts | first | default('0') | int) == 3
+              and (ovos_virtualenv_runtime_python_parts[1:] | first | default('0') | int) >= 13
+            )
+            else 'numpy==1.26.4'
+          )
+      }}
+  vars:
+    ovos_virtualenv_runtime_python_parts: "{{ (ovos_virtualenv_runtime_python_version.stdout | default('0.0')) | regex_findall('[0-9]+') }}"
+  changed_when: false
+  when: not (ovos_virtualenv_is_cleaning | bool)
+
+- name: Ensure runtime bootstrap Python libraries are installed
+  become: true
+  become_user: "{{ ovos_installer_user }}"
+  moreati.uv.pip:
+    name:
+      - "{{ ovos_virtualenv_runtime_numpy_package | default(ovos_virtualenv_numpy_package) }}"
+      - "{{ ovos_virtualenv_setuptools_package }}"
+    virtualenv: "{{ ovos_virtualenv_path }}"
+    state: present
+  environment: "{{ ovos_virtualenv_uv_environment }}"
+  when: not (ovos_virtualenv_is_cleaning | bool)
+
+- name: Check ovos virtualenv activate script exists
+  ansible.builtin.stat:
+    path: "{{ ovos_virtualenv_path }}/bin/activate"
+  register: ovos_virtualenv_activate_script
+
+- name: Add OVOS constraints to venv activation
+  vars:
+    _ovos_release: "{{ ovos_virtualenv_constraints_url }}"
+  ansible.builtin.lineinfile:
+    path: "{{ ovos_virtualenv_path }}/bin/activate"
+    line: "{{ item.line }}"
+    regexp: "{{ item.regexp }}"
+    insertafter: "{{ item.insertafter }}"
+    owner: "{{ ovos_installer_user }}"
+    group: "{{ ovos_installer_group }}"
+    state: present
+  loop:
+    - line: "export PIP_CONSTRAINT=\"{{ _ovos_release }}\""
+      regexp: "^export PIP_CONSTRAINT="
+      insertafter: "^VIRTUAL_ENV="
+    - line: "export UV_CONSTRAINT=\"{{ _ovos_release }}\""
+      regexp: "^export UV_CONSTRAINT="
+      insertafter: "^export PIP_CONSTRAINT="
+  loop_control:
+    label: "{{ item.regexp }}"
+  when: ovos_virtualenv_activate_script.stat.exists | default(false)
+
+- name: Add VIRTUAL_ENV variable to shell init file and update user PATH
+  vars:
+    _path: "{{ ovos_virtualenv_path }}/bin"
+  ansible.builtin.lineinfile:
+    path: "{{ ovos_virtualenv_shell_init_file }}"
+    line: "{{ item.line }}"
+    regexp: "{{ item.regexp }}"
+    owner: "{{ ovos_installer_user }}"
+    group: "{{ ovos_installer_group }}"
+    mode: "0644"
+    create: true
+    state: present
+  loop:
+    - line: "VIRTUAL_ENV={{ _path }}"
+      regexp: "^VIRTUAL_ENV"
+    - line: "PATH=$PATH:{{ _path }}"
+      regexp: "^PATH"
+  loop_control:
+    label: "{{ item.regexp }}"
+  when: (ovos_installer_i2c_devices | default([])) | length < 1
+  tags:
+    - always
+
+- name: Ensure OVOS virtualenv auto-activates for interactive shells
+  ansible.builtin.blockinfile:
+    path: "{{ ovos_virtualenv_shell_init_file }}"
+    marker: "# {mark} OVOS VENV"
+    block: |
+      if [[ $- == *i* ]] && [ -f "{{ ovos_virtualenv_path }}/bin/activate" ]; then
+        source "{{ ovos_virtualenv_path }}/bin/activate"
+      fi
+    owner: "{{ ovos_installer_user }}"
+    group: "{{ ovos_installer_group }}"
+    mode: "0644"
+    create: true
+    state: present
+  tags:
+    - always
+
+- name: Generate _identity.json
+  become: true
+  become_user: "{{ ovos_installer_user }}"
+  ansible.builtin.command:
+    argv:
+      - hivemind-client
+      - set-identity
+      - --key
+      - "{{ ovos_installer_satellite_key }}"
+      - --password
+      - "{{ ovos_installer_satellite_password }}"
+      - --host
+      - "{{ ovos_installer_listener_host }}"
+      - --port
+      - "{{ ovos_installer_listener_port | default(5678) }}"
+      - --siteid
+      - "{{ ovos_installer_site_id | default('voice-sat-1') }}"
+  environment:
+    PATH: "{{ ovos_virtualenv_path }}/bin"
+    VIRTUAL_ENV: "{{ ovos_virtualenv_path }}"
+  changed_when: false
+  when: ovos_installer_profile == "satellite"
+
+- name: Merge ovos-config language recommendations into mycroft.conf
+  become: true
+  become_user: "{{ ovos_installer_user }}"
+  ansible.builtin.command:
+    argv:
+      - ovos-config
+      - autoconfigure
+      - --lang
+      - "{{ ovos_installer_locale }}"
+      - "{{ ovos_installer_ovos_config_tts_gender }}"
+  environment:
+    PATH: "{{ ovos_virtualenv_path }}/bin"
+    VIRTUAL_ENV: "{{ ovos_virtualenv_path }}"
+  changed_when: false
+  when:
+    - ovos_installer_ovos_config_autoconfigure_enabled | default(false) | bool

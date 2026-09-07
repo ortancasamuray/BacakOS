@@ -73,7 +73,13 @@ a target, and validates the whole plan before touching a single sector."""
 #   util-linux      sfdisk, lsblk, blkid, mkswap, mount, umount
 #   dosfstools      mkfs.vfat (ESP)      e2fsprogs  mkfs.ext4 (root)
 #   coreutils       chroot, ln           udev       udevadm settle
-#   systemd         systemctl reboot     pkexec     privilege escalation
+#   systemd         systemctl reboot     sudo       privilege escalation
+#                                                    (see `kur-baslat`; not
+#                                                    pkexec/polkit — the live
+#                                                    user has no real password
+#                                                    for PAM to check, so
+#                                                    `auth_admin` can never
+#                                                    succeed there)
 #
 # `locale-gen`, `grub-install`, `update-grub`, `useradd`, `chpasswd`,
 # `systemd-machine-id-setup` and `update-initramfs` also run via `chroot`, but
@@ -81,8 +87,7 @@ a target, and validates the whole plan before touching a single sector."""
 # not here.
 depends = """$auto, \
 libwayland-client0, libwayland-cursor0, libxkbcommon0, \
-squashfs-tools, util-linux, dosfstools, e2fsprogs, coreutils, udev, systemd, \
-pkexec, polkitd | policykit-1"""
+squashfs-tools, util-linux, dosfstools, e2fsprogs, coreutils, udev, systemd, sudo"""
 # kur.desktop's `Icon=kur` only resolves from the BacakOS icon theme
 # (bacak-icons); without it the entry falls back to a blank/generic icon
 # rather than failing, so this is a soft recommendation, not a hard depend.
@@ -92,7 +97,6 @@ assets = [
     ["scripts/kur-baslat", "usr/bin/", "755"],
     ["scripts/kur-root", "usr/libexec/", "755"],
     ["kur.desktop", "usr/share/applications/", "644"],
-    ["debian/org.anadolupanteri.kur.policy", "usr/share/polkit-1/actions/", "644"],
     ["kur.1", "usr/share/man/man1/", "644"],
     ["debian/lintian-overrides", "usr/share/lintian/overrides/kur", "644"],
 ]
