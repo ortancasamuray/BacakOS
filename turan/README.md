@@ -1,5 +1,7 @@
 # Bacak Display Manager (BDM)
 
+🌐 [Türkçe](README.tr.md) · **English**
+
 A modern, secure, lightweight, **Wayland-native** display manager for the Bacak
 Desktop Environment — a replacement for LightDM, GDM and SDDM, designed
 touch-first and multi-user from the start.
