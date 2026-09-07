@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!-- CHANGE_WIFI_MULTICAST_STATE isn't needed: discovery uses UDP
+         broadcast (see ARCHITECTURE.md's note on why not real mDNS), not
+         multicast, so no multicast lock is required. -->
+
+    <!-- No android:icon yet — a launcher icon asset (mipmap set) hasn't been
+         designed for this project; the system default is used until one is
+         added, matching bacak-icons' guidance to not improvise app icons. -->
+    <application
+        android:allowBackup="true"
+        android:label="@string/app_name"
+        android:theme="@style/Theme.Uzakel"
+        android:supportsRtl="true">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:theme="@style/Theme.Uzakel">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

@@ -2,10 +2,12 @@
 
 🌐 [Türkçe özet](ARCHITECTURE.tr.md) · **English**
 
-> **Status: `daemon/` (Rust) is implemented and matches this document;
-> `android/` doesn't exist yet.** Where this doc describes daemon behavior,
-> it's describing real code in `daemon/src/`. Where it describes the Android
-> client, it's still a plan.
+> **Status: both `daemon/` (Rust) and `android/` (Kotlin) have a first pass
+> implemented and match this document.** The Android build was verified end
+> to end with a real Gradle + Android SDK (`assembleDebug` produces a debug
+> APK, `lintDebug` passes) — see README.md. What's *not* verified yet is the
+> two sides actually talking to each other on real hardware, and pairing
+> still isn't enforced on the input/file sockets (§2.3, §5).
 
 Two components, three network channels, one shared wire protocol.
 
@@ -163,37 +165,77 @@ daemon/src/
 
 ---
 
-## 4. Android client (Kotlin) — module design
+## 4. Android client (Kotlin + Jetpack Compose) — module design
 
 ```
 android/app/src/main/kotlin/org/anadolupanteri/uzakel/
-├── discovery/    # host scan + a persisted list of previously-paired hosts
-├── network/      # NetworkClient: coroutine/Flow-based UDP input socket + TCP file socket
-├── input/        # TrackpadView: raw touch deltas → sensitivity/acceleration → UDP packets
-├── transfer/     # FileTransferManager: SAF file picking, chunked upload/download, progress Flow
-└── ui/           # Compose screens: trackpad, virtual keyboard, device list, transfer panel
+├── protocol/      # Protocol.kt — byte-for-byte Kotlin mirror of daemon/src/protocol.rs
+├── discovery/     # SavedHostsStore: SharedPreferences-backed list of previously-paired hosts
+├── network/       # NetworkClient: discovery scan, PIN pairing, InputChannel (UDP), sendFile (TCP)
+├── input/         # TrackpadView (multi-touch), KeyCodes (evdev keycode table), IME→typeChar bridge
+├── transfer/      # FileTransferManager: SAF file picking, SHA-256, progress via StateFlow
+├── ui/            # UzakelApp (root), DeviceListScreen, ControlScreen, TransferScreen
+└── MainActivity.kt
 ```
 
-- **`input/TrackpadView`** is a Compose `pointerInput` surface translating
-  raw touch events into the same `dx`/`dy` deltas `input_manager.rs` expects
-  — one-finger drag = `MOUSE_MOVE`, one-finger tap = `MOUSE_CLICK` (left),
-  two-finger tap = `MOUSE_CLICK` (right), two-finger drag = `MOUSE_SCROLL`.
-  Sensitivity and acceleration are applied client-side before the packet is
-  sent, so the daemon never has to guess the phone's touch resolution.
-- **`network/NetworkClient`** owns both sockets behind a coroutine/`Flow`
-  API: input packets are fire-and-forget sends (no ack expected, matching
-  §2.1's UDP design), while file transfer exposes a `Flow<TransferProgress>`
-  the transfer panel collects to drive its progress bar.
-- **`transfer/FileTransferManager`** uses Android's Storage Access Framework
-  for both picking a file to send and choosing a destination for a
-  download, so it never needs broad storage permissions — matching the
-  "no shell-out, sandboxed by design" instinct the rest of BacakOS's file
-  handling (`altay`'s `security::Sandbox`) follows on the desktop side.
-- **`discovery/`** persists paired hosts (name, last-known IP, trust key
-  from the PIN handshake) so a returning user doesn't need to re-pair every
-  session, and re-resolves the current IP via mDNS/broadcast on each launch
-  since LAN devices commonly change address between sessions (DHCP lease
-  churn).
+There's no navigation library — `UzakelApp` switches between three screens
+with a small `sealed class Screen` and a `when`, which is simpler than
+pulling in Navigation-Compose for a graph this shallow (device list →
+control → transfer, and back).
+
+- **`protocol/Protocol.kt`** is the actual interop contract with the daemon
+  — every `ByteBuffer` layout in it (`Header`, `InputPacket.encode()`,
+  `FileMeta.encode()`, `encodeChunk`, `DiscoverResponse.decodePayload`, …)
+  has to match `daemon/src/protocol.rs` byte-for-byte, since these two
+  files never share code, only a wire format. `NetworkClient` bounds every
+  UDP read by the datagram's actual `packet.length`, not the receive
+  buffer's capacity, before touching it — the buffer is reused across
+  `receive()` calls, so a short packet arriving after a longer one would
+  otherwise read stale bytes.
+- **`input/TrackpadView`** is a Compose `pointerInput`/`awaitEachGesture`
+  surface (not `detectDragGestures`, which only tracks one pointer) —
+  one-finger drag = `MOUSE_MOVE`, one-finger tap = left click, two-finger
+  tap = right click, two-finger drag = `MOUSE_SCROLL`. Deltas are averaged
+  across active pointers and scaled by a sensitivity factor client-side
+  before a packet is ever built.
+- **Keyboard input has no custom on-screen keyboard.** `ControlScreen`
+  keeps a zero-height `BasicTextField` permanently focused-on-demand and
+  fed a single zero-width placeholder character; the system IME's edits to
+  that field are diffed (`input/Typing.kt`'s `typeChar`) into
+  `KEY_PRESS` packets via `input/KeyCodes.kt`'s evdev keycode table, and a
+  *shrinking* value (the placeholder can't get shorter through normal
+  typing) is read back as a `KEY_BACKSPACE` press. This reuses whatever
+  keyboard the user already has — autocorrect, swipe typing, non-Latin
+  layouts included — instead of the app drawing its own. A row of
+  Ctrl/Alt/Super toggle chips plus Esc/Tab/arrows/Enter/Backspace buttons
+  covers what a soft IME can't produce; since the daemon just replays raw
+  key up/down state to the kernel, holding a modifier chip while typing via
+  the IME bridge produces genuine combos (e.g. Ctrl+C) even though the two
+  code paths never coordinate directly.
+- **`network/NetworkClient`** — `discoverHosts()` broadcasts
+  `DISCOVER_REQUEST` and collects responses for a fixed window; `pair()`
+  sends `PAIR_REQUEST { pin }` and waits for one `PAIR_RESPONSE`;
+  `InputChannel` is a small fire-and-forget UDP wrapper owning the
+  monotonic `seq` counter from §2.1; `sendFile()` runs the three-phase
+  upload from §2.2 and treats a read timeout on the trailer frame as
+  success, since the daemon only ever speaks up on `FILE_CORRUPT`.
+- **`transfer/FileTransferManager`** uses Android's Storage Access
+  Framework for picking a file to send, so it never needs broad storage
+  permissions — matching the "no shell-out, sandboxed by design" instinct
+  `altay`'s `security::Sandbox` follows on the desktop side. SHA-256 is
+  computed in a full pass over the SAF stream before the handshake (the
+  protocol needs the hash up front), so a large file is read twice; an
+  incremental digest alongside the send would remove that cost — see §5.
+  Only sending is implemented, matching the daemon's receive-only
+  `file_server.rs`.
+- **`discovery/SavedHostsStore`** persists paired hosts (name, last-known
+  IP) in `SharedPreferences` as one JSON array — plenty for the handful of
+  hosts a phone realistically pairs with, so a real database felt like more
+  machinery than the data warrants. The address is only a *starting point*
+  for a saved host, not trusted blindly: `DeviceListScreen` re-resolves it
+  via `InetAddress.getByName` on connect, since LAN devices commonly change
+  address between sessions (DHCP lease churn) — there's no fresh broadcast
+  re-scan wired into "connect to a saved host" yet (§5).
 
 ---
 
@@ -221,3 +263,21 @@ android/app/src/main/kotlin/org/anadolupanteri/uzakel/
 - Replacing the `notify-send` shell-out in `discovery.rs`/`file_server.rs`
   with a native `org.freedesktop.Notifications` D-Bus call (e.g. via
   `zbus`), removing the runtime dependency on `libnotify-bin`.
+- **The two sides have never actually talked to each other.** Both build
+  and pass their own tests/lint independently, but no one has run the
+  daemon and the Android app against real BacakOS + Android hardware on
+  the same network yet — that's the next thing to actually validate before
+  trusting any of the above.
+- `DeviceListScreen`'s "connect to a saved host" path uses the persisted IP
+  as-is rather than re-scanning first; if the host's address changed since
+  it was saved, connecting silently fails instead of falling back to a
+  fresh discovery broadcast.
+- `FileTransferManager` reads the whole file twice (once to hash, once to
+  send) since `FILE_META`'s SHA-256 has to be known before streaming
+  starts (§2.2) — an incrementally-hashed send (compute the digest as
+  chunks go out, verify against a value only known after the last chunk)
+  would need a protocol change to move verification to a trailer frame the
+  sender computes, not the receiver.
+- Android reconnect/retry behavior on Wi-Fi handoff or the daemon
+  restarting mid-session — `InputChannel` currently just swallows send
+  failures silently (see its doc comment) with no reconnect logic.
