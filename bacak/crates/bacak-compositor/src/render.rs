@@ -2320,6 +2320,12 @@ pub(crate) fn render_uzakel_panel(
         // scan reliably, and the panel backdrop itself is near-black.
         let qr_x = p.panel.x + (p.panel.w - *qw as f32) / 2.0;
         let card_pad = 10.0;
+        // QR bitmap pushed BEFORE its white backing card: this codebase's
+        // element list is top-first (earliest push = frontmost — see this
+        // function's own three-pass doc comment), so pushing the opaque
+        // card first would bury the QR completely behind it instead of
+        // behind it.
+        cc_blit_label(out, renderer, &p.qr, qr_x, y, output_scale, off_x, off_y);
         cc_card(
             out,
             renderer,
@@ -2330,7 +2336,6 @@ pub(crate) fn render_uzakel_panel(
             off_x,
             off_y,
         );
-        cc_blit_label(out, renderer, &p.qr, qr_x, y, output_scale, off_x, off_y);
         y += *qh as f32 + card_pad + GAP;
     }
     let status_x = p.panel.x + (p.panel.w - p.status.as_ref().map(|(_, w, _)| *w as f32).unwrap_or(0.0)) / 2.0;
