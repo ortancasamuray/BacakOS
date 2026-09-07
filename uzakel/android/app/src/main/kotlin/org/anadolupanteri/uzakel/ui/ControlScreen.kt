@@ -27,14 +27,14 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.anadolupanteri.uzakel.input.KeyCodes
 import org.anadolupanteri.uzakel.input.TrackpadView
 import org.anadolupanteri.uzakel.input.typeChar
 import org.anadolupanteri.uzakel.network.InputChannel
 import org.anadolupanteri.uzakel.protocol.MouseButton
 import java.net.InetAddress
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 /** The hidden field's content is always this single placeholder char with the
  * cursor after it — its only job is giving the system IME something to send
@@ -62,10 +62,12 @@ fun ControlScreen(
     onOpenTransfer: () -> Unit,
     onDisconnect: () -> Unit,
 ) {
-    // Created off the main thread: DatagramSocket construction/connect is a
-    // local-only op for UDP (no round trip), but keeping every socket touch
-    // on Dispatchers.IO — same as NetworkClient does elsewhere — avoids
-    // relying on that StrictMode nuance being true on every Android version.
+    // Created off the main thread: DatagramSocket construction touches the
+    // network stack, and while creation itself is a local-only op for UDP,
+    // InputChannel's actual per-packet sends need to stay off the main
+    // thread too (see NetworkClient.kt's InputChannel doc) — Android's
+    // StrictMode blocks DatagramSocket I/O there with a
+    // NetworkOnMainThreadException, found via on-device testing.
     var channel by remember(host) { mutableStateOf<InputChannel?>(null) }
     LaunchedEffect(host) { channel = withContext(Dispatchers.IO) { InputChannel(host) } }
     DisposableEffect(host) { onDispose { channel?.close() } }

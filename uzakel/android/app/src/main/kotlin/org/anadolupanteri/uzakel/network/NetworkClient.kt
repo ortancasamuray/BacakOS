@@ -1,6 +1,10 @@
 package org.anadolupanteri.uzakel.network
 
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.anadolupanteri.uzakel.protocol.DiscoverResponse
 import org.anadolupanteri.uzakel.protocol.FileMeta
@@ -20,7 +24,6 @@ import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
-import java.net.SocketException
 import java.util.concurrent.atomic.AtomicInteger
 
 /** Matches `uzakel-daemon`'s defaults — see `../../daemon/src/main.rs`. */
@@ -46,17 +49,40 @@ sealed class FileSendResult {
  * recognizable, hence the monotonic [seq] counter this owns.
  */
 class InputChannel(private val host: InetAddress, private val port: Int = DefaultPorts.INPUT) : AutoCloseable {
-    private val socket = DatagramSocket().apply { connect(host, port) }
+    // Deliberately NOT connect()ed: every send() already carries the
+    // destination in its DatagramPacket, so connect() buys nothing here —
+    // and on real hardware it turned out to actively break things.
+    // `DatagramSocket.connect()` threw `IllegalArgumentException: connect: -1`
+    // on a real device (MIUI/Android 11, Redmi Note 8) during on-device
+    // testing, killing the whole control session the moment it opened.
+    // A plain unconnected socket sidesteps whatever OS/network-stack
+    // quirk caused that and matches how discoverHosts()/pair() already
+    // talk UDP elsewhere in this file.
+    private val socket = DatagramSocket()
     private val seq = AtomicInteger(1)
 
+    // Every mouseMove/mouseClick/etc. call comes straight from a Compose
+    // gesture callback on the main thread — but `DatagramSocket.send()` is
+    // still a real syscall, and Android's StrictMode ThreadPolicy blocks it
+    // there with a `NetworkOnMainThreadException`. On-device testing showed
+    // every single send failing silently this way (the exception was being
+    // swallowed by design — see below) with 0 packets ever reaching the
+    // daemon despite gesture detection working perfectly. A dedicated
+    // background scope moves the actual socket write off the caller's
+    // thread without turning every call site into a suspend function.
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     private fun send(packet: InputPacket) {
-        val bytes = packet.encode()
-        try {
-            socket.send(DatagramPacket(bytes, bytes.size, host, port))
-        } catch (_: SocketException) {
-            // Best-effort by design (see class doc) — a send failure here
-            // (e.g. transient "network unreachable" on Wi-Fi handoff) is not
-            // worth surfacing to the UI for a single dropped input packet.
+        scope.launch {
+            val bytes = packet.encode()
+            try {
+                socket.send(DatagramPacket(bytes, bytes.size, host, port))
+            } catch (_: Exception) {
+                // Best-effort by design (see class doc) — a send failure here
+                // (e.g. transient "network unreachable" on Wi-Fi handoff) is not
+                // worth surfacing to the UI, let alone crashing, over one
+                // dropped input packet.
+            }
         }
     }
 
@@ -67,7 +93,10 @@ class InputChannel(private val host: InetAddress, private val port: Int = Defaul
     fun keyPress(keycode: Int, modifiers: Int, pressed: Boolean) =
         send(InputPacket.KeyPress(seq.getAndIncrement(), keycode, modifiers, pressed))
 
-    override fun close() = socket.close()
+    override fun close() {
+        scope.cancel()
+        socket.close()
+    }
 }
 
 class NetworkClient {

@@ -82,7 +82,8 @@ fun DeviceListScreen(
         Spacer(Modifier.height(16.dp))
         Text("Bulunan cihazlar", style = MaterialTheme.typography.titleMedium)
         LazyColumn(modifier = Modifier.weight(1f, fill = false)) {
-            items(discovered) { host ->
+            val savedAddresses = savedList.map { it.lastKnownAddress }.toSet()
+            items(discovered.filterNot { savedAddresses.contains(it.address.hostAddress ?: "") }) { host ->
                 ListItem(
                     headlineContent = { Text(host.response.daemonName) },
                     supportingContent = { Text(host.address.hostAddress ?: "") },
