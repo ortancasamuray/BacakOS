@@ -1,0 +1,6 @@
+<resources>
+    <!-- Pre-Compose window theme; MainActivity's actual UI is all Compose
+         (see ui/theme/Theme.kt) — this only sets the window background/status
+         bar before the first Compose frame draws. -->
+    <style name="Theme.Uzakel" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>
