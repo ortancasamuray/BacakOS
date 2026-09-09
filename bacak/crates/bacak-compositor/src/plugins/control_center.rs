@@ -39,6 +39,8 @@ pub enum CcAction {
     DesktopSettings,
     /// Open the Uzakel pairing QR panel.
     UzakelConnect,
+    /// Open the "Uzak Masaüstü" (Remote Desktop) panel.
+    RemoteDesktopConnect,
 }
 
 /// Visual flavour of a tile, read by the renderer. State (on/off, level) lives
