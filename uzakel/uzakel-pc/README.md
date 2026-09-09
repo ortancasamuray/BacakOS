@@ -14,20 +14,22 @@ independent wire protocols and codebases — a PC desktop stream is a very
 different payload than trackpad deltas.
 
 > **v1 status: verified end to end on two separate machines over real
-> LAN/Wi-Fi.** `bacak-remote-server` (Windows 10, a real VM on separate
-> physical hardware) and `bacak-remote-client` (this Linux host) ran against
-> each other over a real network link (`192.168.1.x`, not loopback): real
-> `Hello`/`HelloAck` pairing, real capture of the Windows machine's actual
-> desktop (1400×1050), sustained streaming with continuous server-side CPU
-> activity and zero errors, and — the part that took several attempts to
-> nail down cleanly — real network-delivered pointer/click packets visibly
-> moving and clicking the cursor on the Windows machine, confirmed by a
-> person watching that screen. See "What real two-machine testing found"
-> below for the full story, including one genuine bug this test method
-> exposed (unrelated to the product itself) and why the first few input
-> tests gave misleading results before that. Several pieces named in the
-> original spec (hardware H.264/AV1 encoding, QUIC/WebRTC, zero-copy
-> `dmabuf` into the compositor, real multi-touch injection) remain
+> LAN/Wi-Fi, AND on the real BacakOS desktop (not just Xvfb).**
+> `bacak-remote-server` (Windows 10, a real VM on separate physical
+> hardware) and `bacak-remote-client` (this Linux host) ran against each
+> other over a real network link (`192.168.1.x`, not loopback): real
+> pairing, real capture of the Windows machine's actual desktop
+> (1400×1050), sustained streaming with zero errors, and real
+> network-delivered pointer/click packets visibly moving and clicking the
+> cursor on the Windows machine, confirmed by a person watching that screen.
+> Separately, the client was run inside the *actual* `bacak-compositor`
+> Wayland session on this machine (not a virtual display) — real GPU
+> (`AMD Radeon Vega 6`, RADV), a real window on the real desktop, and, after
+> fixing three real bugs real-hardware testing turned up (see "What real
+> BacakOS desktop testing found" below), 911 real local mouse/touchpad
+> events captured and delivered with zero injection errors. Several pieces
+> named in the original spec (hardware H.264/AV1 encoding, QUIC/WebRTC,
+> zero-copy `dmabuf` into the compositor, real multi-touch injection) remain
 > deliberately **not** implemented — see "Honest scope" below before
 > treating any of those as done.
 
@@ -108,10 +110,33 @@ separate-hardware, real-network test, not loopback:
   at confirming this gave misleading results, and for a genuine bug this
   process turned up along the way.
 
-**Not yet tested:** macOS (no Mac available in this pass); the client's own
-`winit` event → UDP send path with a live local mouse/touch (still only
-exercised by directly-injected wire packets, on both the loopback and
-two-machine passes); behavior under real packet loss/jitter; sustained
+### Real BacakOS desktop (Wayland, not Xvfb), loopback
+
+`bacak-remote-server` and `bacak-remote-client` both on this machine, but
+the client run inside the **actual, production `bacak-compositor`
+session** (`WAYLAND_DISPLAY=wayland-bacak-0`) instead of a virtual display —
+the point of this pass was specifically to exercise the client's real local
+input capture, which every earlier pass had only exercised via
+directly-injected wire packets:
+
+- **Pairing + real GPU rendering** — `PairRequest`/`PairResponse` succeeded
+  against the real compositor's Wayland socket; `wgpu` found the machine's
+  real hardware adapter (`AMD Radeon Vega 6 Graphics`, RADV/Vulkan) instead
+  of a software rasterizer, and a real window appeared on the real desktop
+  (confirmed via screenshots taken with `grim`).
+- **Real local input, end to end** — after fixing the three bugs in "What
+  real BacakOS desktop testing found" below, moving the mouse and clicking
+  over the real window produced 911 real `PointerMotion`/`Touch*` packets,
+  all reaching the server, decrypting correctly, and injecting via `enigo`
+  with zero errors. This is the one path no other test pass exercised —
+  every prior confirmation of the input path used a hand-crafted wire
+  packet sent directly at the input port, never the client's own
+  `winit` capture code.
+
+**Not yet tested:** macOS (no Mac available in this pass); the same
+PIN-paired security flow over a real Wi-Fi link between two separate
+machines (tested on loopback and via the Windows pass above, but not both
+combined in one run); behavior under real packet loss/jitter; sustained
 multi-minute runs; real (non-Xvfb, non-blank) desktop content, which
 compresses far larger than a blank/static screen and exercises the
 chunking path much harder.
@@ -167,6 +192,59 @@ confirmed by the person at the machine. Combined with the isolated
 `SendInput`/`enigo` diagnostics above and the server's error-free receipt
 log, the full chain — real network → decode → `enigo` → visible cursor
 movement on real Windows hardware — is now verified, not just inferred.
+
+## What real BacakOS desktop testing found
+
+Running `bacak-remote-client` inside the actual `bacak-compositor` Wayland
+session (not `Xvfb`) surfaced **three** real bugs — none of them in
+`bacak-compositor` itself, despite that being the first suspect. Found and
+fixed in this order:
+
+1. **Our own logging setup was silently discarding `RUST_LOG=debug`.**
+   `main.rs` built its filter as
+   `EnvFilter::from_default_env().add_directive("info")` — `EnvFilter`
+   breaks a tie between two directives of equal specificity (both
+   unscoped/global here) in favor of whichever was added *last*, so the
+   hardcoded `"info"` silently overrode `RUST_LOG=debug` every time. Every
+   earlier "no events at all" observation while debugging this was
+   actually "no events *visible*," not "no events firing" — a real,
+   costly, self-inflicted false signal. Fixed by only falling back to
+   `"info"` when `RUST_LOG` is absent/invalid
+   (`EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into())`),
+   so an explicit `RUST_LOG` is now fully respected.
+2. **`winit`'s Wayland backend never emits `DeviceEvent::MouseMotion`.**
+   Once logging actually worked, real mouse movement over the real window
+   showed up as `WindowEvent::CursorMoved` and low-level
+   `DeviceEvent::Motion { axis, value }` pairs — never the
+   `DeviceEvent::MouseMotion { delta }` variant `input_capture.rs` relied
+   on for relative deltas (that variant is populated on X11 via raw
+   XInput2, a path Wayland compositors don't have an equivalent for through
+   `winit`'s current backend). Pointer motion was therefore silently dead
+   on Wayland specifically, while working fine on the `Xvfb`/X11 passes
+   earlier — the exact kind of gap a same-machine-only test plan can't
+   catch. Fixed by computing relative deltas from consecutive
+   `WindowEvent::CursorMoved` positions instead, which fires on every
+   backend.
+3. **The server compared full `SocketAddr`s (IP *and* port) across two
+   different UDP sockets.** `PairedSession.addr` is captured from the video
+   socket's `PairRequest` sender address; `run_input_listener` then
+   rejected every real input packet because it arrived on a *different*
+   UDP socket with a different (but legitimate) ephemeral source port,
+   logging "paired with a different address" at debug level — invisible
+   until bug #1 was fixed, which is what finally exposed this one. Fixed
+   by comparing only the IP (`sess.addr.ip() != from.ip()`), since two
+   sockets from the same client legitimately differ in port.
+
+After all three fixes: a real mouse/touchpad session on the real BacakOS
+desktop produced 911 input packets (`PointerMotion`, `Touch{Down,Motion,Up}`
+— this laptop's touchpad drives `winit`'s touch path, not just pointer),
+every one decrypted and handed to `enigo` with zero injection errors.
+
+None of these three bugs would have been caught by the loopback/`Xvfb`
+testing earlier — each needed the real compositor, a real GPU-backed
+Wayland window, or a real second UDP socket to surface. Worth remembering
+next time something "just isn't receiving any events": check whether your
+own logging is lying to you before suspecting the platform.
 
 ---
 

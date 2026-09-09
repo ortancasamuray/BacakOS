@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use clap::Parser;
 use render::Renderer;
-use winit::event::{DeviceEvent, Event, WindowEvent};
+use winit::event::{Event, WindowEvent};
 use winit::event_loop::EventLoop;
 use winit::window::WindowBuilder;
 
@@ -34,8 +34,13 @@ struct Args {
 }
 
 fn main() -> anyhow::Result<()> {
+    // `.add_directive("info")` after `from_default_env()` would silently
+    // override RUST_LOG's level (EnvFilter breaks ties between two equally
+    // unscoped directives in favor of whichever was added last) — this
+    // fallback only kicks in when RUST_LOG is unset/invalid, so RUST_LOG=debug
+    // actually takes effect.
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env().add_directive("info".parse()?))
+        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
     let args = Args::parse();
 
@@ -58,6 +63,13 @@ fn main() -> anyhow::Result<()> {
     let window = Arc::new(WindowBuilder::new().with_title("Bacak Remote").build(&event_loop)?);
     let mut renderer = pollster::block_on(Renderer::new(window.clone()))?;
     let mut window_size = window.inner_size();
+    // Relative deltas computed from consecutive `CursorMoved` positions,
+    // not `DeviceEvent::MouseMotion` — winit's Wayland backend never emits
+    // `MouseMotion` (it reports raw per-axis `DeviceEvent::Motion` events
+    // instead, which `CursorMoved` already reflects), so relying on it left
+    // pointer motion silently dead under bacak-compositor. `CursorMoved`
+    // fires on every backend (X11 included), so this one path covers both.
+    let mut last_cursor_pos: Option<(f64, f64)> = None;
 
     event_loop.run(move |event, elwt| match event {
         Event::WindowEvent { event, window_id } if window_id == window.id() => {
@@ -68,6 +80,17 @@ fn main() -> anyhow::Result<()> {
                 window_size = size;
                 renderer.resize(size.width, size.height);
             }
+            WindowEvent::CursorMoved { position, .. } => {
+                let (x, y) = (position.x, position.y);
+                if let Some((last_x, last_y)) = last_cursor_pos {
+                    let (dx, dy) = (x - last_x, y - last_y);
+                    if dx != 0.0 || dy != 0.0 {
+                        network::send_input(&input_socket, &input_cipher, bacak_remote_proto::InputEvent::PointerMotion { dx: dx as f32, dy: dy as f32 });
+                    }
+                }
+                last_cursor_pos = Some((x, y));
+            }
+            WindowEvent::CursorLeft { .. } => last_cursor_pos = None, // avoid a jump-delta on re-entry
             WindowEvent::MouseInput { state, button, .. } => {
                 if let Some(ev) = input_capture::mouse_button_event(button, state) {
                     network::send_input(&input_socket, &input_cipher, ev);
@@ -82,12 +105,6 @@ fn main() -> anyhow::Result<()> {
             }
             _ => {}
         }},
-        Event::DeviceEvent { event: DeviceEvent::MouseMotion { delta: (dx, dy) }, .. } => {
-            network::send_input(&input_socket, &input_cipher, bacak_remote_proto::InputEvent::PointerMotion { dx: dx as f32, dy: dy as f32 });
-        }
-        Event::DeviceEvent { event, .. } => {
-            tracing::debug!("device event: {event:?}");
-        }
         Event::AboutToWait => {
             let mut latest = None;
             while let Ok(frame) = frame_rx.try_recv() {

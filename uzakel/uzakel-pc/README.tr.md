@@ -14,22 +14,24 @@ duyarlı her şey için UDP, arabelleğe almak yerine "en taze kazanır") ama
 bağımsız tel protokolleri ve kod tabanlarıdır — bir PC masaüstü akışı,
 trackpad delta'larından çok farklı bir yüktür.
 
-> **v1 durumu: iki ayrı makinede, gerçek LAN/Wi-Fi üzerinde uçtan uca
-> doğrulandı.** `bacak-remote-server` (Windows 10, ayrı fiziksel donanım
-> üzerinde gerçek bir VM) ve `bacak-remote-client` (bu Linux makinesi)
-> gerçek bir ağ bağlantısı üzerinden (`192.168.1.x`, loopback değil)
-> birbirine karşı çalıştırıldı: gerçek `Hello`/`HelloAck` eşleşmesi, Windows
-> makinesinin gerçek masaüstünün (1400×1050) yakalanması, sürekli
-> sunucu-taraf CPU aktivitesiyle ve sıfır hatayla sürdürülen akış, ve —
-> temiz şekilde doğrulanması birkaç deneme alan kısım — ağ üzerinden
+> **v1 durumu: iki ayrı makinede, gerçek LAN/Wi-Fi üzerinde VE gerçek BacakOS
+> masaüstünde (yalnızca Xvfb'de değil) uçtan uca doğrulandı.**
+> `bacak-remote-server` (Windows 10, ayrı fiziksel donanım üzerinde gerçek
+> bir VM) ve `bacak-remote-client` (bu Linux makinesi) gerçek bir ağ
+> bağlantısı üzerinden (`192.168.1.x`, loopback değil) birbirine karşı
+> çalıştırıldı: gerçek eşleşme, Windows makinesinin gerçek masaüstünün
+> (1400×1050) yakalanması, sıfır hatayla sürdürülen akış, ve ağ üzerinden
 > gönderilen gerçek işaretçi/tık paketlerinin Windows makinesinde imleci
 > görsel olarak hareket ettirip tıklaması, o ekranı izleyen bir kişi
-> tarafından doğrulandı. Tam hikaye (bu test yönteminin ortaya çıkardığı
-> gerçek bir bug ve ilk girdi testlerinin neden yanıltıcı sonuç verdiği
-> dahil) için aşağıdaki "Gerçek iki-makine testinin bulduğu şeyler"
-> bölümüne bakın. Orijinal spesifikasyonda adı geçen birkaç parça (donanım
-> H.264/AV1 kodlama, QUIC/WebRTC, compositor'a sıfır-kopya `dmabuf`, gerçek
-> çoklu dokunma enjeksiyonu) hâlâ bilinçli
+> tarafından doğrulandı. Ayrıca client, bu makinedeki **gerçek**
+> `bacak-compositor` Wayland oturumunda (sanal ekran değil) çalıştırıldı —
+> gerçek GPU (`AMD Radeon Vega 6`, RADV), gerçek masaüstünde gerçek bir
+> pencere, ve gerçek donanım testinin ortaya çıkardığı üç gerçek bug'ı
+> düzelttikten sonra (bkz. aşağıdaki "Gerçek BacakOS masaüstü testinin
+> bulduğu şeyler") sıfır enjeksiyon hatasıyla yakalanıp iletilen 911 gerçek
+> yerel fare/touchpad olayı. Orijinal spesifikasyonda adı geçen birkaç parça
+> (donanım H.264/AV1 kodlama, QUIC/WebRTC, compositor'a sıfır-kopya
+> `dmabuf`, gerçek çoklu dokunma enjeksiyonu) hâlâ bilinçli
 > olarak **uygulanmadı** — bunlardan herhangi birini bitmiş saymadan önce
 > aşağıdaki "Dürüst kapsam" bölümüne bakın.
 
@@ -114,13 +116,37 @@ gerçek, ayrı donanımlı, gerçek ağ üzerinden bir test, loopback değil:
   verdiği ve bu sürecin ortaya çıkardığı gerçek bir bug için aşağıdaki
   "Gerçek iki-makine testinin bulduğu şeyler" bölümüne bakın.
 
-**Henüz test edilmeyenler:** macOS (bu geçişte bir Mac yoktu); istemcinin
-kendi `winit` olayı → UDP gönderim yolunun canlı yerel bir fare/dokunuşla
-test edilmesi (hem loopback hem iki-makine geçişinde hâlâ yalnızca doğrudan
-enjekte edilen tel paketleriyle test edildi); gerçek paket kaybı/jitter
-altındaki davranış; çok dakikalık sürekli çalışma; boş bir ekrandan çok
-daha büyük sıkışacak ve parçalama yolunu çok daha zorlayacak gerçek
-(Xvfb olmayan, boş olmayan) masaüstü içeriği.
+### Gerçek BacakOS masaüstü (Wayland, Xvfb değil), loopback
+
+`bacak-remote-server` ve `bacak-remote-client` ikisi de bu makinede, ama
+client **gerçek, üretim `bacak-compositor` oturumunda**
+(`WAYLAND_DISPLAY=wayland-bacak-0`) çalıştırıldı — sanal bir ekranda değil.
+Bu geçişin amacı özellikle client'ın gerçek yerel girdi yakalamasını
+egzersiz etmekti, çünkü önceki her geçiş girdi yolunu yalnızca doğrudan
+enjekte edilen tel paketleriyle test etmişti:
+
+- **Eşleşme + gerçek GPU render** — `PairRequest`/`PairResponse` gerçek
+  compositor'ın Wayland soketine karşı başarılı oldu; `wgpu` bir yazılım
+  rasterlayıcı yerine makinenin gerçek donanım adaptörünü buldu (`AMD
+  Radeon Vega 6 Graphics`, RADV/Vulkan), ve gerçek masaüstünde gerçek bir
+  pencere belirdi (`grim` ile alınan ekran görüntüleriyle doğrulandı).
+- **Uçtan uca gerçek yerel girdi** — aşağıdaki "Gerçek BacakOS masaüstü
+  testinin bulduğu şeyler" bölümündeki üç bug düzeltildikten sonra, gerçek
+  pencere üzerinde fareyi hareket ettirip tıklamak 911 gerçek
+  `PointerMotion`/`Touch*` paketi üretti, hepsi sunucuya ulaştı, doğru
+  şekilde çözüldü ve `enigo` üzerinden sıfır hatayla enjekte edildi. Bu,
+  başka hiçbir test geçişinin egzersiz etmediği tek yol — girdi yolunun
+  önceki her doğrulaması doğrudan girdi portuna gönderilen elle
+  hazırlanmış bir tel paketi kullanmıştı, client'ın kendi `winit` yakalama
+  kodunu hiç değil.
+
+**Henüz test edilmeyenler:** macOS (bu geçişte bir Mac yoktu); aynı
+PIN-eşleşmeli güvenlik akışının iki ayrı makine arasında gerçek bir Wi-Fi
+bağlantısı üzerinden (loopback'te ve yukarıdaki Windows geçişinde test
+edildi, ama ikisi birlikte tek bir çalıştırmada değil); gerçek paket
+kaybı/jitter altındaki davranış; çok dakikalık sürekli çalışma; boş bir
+ekrandan çok daha büyük sıkışacak ve parçalama yolunu çok daha zorlayacak
+gerçek (Xvfb olmayan, boş olmayan) masaüstü içeriği.
 
 ## Gerçek iki-makine testinin bulduğu şeyler
 
@@ -179,6 +205,63 @@ doğrulandı. Yukarıdaki izole `SendInput`/`enigo` tanılamalarıyla ve
 sunucunun hatasız alım loglarıyla birleştiğinde, tüm zincir — gerçek ağ →
 decode → `enigo` → gerçek Windows donanımında görsel imleç hareketi —
 artık yalnızca çıkarım değil, doğrulanmış durumda.
+
+## Gerçek BacakOS masaüstü testinin bulduğu şeyler
+
+`bacak-remote-client`'ı gerçek `bacak-compositor` Wayland oturumunda
+(`Xvfb`'de değil) çalıştırmak **üç** gerçek bug ortaya çıkardı —
+ilk şüpheli o olmasına rağmen hiçbiri `bacak-compositor`'ın kendisinde
+değildi. Bu sırayla bulunup düzeltildi:
+
+1. **Kendi loglama kurulumumuz `RUST_LOG=debug`'ı sessizce eziyordu.**
+   `main.rs`, filtresini `EnvFilter::from_default_env().add_directive("info")`
+   olarak kuruyordu — `EnvFilter`, eşit özgüllükteki iki direktif arasındaki
+   çekişmeyi (ikisi de burada kapsamsız/global) hangisi *en son* eklendiyse
+   onun lehine çözüyor, bu yüzden sabit kodlanmış `"info"`, her seferinde
+   `RUST_LOG=debug`'ı sessizce eziyordu. Bunu hata ayıklarken önceki her
+   "hiç olay yok" gözlemi aslında "hiç olay *görünmüyor*" demekti, "hiç
+   olay tetiklenmiyor" değil — gerçek, pahalı, kendi kendine verdiğimiz
+   yanlış bir sinyal. `RUST_LOG` yokken/geçersizken yalnızca "info"ya
+   düşecek şekilde düzeltildi
+   (`EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into())`),
+   böylece açık bir `RUST_LOG` artık tam olarak dikkate alınıyor.
+2. **`winit`'in Wayland arka ucu asla `DeviceEvent::MouseMotion`
+   üretmiyor.** Loglama gerçekten çalışınca, gerçek pencere üzerinde gerçek
+   fare hareketi `WindowEvent::CursorMoved` ve düşük seviyeli
+   `DeviceEvent::Motion { axis, value }` çiftleri olarak göründü — asla
+   `input_capture.rs`'nin göreli delta'lar için dayandığı
+   `DeviceEvent::MouseMotion { delta }` varyantı değil (o varyant X11'de
+   ham XInput2 üzerinden dolduruluyor, Wayland compositor'larının
+   `winit`'in mevcut arka ucu üzerinden karşılığı olmayan bir yol). Bu
+   yüzden işaretçi hareketi özellikle Wayland'da sessizce ölüydü, aynı
+   zamanda daha önceki `Xvfb`/X11 geçişlerinde sorunsuz çalışırken — tam
+   olarak yalnızca-aynı-makine bir test planının yakalayamayacağı türden
+   bir boşluk. Bunun yerine ardışık `WindowEvent::CursorMoved`
+   konumlarından göreli delta hesaplayarak düzeltildi, bu her arka uçta
+   tetikleniyor.
+3. **Sunucu, iki farklı UDP soketi arasında tam `SocketAddr`ları (IP VE
+   port) karşılaştırıyordu.** `PairedSession.addr`, video soketinin
+   `PairRequest` gönderen adresinden yakalanıyor; `run_input_listener` bu
+   yüzden her gerçek girdi paketini reddediyordu çünkü paket *farklı* bir
+   UDP soketinden farklı (ama meşru) bir geçici kaynak portuyla geliyordu,
+   bunu debug seviyesinde "farklı bir adresle eşleşmiş" olarak loglayıp —
+   bug #1 düzeltilene kadar görünmezdi, o da nihayet bunu ortaya
+   çıkarandı. Yalnızca IP'yi karşılaştırarak düzeltildi
+   (`sess.addr.ip() != from.ip()`), çünkü aynı client'tan iki soket meşru
+   şekilde port'ta farklılaşabilir.
+
+Üç düzeltmeden sonra: gerçek BacakOS masaüstünde gerçek bir fare/touchpad
+oturumu 911 gerçek girdi paketi üretti (`PointerMotion`,
+`Touch{Down,Motion,Up}` — bu dizüstünün touchpad'i `winit`'in dokunma
+yolunu sürüyor, yalnızca işaretçi yolunu değil), hepsi çözülüp `enigo`'ya
+sıfır enjeksiyon hatasıyla iletildi.
+
+Bu üç bug'ın hiçbiri daha önceki loopback/`Xvfb` testleriyle
+yakalanamazdı — her biri gerçek compositor'ı, gerçek GPU destekli bir
+Wayland penceresini, ya da gerçek bir ikinci UDP soketini gerektiriyordu.
+Bir dahaki sefere bir şeyin "hiç olay almadığını" görünce hatırlanmaya
+değer: platformdan şüphelenmeden önce kendi loglamanızın size yalan
+söyleyip söylemediğini kontrol edin.
 
 ---
 
