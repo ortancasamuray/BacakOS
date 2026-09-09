@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = [
+    "bacak-remote-proto",
+    "bacak-remote-server",
+    "bacak-remote-client",
+]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+license = "GPL-3.0-or-later"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
