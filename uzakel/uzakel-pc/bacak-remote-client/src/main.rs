@@ -23,6 +23,8 @@ use decode::DecodedFrame;
 struct Args {
     /// IP address of the bacak-remote-server host.
     server_ip: IpAddr,
+    /// Pairing PIN shown on the server's console when it started.
+    pin: u32,
     #[arg(long, default_value_t = DEFAULT_VIDEO_PORT)]
     video_port: u16,
     #[arg(long, default_value_t = DEFAULT_INPUT_PORT)]
@@ -40,9 +42,12 @@ fn main() -> anyhow::Result<()> {
     let (frame_tx, frame_rx) = mpsc::channel::<DecodedFrame>();
     let server_video_addr = SocketAddr::new(args.server_ip, args.video_port);
     let client_name = args.client_name.clone();
+    let input_cipher = network::new_shared_input_cipher();
+    let pairing_input_cipher = input_cipher.clone();
+    let pin = args.pin;
     std::thread::Builder::new().name("bacak-remote-net".into()).spawn(move || {
         let runtime = tokio::runtime::Runtime::new().expect("build tokio runtime");
-        if let Err(e) = runtime.block_on(network::run_video_receiver(server_video_addr, client_name, frame_tx)) {
+        if let Err(e) = runtime.block_on(network::run_video_receiver(server_video_addr, client_name, pin, frame_tx, pairing_input_cipher)) {
             tracing::error!("video receiver task ended: {e}");
         }
     })?;
@@ -65,20 +70,20 @@ fn main() -> anyhow::Result<()> {
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 if let Some(ev) = input_capture::mouse_button_event(button, state) {
-                    network::send_input(&input_socket, ev);
+                    network::send_input(&input_socket, &input_cipher, ev);
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
-                network::send_input(&input_socket, input_capture::scroll_event(delta));
+                network::send_input(&input_socket, &input_cipher, input_capture::scroll_event(delta));
             }
             WindowEvent::Touch(touch) => {
                 let ev = input_capture::touch_event(touch, window_size.width as f64, window_size.height as f64);
-                network::send_input(&input_socket, ev);
+                network::send_input(&input_socket, &input_cipher, ev);
             }
             _ => {}
         }},
         Event::DeviceEvent { event: DeviceEvent::MouseMotion { delta: (dx, dy) }, .. } => {
-            network::send_input(&input_socket, bacak_remote_proto::InputEvent::PointerMotion { dx: dx as f32, dy: dy as f32 });
+            network::send_input(&input_socket, &input_cipher, bacak_remote_proto::InputEvent::PointerMotion { dx: dx as f32, dy: dy as f32 });
         }
         Event::DeviceEvent { event, .. } => {
             tracing::debug!("device event: {event:?}");
