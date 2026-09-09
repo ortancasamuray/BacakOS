@@ -14,21 +14,22 @@ duyarlı her şey için UDP, arabelleğe almak yerine "en taze kazanır") ama
 bağımsız tel protokolleri ve kod tabanlarıdır — bir PC masaüstü akışı,
 trackpad delta'larından çok farklı bir yüktür.
 
-> **v1 durumu: iki ayrı fiziksel makinede, gerçek LAN/Wi-Fi üzerinde
-> doğrulandı.** `bacak-remote-server` (Windows 10, gerçek donanım) ve
-> `bacak-remote-client` (bu Linux makinesi) gerçek bir ağ bağlantısı
-> üzerinden (`192.168.1.x`, loopback değil) birbirine karşı çalıştırıldı:
-> gerçek `Hello`/`HelloAck` eşleşmesi, Windows makinesinin gerçek masaüstünün
-> (1400×1050) yakalanması, ve 5+ saniyelik gözlem boyunca sürekli sunucu-taraf
-> CPU aktivitesiyle ve sıfır hatayla sürdürülen akış. Girdi de sunucuya
-> sağlam şekilde ulaştığı doğrulandı — ağ üzerinden gönderilen her paket
-> alınıp decode edildi ve hatasız `enigo`'ya iletildi — ve `enigo` ile ham
-> Win32 `SendInput`'un imleç üzerindeki gerçek etkisi aynı makinede bağımsız
-> olarak doğrulandı (tam hikaye, bu sürecin ortaya çıkardığı gerçek bir bug
-> ve hâlâ açık olan bir ölçüm sınırlaması dahil, aşağıdaki "Gerçek iki-makine
-> testinin bulduğu şeyler" bölümünde). Orijinal spesifikasyonda adı geçen
-> birkaç parça (donanım H.264/AV1 kodlama, QUIC/WebRTC, compositor'a
-> sıfır-kopya `dmabuf`, gerçek çoklu dokunma enjeksiyonu) hâlâ bilinçli
+> **v1 durumu: iki ayrı makinede, gerçek LAN/Wi-Fi üzerinde uçtan uca
+> doğrulandı.** `bacak-remote-server` (Windows 10, ayrı fiziksel donanım
+> üzerinde gerçek bir VM) ve `bacak-remote-client` (bu Linux makinesi)
+> gerçek bir ağ bağlantısı üzerinden (`192.168.1.x`, loopback değil)
+> birbirine karşı çalıştırıldı: gerçek `Hello`/`HelloAck` eşleşmesi, Windows
+> makinesinin gerçek masaüstünün (1400×1050) yakalanması, sürekli
+> sunucu-taraf CPU aktivitesiyle ve sıfır hatayla sürdürülen akış, ve —
+> temiz şekilde doğrulanması birkaç deneme alan kısım — ağ üzerinden
+> gönderilen gerçek işaretçi/tık paketlerinin Windows makinesinde imleci
+> görsel olarak hareket ettirip tıklaması, o ekranı izleyen bir kişi
+> tarafından doğrulandı. Tam hikaye (bu test yönteminin ortaya çıkardığı
+> gerçek bir bug ve ilk girdi testlerinin neden yanıltıcı sonuç verdiği
+> dahil) için aşağıdaki "Gerçek iki-makine testinin bulduğu şeyler"
+> bölümüne bakın. Orijinal spesifikasyonda adı geçen birkaç parça (donanım
+> H.264/AV1 kodlama, QUIC/WebRTC, compositor'a sıfır-kopya `dmabuf`, gerçek
+> çoklu dokunma enjeksiyonu) hâlâ bilinçli
 > olarak **uygulanmadı** — bunlardan herhangi birini bitmiş saymadan önce
 > aşağıdaki "Dürüst kapsam" bölümüne bakın.
 
@@ -106,10 +107,12 @@ gerçek, ayrı donanımlı, gerçek ağ üzerinden bir test, loopback değil:
   sunucusunun girdi portuna ulaştı, doğru şekilde decode edildi ve
   `enigo`'ya **sıfır** enjeksiyon hatasıyla iletildi — tekrarlanan birkaç
   gönderimde de aynı sonuç.
-- **enigo/SendInput'un imleci gerçekten hareket ettirmesi — doğrulandı, ama
-  yalnızca izole tanılamalar üzerinden, canlı sunucu hattının kendisi
-  üzerinden değil.** Nedeni ve bu sürecin ortaya çıkardığı gerçek bir bug
-  için aşağıdaki "Gerçek iki-makine testinin bulduğu şeyler" bölümüne bakın.
+- **Canlı, görsel olarak doğrulanan enjeksiyon** — Linux makinesinden
+  gönderilen gerçek tel formatında bir fare süpürmesi + tık, Windows
+  makinesinin gerçek ekranında canlı izlendi: imleç görsel olarak hareket
+  edip tıkladı. İlk denemelerin bunu doğrularken neden yanıltıcı sonuç
+  verdiği ve bu sürecin ortaya çıkardığı gerçek bir bug için aşağıdaki
+  "Gerçek iki-makine testinin bulduğu şeyler" bölümüne bakın.
 
 **Henüz test edilmeyenler:** macOS (bu geçişte bir Mac yoktu); istemcinin
 kendi `winit` olayı → UDP gönderim yolunun canlı yerel bir fare/dokunuşla
@@ -117,16 +120,13 @@ test edilmesi (hem loopback hem iki-makine geçişinde hâlâ yalnızca doğruda
 enjekte edilen tel paketleriyle test edildi); gerçek paket kaybı/jitter
 altındaki davranış; çok dakikalık sürekli çalışma; boş bir ekrandan çok
 daha büyük sıkışacak ve parçalama yolunu çok daha zorlayacak gerçek
-(Xvfb olmayan, boş olmayan) masaüstü içeriği; üç farklı tanılama
-yaklaşımının da tam olarak çivileyemediği tek, belirsizliğe yer bırakmayan
-"imlecin canlı, kamerada, ölçüm boşluğu olmadan, gerçek sunucu üzerinden
-hareket ettiğini izle" gösterimi (aşağıya bakın).
+(Xvfb olmayan, boş olmayan) masaüstü içeriği.
 
 ## Gerçek iki-makine testinin bulduğu şeyler
 
-Gerçek donanım hemen gerçek bir bug ortaya çıkardı, ve hâlâ açık olan bir
-ölçüm baş ağrısı bıraktı — ikisi de `uzakel`'in kendi §6 tarzında burada
-kayıt altına alınmaya değer, üstünün örtülmesi yerine.
+Gerçek donanım hemen gerçek bir bug ortaya çıkardı, ve çözmesi birkaç
+deneme alan bir ölçüm baş ağrısı bıraktı — ikisi de `uzakel`'in kendi §6
+tarzında burada kayıt altına alınmaya değer, üstünün örtülmesi yerine.
 
 **Bulunan ve etrafından dolaşılan bug: SSH üzerinden başlatılan bir
 süreçten çağrıldığında `SendInput`, `tasklist`'in onu interaktif konsol
@@ -163,24 +163,22 @@ göreli bir hareketten sonra ekranın sağ-alt köşesinde kenetlenerek
 davranış. İkisi de aynı temiz, belirsizliğe yer bırakmayan sonuçla iki kez
 çalıştırıldı.
 
-**Hâlâ açık: temiz bir önce/sonra imleç-konumu okumasını izole bir test
-üzerinden değil, *gerçek* sunucu hattı (ağ → decode → `enigo`) üzerinden
-elde etmek.** "Operatör Linux tarafından bir paket gönderiyor" ile "Windows
-makinesindeki kişi bir imleç konumu okuyor"u sohbet-aracılı, iki-insanlı,
-iki-makineli bir kurulum üzerinden ilişkilendirmenin her denemesi,
-ölçülen delta'ların enjekte edilen değerlerle temiz şekilde eşleşmemesine
-yetecek kadar zamanlama gevşekliği (mesaj gidiş-dönüşü, bir komut yazma
-tepki süresi) ve tesadüfi gerçek fare/touchpad kayması getirdi — bir
-seferinde beklenenden çok daha az hareketle, bir seferinde gönderilen
-paketlerden üretilmesi imkansız, işareti ters dönmüş bir Y bileşeniyle
-sonuçlandı. İzole testler `enigo`'nun bu makinede fiziksel olarak
-çalıştığını zaten kanıtladığına ve sunucunun kendi logları her paketin
-decode edilip hatasız şekilde `enigo.move_mouse()`/`.button()`'a
-ulaştığını kanıtladığına göre, mantıksal sonuç canlı hattın gerçekten
-çalıştığıdır — ama bu spesifik "gerçekleştiğini izle, uçtan uca, belirsizlik
-olmadan" kanıtı hâlâ eksik. Patlamadan önce başlatılmış bir ekran kaydı, ya
-da aynı fiziksel konumda iki kişi, bunu temiz şekilde kapatırdı; konum
-okuma döngüsünde bir insan olan sohbet-aracılı iki-makine testi kapatmıyor.
+**Çözüldü: canlı sunucu hattı üzerinden, görsel olarak doğrulanan uçtan
+uca enjeksiyon.** "Operatör Linux tarafından bir paket gönderiyor" ile
+"Windows makinesindeki kişi bir imleç konumu okuyor"u sohbet-aracılı,
+iki-insanlı, iki-makineli bir kurulum üzerinden ilişkilendirmenin ilk
+denemeleri gürültülü, tutarsız delta'lar üretti — bunun sebebi Windows
+makinesinin bir VM olması ve host'un fare-entegrasyon katmanının, olağan
+sohbet gidiş-dönüş zamanlama gevşekliğinin üstüne, iki manuel konum
+okuması arasında guest imlecini kendiliğinden hafifçe kaydırmasıydı.
+Sayısal bir önce/sonra okumasından doğrudan "ekranı izle, görsel olarak
+onayla" kontrolüne geçmek (büyük, hızlı bir süpürme + tık, anında görülmesi
+kolay) temiz, belirsizliğe yer bırakmayan bir sonuç verdi: **imleç görsel
+olarak hareket edip tıkladı**, makinenin başındaki kişi tarafından
+doğrulandı. Yukarıdaki izole `SendInput`/`enigo` tanılamalarıyla ve
+sunucunun hatasız alım loglarıyla birleştiğinde, tüm zincir — gerçek ağ →
+decode → `enigo` → gerçek Windows donanımında görsel imleç hareketi —
+artık yalnızca çıkarım değil, doğrulanmış durumda.
 
 ---
 
@@ -314,10 +312,11 @@ bacak-remote-server/packaging/windows/build.sh
   istemcinin `Hello`'sunu hiçbir hata vermeden sessizce düşürür; bu da
   aksi halde çok kafa karıştırıcı bir ilk-çalıştırma hatası olurdu.
 
-**Güncelleme: bu artık gerçek bir Windows 10 Pro makinesinde çalıştırıldı**
-— kurulum paketi, güvenlik duvarı kuralı, DXGI yakalama (gerçek masaüstü
+**Güncelleme: bu artık gerçek bir Windows 10 makinesinde çalıştırıldı** —
+kurulum paketi, güvenlik duvarı kuralı, DXGI yakalama (gerçek masaüstü
 çözünürlüğü tespit edilip akıtıldı) ve `enigo`'nun `SendInput` enjeksiyonu
-(aynı makinede izole tanılamalarla doğrulandı) hepsi çalışıyor. Tam hikaye
+(gerçek imleci hareket ettirip tıklatarak, makinenin başındaki kişi
+tarafından canlı izlenerek) hepsi çalışıyor. Tam hikaye
 için (Windows'un kendisiyle ilgisi olmayan, yalnızca bu şekilde test
 etmeye kalkışınca ısıran bir SSH pencere-istasyonu kısıtlaması dahil)
 yukarıdaki "Gerçek iki-makine testinin bulduğu şeyler" bölümüne bakın.
