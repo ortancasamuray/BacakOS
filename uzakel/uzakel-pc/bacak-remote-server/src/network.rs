@@ -190,7 +190,12 @@ pub async fn run_input_listener(socket: UdpSocket, mut injector: Injector, sessi
             tracing::debug!("dropping input packet from {from}: no paired session yet");
             continue;
         };
-        if sess.addr != from {
+        // Only the IP has to match, not the port: the input packet arrives on
+        // a *different* UDP socket than the one `sess.addr` was captured
+        // from (the video socket's `PairRequest`), so the client's ephemeral
+        // source port here is legitimately different — comparing full
+        // `SocketAddr`s would reject every real input packet.
+        if sess.addr.ip() != from.ip() {
             tracing::debug!("dropping input packet from {from}: paired with a different address");
             continue;
         }
