@@ -102,6 +102,7 @@ pub async fn run_input_listener(socket: UdpSocket, mut injector: Injector) -> an
         let (len, from) = socket.recv_from(&mut buf).await?;
         match decode(&buf[..len]) {
             Ok(Message::Input(event)) => {
+                tracing::info!("received input from {from}: {event:?}");
                 if let Err(e) = injector.inject(event) {
                     tracing::warn!("input injection failed: {e}");
                 }

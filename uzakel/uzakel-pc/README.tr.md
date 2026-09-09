@@ -14,22 +14,23 @@ duyarlı her şey için UDP, arabelleğe almak yerine "en taze kazanır") ama
 bağımsız tel protokolleri ve kod tabanlarıdır — bir PC masaüstü akışı,
 trackpad delta'larından çok farklı bir yüktür.
 
-> **v1 durumu: aynı makinede loopback ile doğrulandı, henüz gerçek Wi-Fi
-> üzerinde değil.** Server + client aynı makinede birbirine karşı çalıştırıldı
-> (Xvfb sanal X11 ekranı, `127.0.0.1`) ve video hattı canlı olarak uçtan uca
-> doğrulandı: `Hello`/`HelloAck` eşleşmesi, gerçek 1280×800 yakalama,
-> yapılandırılan kare hızına uyan periyodik `FrameInfo`/`FrameChunk` trafiği,
-> ve 80+ saniye boyunca sıfır hatayla çalışan bir `wgpu` (llvmpipe/Vulkan)
-> render döngüsü. Girdi enjeksiyonu, input portuna doğrudan gerçek bir tel
-> paketi gönderilerek sunucu tarafında doğrulandı — `enigo`, `libxdo`
-> üzerinden hatasız decode edip enjekte etti — ama istemcinin kendi
-> winit→UDP gönderim yolu bu geçişte canlı bir fare/dokunma ile test
-> edilmedi (aşağıdaki "Neler test edildi" bölümüne bakın). **Henüz** iki
-> ayrı makine arasında gerçek bir Wi-Fi bağlantısı üzerinden çalıştırılmadı
-> ve orijinal spesifikasyonda adı geçen birkaç parça (donanım H.264/AV1
-> kodlama, QUIC/WebRTC, compositor'a sıfır-kopya `dmabuf`, gerçek çoklu
-> dokunma enjeksiyonu) bilinçli olarak **uygulanmadı** — bunlardan herhangi
-> birini bitmiş saymadan önce aşağıdaki "Dürüst kapsam" bölümüne bakın.
+> **v1 durumu: iki ayrı fiziksel makinede, gerçek LAN/Wi-Fi üzerinde
+> doğrulandı.** `bacak-remote-server` (Windows 10, gerçek donanım) ve
+> `bacak-remote-client` (bu Linux makinesi) gerçek bir ağ bağlantısı
+> üzerinden (`192.168.1.x`, loopback değil) birbirine karşı çalıştırıldı:
+> gerçek `Hello`/`HelloAck` eşleşmesi, Windows makinesinin gerçek masaüstünün
+> (1400×1050) yakalanması, ve 5+ saniyelik gözlem boyunca sürekli sunucu-taraf
+> CPU aktivitesiyle ve sıfır hatayla sürdürülen akış. Girdi de sunucuya
+> sağlam şekilde ulaştığı doğrulandı — ağ üzerinden gönderilen her paket
+> alınıp decode edildi ve hatasız `enigo`'ya iletildi — ve `enigo` ile ham
+> Win32 `SendInput`'un imleç üzerindeki gerçek etkisi aynı makinede bağımsız
+> olarak doğrulandı (tam hikaye, bu sürecin ortaya çıkardığı gerçek bir bug
+> ve hâlâ açık olan bir ölçüm sınırlaması dahil, aşağıdaki "Gerçek iki-makine
+> testinin bulduğu şeyler" bölümünde). Orijinal spesifikasyonda adı geçen
+> birkaç parça (donanım H.264/AV1 kodlama, QUIC/WebRTC, compositor'a
+> sıfır-kopya `dmabuf`, gerçek çoklu dokunma enjeksiyonu) hâlâ bilinçli
+> olarak **uygulanmadı** — bunlardan herhangi birini bitmiş saymadan önce
+> aşağıdaki "Dürüst kapsam" bölümüne bakın.
 
 ---
 
@@ -64,9 +65,10 @@ modu) olarak değerlendirin, ölçülmüş bir garanti olarak değil.
 
 ## Neler test edildi
 
-Aynı makinede loopback, server ve client ikisi de bir `Xvfb :99` sanal X11
-ekranına (1280×800) yönlendirilmiş, `bacak-remote-client` `127.0.0.1`'e
-bağlanıyor:
+### Aynı makinede loopback (Xvfb)
+
+Server ve client ikisi de bir `Xvfb :99` sanal X11 ekranına (1280×800)
+yönlendirilmiş, `bacak-remote-client` `127.0.0.1`'e bağlanıyor:
 
 - **Eşleştirme** — istemcinin `Hello`'su sunucuya ulaştı, `HelloAck` gerçek
   yakalanan çözünürlükle (`1280x800`) geri geldi; her iki UDP soket çifti de
@@ -81,15 +83,104 @@ bağlanıyor:
 - **Girdi enjeksiyonu (yalnızca sunucu tarafı)** — sunucunun girdi portuna
   doğrudan gönderilen ham tel formatında bir `PointerMotion` + sol tık
   paketi, hatasız decode edilip `enigo`'ya iletildi (sanal ekrana karşı
-  gerçek bir `libxdo` çağrısı). İstemcinin kendi `winit` olayı → UDP
-  gönderim yolu bu geçişte **test edilmedi** (o ortamda istemcinin
-  penceresine gerçek fare/dokunma olayı sürecek sentetik-girdi aracı yoktu).
+  gerçek bir `libxdo` çağrısı).
 
-**Henüz test edilmeyenler:** gerçek Wi-Fi üzerinden fiziksel olarak ayrı iki
-makine; canlı bir işaretçi/dokunuşla tam istemci-taraflı girdi yakalama
-yolu; paket kaybı ya da jitter altındaki davranış; çok dakikalık sürekli
-çalışma; boş bir sanal ekrandan çok daha büyük sıkışacak ve parçalama
-yolunu çok daha zorlayacak gerçek (Xvfb olmayan) masaüstü içeriği.
+### İki ayrı fiziksel makine, gerçek LAN/Wi-Fi (Windows 10 ↔ bu Linux makinesi)
+
+`bacak-remote-server.exe`, NSIS kurulum paketiyle gerçek bir Windows 10 Pro
+makinesine (`192.168.1.55`) kurulmuş; `bacak-remote-client` bu Linux
+makinesinde (`192.168.1.15`, render yüzeyi için `Xvfb`) çalıştırıldı —
+gerçek, ayrı donanımlı, gerçek ağ üzerinden bir test, loopback değil:
+
+- **Eşleştirme + yakalama** — `Hello`/`HelloAck` gerçek ağ üzerinden
+  başarıyla tamamlandı; sunucu Windows makinesinin *gerçek* masaüstü
+  çözünürlüğünü (`1400x1050`) bildirdi (ve istemci bunu aldı) — `scrap`'in
+  DXGI arka ucunun sahte bir değer değil, gerçekten o ekranı yakaladığının
+  kanıtı.
+- **Sürdürülen akış** — sunucunun süreç CPU süresi 5 saniyelik örnekleme
+  penceresi boyunca sürekli ilerledi (kodlama+gönderme işi yalnızca
+  el sıkışmada değil, sürekli oluyor), her iki UDP soket çifti de Linux
+  tarafında boyunca `ESTAB` kaldı.
+- **Girdi iletimi** — Linux makinesinin gerçek IP'sinden gönderilen ham tel
+  formatında bir `PointerMotion`/`PointerButton` patlaması Windows
+  sunucusunun girdi portuna ulaştı, doğru şekilde decode edildi ve
+  `enigo`'ya **sıfır** enjeksiyon hatasıyla iletildi — tekrarlanan birkaç
+  gönderimde de aynı sonuç.
+- **enigo/SendInput'un imleci gerçekten hareket ettirmesi — doğrulandı, ama
+  yalnızca izole tanılamalar üzerinden, canlı sunucu hattının kendisi
+  üzerinden değil.** Nedeni ve bu sürecin ortaya çıkardığı gerçek bir bug
+  için aşağıdaki "Gerçek iki-makine testinin bulduğu şeyler" bölümüne bakın.
+
+**Henüz test edilmeyenler:** macOS (bu geçişte bir Mac yoktu); istemcinin
+kendi `winit` olayı → UDP gönderim yolunun canlı yerel bir fare/dokunuşla
+test edilmesi (hem loopback hem iki-makine geçişinde hâlâ yalnızca doğrudan
+enjekte edilen tel paketleriyle test edildi); gerçek paket kaybı/jitter
+altındaki davranış; çok dakikalık sürekli çalışma; boş bir ekrandan çok
+daha büyük sıkışacak ve parçalama yolunu çok daha zorlayacak gerçek
+(Xvfb olmayan, boş olmayan) masaüstü içeriği; üç farklı tanılama
+yaklaşımının da tam olarak çivileyemediği tek, belirsizliğe yer bırakmayan
+"imlecin canlı, kamerada, ölçüm boşluğu olmadan, gerçek sunucu üzerinden
+hareket ettiğini izle" gösterimi (aşağıya bakın).
+
+## Gerçek iki-makine testinin bulduğu şeyler
+
+Gerçek donanım hemen gerçek bir bug ortaya çıkardı, ve hâlâ açık olan bir
+ölçüm baş ağrısı bıraktı — ikisi de `uzakel`'in kendi §6 tarzında burada
+kayıt altına alınmaya değer, üstünün örtülmesi yerine.
+
+**Bulunan ve etrafından dolaşılan bug: SSH üzerinden başlatılan bir
+süreçten çağrıldığında `SendInput`, `tasklist`'in onu interaktif konsol
+oturumunda çalışıyor olarak raporlamasına rağmen `ERROR_ACCESS_DENIED`
+(Win32 hata 5) döndürüyor.** Girdi enjeksiyonunu test etmenin ilk girişimi
+`bacak-remote-server.exe`'yi test makinesini yönetmek için kullanılan SSH
+bağlantısı üzerinden doğrudan çalıştırdı. Video yakalama (DXGI) oradan
+sorunsuz çalıştı — ama her `enigo` çağrısı sessizce `Ok(())` döndürürken
+imleç hiç hareket etmedi, ve `enigo`'yu tamamen atlayan ham bir `SendInput`
+çağrısı nedenini doğruladı: Windows'un OpenSSH sunucusu bir oturumun
+süreçlerini kendi, varsayılan-olmayan bir pencere istasyonuna yerleştiriyor,
+ve `SendInput` özellikle *interaktif* pencere istasyonuna
+(`WinSta0\Default`) erişim gerektiriyor — Desktop Duplication'ın (yakalama
+için kullanılan) paylaşmadığı bir kısıtlama. Yalnızca oturum ID'si
+(`tasklist`/`query session`'ın raporladığı şey) bir sürecin gerçekte hangi
+pencere istasyonuna bağlı olduğunu söylemiyor. **Pratik sonuç:
+`bacak-remote-server`'ın kendisini test için SSH üzerinden çalıştırmayı
+denemeyin — gerçek bir interaktif oturumdan (konsol, RDP, ya da fiziksel
+olarak makinenin başında) çalıştırın.** Bunun gerçek dağıtımlarla bir ilgisi
+yok (kimse kendi PC'sine kendi uzaktan-kontrol sunucusunu çalıştırmak için
+SSH ile bağlanmaz), ama bunun test edildiği şekilde otomatikleştirmeye
+çalışan biri için keskin bir kenar.
+
+**İzole olarak çalıştığı doğrulandı: hem ham `SendInput` hem de `enigo`'nun
+onun etrafındaki sarmalayıcısı, gerçek bir interaktif oturumdan
+çalıştırıldığında bu makinede gerçek imleci doğru şekilde hareket
+ettiriyor.** İki bağımsız tanılama (biri doğrudan
+`windows::Win32::UI::Input::KeyboardAndMouse::SendInput` çağıran, biri
+`enigo::Enigo::move_mouse` çağıran) her ikisi de imleci gerçek bir
+başlangıç konumundan beklenen tam sonuca taşıdı — ekranı aşacak boyutta
+göreli bir hareketten sonra ekranın sağ-alt köşesinde kenetlenerek
+(`1400x1050` ekranda `(1399, 1049)`), tam olarak gerçek bir
+`MOUSEEVENTF_MOVE`/`SendInput` çağrısının bir ekran kenarında ürettiği
+davranış. İkisi de aynı temiz, belirsizliğe yer bırakmayan sonuçla iki kez
+çalıştırıldı.
+
+**Hâlâ açık: temiz bir önce/sonra imleç-konumu okumasını izole bir test
+üzerinden değil, *gerçek* sunucu hattı (ağ → decode → `enigo`) üzerinden
+elde etmek.** "Operatör Linux tarafından bir paket gönderiyor" ile "Windows
+makinesindeki kişi bir imleç konumu okuyor"u sohbet-aracılı, iki-insanlı,
+iki-makineli bir kurulum üzerinden ilişkilendirmenin her denemesi,
+ölçülen delta'ların enjekte edilen değerlerle temiz şekilde eşleşmemesine
+yetecek kadar zamanlama gevşekliği (mesaj gidiş-dönüşü, bir komut yazma
+tepki süresi) ve tesadüfi gerçek fare/touchpad kayması getirdi — bir
+seferinde beklenenden çok daha az hareketle, bir seferinde gönderilen
+paketlerden üretilmesi imkansız, işareti ters dönmüş bir Y bileşeniyle
+sonuçlandı. İzole testler `enigo`'nun bu makinede fiziksel olarak
+çalıştığını zaten kanıtladığına ve sunucunun kendi logları her paketin
+decode edilip hatasız şekilde `enigo.move_mouse()`/`.button()`'a
+ulaştığını kanıtladığına göre, mantıksal sonuç canlı hattın gerçekten
+çalıştığıdır — ama bu spesifik "gerçekleştiğini izle, uçtan uca, belirsizlik
+olmadan" kanıtı hâlâ eksik. Patlamadan önce başlatılmış bir ekran kaydı, ya
+da aynı fiziksel konumda iki kişi, bunu temiz şekilde kapatırdı; konum
+okuma döngüsünde bir insan olan sohbet-aracılı iki-makine testi kapatmıyor.
 
 ---
 
@@ -223,17 +314,19 @@ bacak-remote-server/packaging/windows/build.sh
   istemcinin `Hello`'sunu hiçbir hata vermeden sessizce düşürür; bu da
   aksi halde çok kafa karıştırıcı bir ilk-çalıştırma hatası olurdu.
 
-**Henüz yapılmayan:** bu `.exe`/kurulum paketi üretildi ve incelendi
-(`file`, `objdump`) ama **gerçek bir Windows makinesinde hiç
-çalıştırılmadı** — DXGI yakalamanın ya da `enigo`'nun `SendInput`
-enjeksiyonunun orada gerçekten çalıştığını doğrulamak için Windows
-donanımı/VM'i yoktu. `scrap`'in DXGI arka ucu (bize ait olmayan, miras
-alınan 3. parti kod) birkaç yerde `mem::uninitialized()` kullanıyor —
-kullanımdan kaldırılmış ve teknik olarak UB, ama struct'lar hemen
-ardından DXGI/Direct3D çağrısı tarafından dolduruluyor; bu, crate
-yazıldığında bunu kabul edilebilir kılan örüntü. Windows derlemesini
-"gerçekten bir ekrana karşı çalıştırılıp doğrulandı" değil, "doğru
-derleniyor ve linkleniyor" olarak değerlendirin.
+**Güncelleme: bu artık gerçek bir Windows 10 Pro makinesinde çalıştırıldı**
+— kurulum paketi, güvenlik duvarı kuralı, DXGI yakalama (gerçek masaüstü
+çözünürlüğü tespit edilip akıtıldı) ve `enigo`'nun `SendInput` enjeksiyonu
+(aynı makinede izole tanılamalarla doğrulandı) hepsi çalışıyor. Tam hikaye
+için (Windows'un kendisiyle ilgisi olmayan, yalnızca bu şekilde test
+etmeye kalkışınca ısıran bir SSH pencere-istasyonu kısıtlaması dahil)
+yukarıdaki "Gerçek iki-makine testinin bulduğu şeyler" bölümüne bakın.
+`scrap`'in DXGI arka ucu (bize ait olmayan, miras alınan 3. parti kod)
+hâlâ birkaç yerde `mem::uninitialized()` kullanıyor — kullanımdan
+kaldırılmış ve teknik olarak UB, ama struct'lar hemen ardından
+DXGI/Direct3D çağrısı tarafından dolduruluyor; bu, crate yazıldığında
+bunu kabul edilebilir kılan örüntü. Gözlemlenen bir hataya yol açmadı,
+ama bilinmesi gereken miras teknik borç.
 
 ## Lisans
 

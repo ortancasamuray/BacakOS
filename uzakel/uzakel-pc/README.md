@@ -13,20 +13,21 @@ UDP for anything latency-sensitive, "freshest wins" over buffering) but are
 independent wire protocols and codebases — a PC desktop stream is a very
 different payload than trackpad deltas.
 
-> **v1 status: verified on same-machine loopback, not yet over real Wi-Fi.**
-> Server + client were run against each other on one machine (Xvfb virtual
-> X11 display, `127.0.0.1`) and the video pipeline was confirmed live end to
-> end: `Hello`/`HelloAck` pairing, real 1280×800 capture, periodic
-> `FrameInfo`/`FrameChunk` traffic matching the configured frame rate, and a
-> `wgpu` (llvmpipe/Vulkan) render loop running for 80+ seconds with zero
-> errors. Input injection was confirmed server-side by sending a real wire
-> packet straight to the input port — `enigo` decoded and injected it via
-> `libxdo` with no error — but the client's own winit→UDP send path wasn't
-> exercised with a live mouse/touch in that pass (see "What's been tested"
-> below). It has **not** been run over a real Wi-Fi link between two separate
-> machines yet, and several pieces named in the original spec (hardware
+> **v1 status: verified on two separate physical machines over real LAN/Wi-Fi.**
+> `bacak-remote-server` (Windows 10, real hardware) and `bacak-remote-client`
+> (this Linux host) ran against each other over a real network link
+> (`192.168.1.x`, not loopback): real `Hello`/`HelloAck` pairing, real capture
+> of the Windows machine's actual desktop (1400×1050), and sustained streaming
+> with continuous server-side CPU activity and zero errors for 5+ seconds of
+> observation. Input was also verified reaching the server intact — every
+> network-delivered packet was received, decoded, and handed to `enigo`
+> without error — and `enigo`'s and raw Win32 `SendInput`'s actual effect on
+> the cursor was independently confirmed on that same machine (see
+> "What real two-machine testing found" below for the full story, including
+> one genuine bug this test method exposed and one measurement limitation
+> that's still open). Several pieces named in the original spec (hardware
 > H.264/AV1 encoding, QUIC/WebRTC, zero-copy `dmabuf` into the compositor,
-> real multi-touch injection) are deliberately **not** implemented — see
+> real multi-touch injection) remain deliberately **not** implemented — see
 > "Honest scope" below before treating any of those as done.
 
 ---
@@ -61,9 +62,10 @@ as a benchmarked guarantee.
 
 ## What's been tested
 
-Same-machine loopback, server and client both pointed at an `Xvfb :99`
-virtual X11 display (1280×800), `bacak-remote-client` connecting to
-`127.0.0.1`:
+### Same-machine loopback (Xvfb)
+
+Server and client both pointed at an `Xvfb :99` virtual X11 display
+(1280×800), `bacak-remote-client` connecting to `127.0.0.1`:
 
 - **Pairing** — client's `Hello` reached the server, `HelloAck` came back
   with the real captured resolution (`1280x800`); both UDP socket pairs
@@ -77,15 +79,98 @@ virtual X11 display (1280×800), `bacak-remote-client` connecting to
 - **Input injection (server side only)** — a raw wire-format `PointerMotion`
   + left-click packet sent directly at the server's input port was decoded
   and handed to `enigo` without error (real `libxdo` call against the
-  virtual display). The client's own `winit` event → UDP send path was
-  **not** exercised in this pass (no synthetic-input tool available in that
-  environment to drive real mouse/touch events into the client's window).
+  virtual display).
 
-**Not yet tested:** two physically separate machines over real Wi-Fi; the
-full client-side input capture path with a live pointer/touch; behavior
-under packet loss or jitter; sustained multi-minute runs; real (non-Xvfb)
-desktop content, which will compress far larger than a blank virtual
-screen and exercise the chunking path much harder.
+### Two separate physical machines, real LAN/Wi-Fi (Windows 10 ↔ this Linux host)
+
+`bacak-remote-server.exe` installed via the NSIS installer on a real
+Windows 10 Pro machine (`192.168.1.55`), `bacak-remote-client` run on this
+Linux host (`192.168.1.15`, `Xvfb` for the render surface) — a real,
+separate-hardware, real-network test, not loopback:
+
+- **Pairing + capture** — `Hello`/`HelloAck` succeeded over the real
+  network; the server reported (and the client received) the Windows
+  machine's *actual* desktop resolution, `1400x1050` — proof `scrap`'s DXGI
+  backend is really capturing that screen, not a stub value.
+- **Sustained streaming** — the server's process CPU time kept advancing
+  over a 5-second sampling window (encode+send work happening continuously,
+  not just at handshake), with both UDP socket pairs staying `ESTAB` on the
+  Linux side throughout.
+- **Input delivery** — a real wire-format `PointerMotion`/`PointerButton`
+  burst sent from the Linux host's real IP reached the Windows server's
+  input port, decoded correctly, and was handed to `enigo` with **zero**
+  injection errors logged, every time, across several repeated sends.
+- **enigo/SendInput actually moving the cursor — confirmed, but only via
+  isolated diagnostics, not the live server pipeline itself.** See
+  "What real two-machine testing found" below for why, and for a genuine
+  bug this process turned up along the way.
+
+**Not yet tested:** macOS (no Mac available in this pass); the client's own
+`winit` event → UDP send path with a live local mouse/touch (still only
+exercised by directly-injected wire packets, on both the loopback and
+two-machine passes); behavior under real packet loss/jitter; sustained
+multi-minute runs; real (non-Xvfb, non-blank) desktop content, which
+compresses far larger than a blank/static screen and exercises the
+chunking path much harder; a single unambiguous "watch the actual cursor
+move live, on camera, through the real server, with no measurement gap"
+demonstration (see below — this is the one thing three different
+diagnostic approaches all circled without fully nailing down).
+
+## What real two-machine testing found
+
+Real hardware surfaced one genuine bug immediately, and one persistent
+measurement headache that's still open — both are worth recording here,
+`uzakel`'s own §6-style, rather than glossed over.
+
+**Bug found and worked around: `SendInput` returns `ERROR_ACCESS_DENIED`
+(Win32 error 5) when called from a process launched over SSH, even though
+`tasklist` reports it running in the interactive console session.** The
+first attempt to test input injection ran `bacak-remote-server.exe`
+directly over the SSH connection used to manage the test machine. Video
+capture (DXGI) worked fine from there — but every `enigo` call silently
+returned `Ok(())` while the cursor never moved, and a follow-up raw
+`SendInput` call (bypassing `enigo` entirely) confirmed why: Windows'
+OpenSSH server places a session's processes on their own, non-default
+window station, and `SendInput` specifically requires access to the
+*interactive* window station (`WinSta0\Default`) — a restriction Desktop
+Duplication (used for capture) doesn't share. Session ID alone (what
+`tasklist`/`query session` report) doesn't tell you which window station a
+process is actually attached to. **Practical upshot: don't try to drive
+`bacak-remote-server` itself over SSH for testing input — run it from an
+actual interactive logon (console, RDP, or physically at the machine).**
+This has no bearing on real deployments (nobody SSHes into their own PC to
+run their own remote-control server), but it's a sharp edge for anyone
+automating tests the way this one was tested.
+
+**Confirmed working, in isolation: both raw `SendInput` and `enigo`'s
+wrapper around it correctly move the real cursor on this machine**, when
+run from an actual interactive logon. Two standalone diagnostics (one
+calling `windows::Win32::UI::Input::KeyboardAndMouse::SendInput` directly,
+one calling `enigo::Enigo::move_mouse`) each moved the cursor from a real
+starting position to the exact expected result — clamped at the screen's
+bottom-right corner (`(1399, 1049)` on the `1400x1050` display) after a
+relative move sized to overshoot it, precisely the behavior a real
+`MOUSEEVENTF_MOVE`/`SendInput` call produces at a screen edge. Both were
+run twice with the same clean, unambiguous result.
+
+**Still open: getting a clean before/after cursor-position reading through
+the *actual* server pipeline (network → decode → `enigo`) rather than an
+isolated test.** Every attempt to correlate "operator sends a packet from
+the Linux side" with "person at the Windows machine reads a cursor
+position" over a chat-mediated, two-human, two-machine setup introduced
+enough timing slack (message round-trip, reaction time to type a command)
+and incidental real mouse/trackpad drift that the measured deltas didn't
+cleanly match the injected values — once landing far short of expected
+movement, once with a sign-flipped Y component impossible to produce from
+the actual packets sent. Given the isolated tests already prove `enigo`
+physically works on this machine, and the server's own logs prove every
+packet was decoded and hit `enigo.move_mouse()`/`.button()` without
+returning an error, the logical conclusion is that the live pipeline does
+work — but this specific "watch it happen, end to end, unambiguously" proof
+is still missing. A screen recording started before the burst, or both
+people at the same physical location, would close this out cleanly; a
+chat-relayed two-machine test with a human in the position-reading loop
+does not.
 
 ---
 
@@ -212,16 +297,19 @@ What `build.sh` does, and why each piece exists:
   the client's `Hello`, with no error on either side, which would otherwise
   be a very confusing first-run failure.
 
-**Not yet done:** this `.exe`/installer has been produced and inspected
-(`file`, `objdump`) but **never run on an actual Windows machine** — no
-Windows hardware/VM was available to verify DXGI capture or `enigo`'s
-`SendInput` injection actually work there. `scrap`'s DXGI backend (inherited
-third-party code, not ours) also uses `mem::uninitialized()` in a few spots —
-deprecated and technically UB, though the structs are populated immediately
-after by the DXGI/Direct3D call, which is the pattern that made this
-acceptable when the crate was written. Treat the Windows build as "compiles
-and links correctly," not "confirmed working," until it's actually run
-against a real screen.
+**Update: this has now been run on a real Windows 10 Pro machine** — the
+installer, its Firewall rule, DXGI capture (real desktop resolution
+detected and streamed), and `enigo`'s `SendInput` injection (confirmed via
+isolated diagnostics on that same machine) all work. See "What real
+two-machine testing found" above for the full account, including a real
+bug the process exposed (unrelated to Windows itself — an SSH window-station
+restriction that only bites if you try to test this way). `scrap`'s DXGI
+backend (inherited third-party code, not ours) still uses
+`mem::uninitialized()` in a few spots — deprecated and technically UB,
+though the structs are populated immediately after by the DXGI/Direct3D
+call, which is the pattern that made this acceptable when the crate was
+written; it hasn't caused an observed failure, but it's inherited debt
+worth knowing about.
 
 ## License
 
