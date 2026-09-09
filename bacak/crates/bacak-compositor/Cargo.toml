@@ -74,6 +74,16 @@ dirs    = { version = "5", optional = true }
 # gating as the other rasterisation deps above.
 qrcode  = { workspace = true, optional = true }
 
+# bacak-remote (uzakel/uzakel-pc) wire protocol + PIN/X25519/ChaCha20-Poly1305
+# pairing crypto, reused as-is for the "Uzak Masaüstü" panel's PC-streaming
+# session rather than re-implemented here. Cross-workspace path dependency —
+# see the panel module's doc comment for why this lives in a sibling project
+# instead of under bacak/. Same optional/runtime gating as the rasterisation
+# deps above: only needed when the real renderer exists to draw the stream.
+bacak-remote-proto = { path = "../../../uzakel/uzakel-pc/bacak-remote-proto", optional = true }
+tokio = { workspace = true, features = ["net"], optional = true }
+zstd = { version = "0.13", optional = true }
+
 # NOTE: the udev backend uses smithay's re-exported `rustix` (see
 # `smithay::reexports::rustix`). Pinning our own copy creates a parallel
 # rustix in the dep graph and the OFlags types stop matching across calls.
@@ -83,7 +93,7 @@ default = []
 # Enable the live Smithay-based runtime. Pulls in libwayland-server, libinput,
 # libudev, libdrm, libxkbcommon, libgbm, libegl, libseat — system dev headers
 # are required (installed via apt: libegl-dev libseat-dev libsystemd-dev …).
-runtime = ["dep:smithay", "dep:calloop", "dep:winit", "dep:fontdue", "dep:cosmic-text", "dep:zbus", "dep:image", "dep:resvg", "dep:freedesktop-icons", "dep:notify", "dep:libc", "dep:ttf-parser", "dep:dirs", "dep:qrcode"]
+runtime = ["dep:smithay", "dep:calloop", "dep:winit", "dep:fontdue", "dep:cosmic-text", "dep:zbus", "dep:image", "dep:resvg", "dep:freedesktop-icons", "dep:notify", "dep:libc", "dep:ttf-parser", "dep:dirs", "dep:qrcode", "dep:bacak-remote-proto", "dep:tokio", "dep:zstd"]
 # Native-session backend: libseat + libudev + libinput + DRM/KMS + GBM + EGL.
 # Pulls every dependency `runtime` does, plus the udev / DRM / session pieces
 # of Smithay. Requires the same headers as `runtime` AND the DRM/KMS stack:

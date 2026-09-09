@@ -72,6 +72,12 @@ pub mod foreign_toplevel;
 #[cfg(feature = "runtime")]
 pub mod render;
 
+/// "Uzak Masaüstü" panel — pairs with a `bacak-remote-server` PC and streams
+/// its screen inside the desktop. See the module doc for why it depends on
+/// the sibling `uzakel/uzakel-pc` workspace instead of a local reimplementation.
+#[cfg(feature = "runtime")]
+pub mod remote_desktop;
+
 /// Shell plugins (dock, keyboard, apps-menu, control-center, screenshot…) — the
 /// modular UX layer dispatched by the render/frame loops. See [`plugins`].
 #[cfg(feature = "runtime")]

@@ -1019,6 +1019,9 @@ pub struct BacakState {
     /// Uzakel pairing QR panel, if open (tapping the Control Center's
     /// "Uzakel'e Bağlan" tile) — see `plugins/uzakel.rs`.
     pub uzakel_panel: Option<crate::plugins::control_center::UzakelPanel>,
+    /// "Uzak Masaüstü" (Remote Desktop) panel, if open (tapping the Control
+    /// Center's tile) — see `remote_desktop.rs`.
+    pub remote_desktop_panel: Option<crate::remote_desktop::RemoteDesktopPanel>,
     /// Persistent `bluetoothctl` coprocess, started when the BT panel first opens
     /// and kept alive for the session (so pairings/agent prompts work).
     pub btctl: Option<crate::bluetooth::BtCtl>,
@@ -1544,6 +1547,7 @@ impl BacakState {
             audio_panel: None,
             mic_panel: None,
             uzakel_panel: None,
+            remote_desktop_panel: None,
             btctl: None,
             bt_last_pk: None,
             bt_paired: std::collections::HashSet::new(),
@@ -4174,7 +4178,9 @@ impl BacakState {
         self.wifi_panel = None;
         self.bt_panel = None;
         self.uzakel_panel = None;
+        self.remote_desktop_panel = None;
         self.uzakel_panel = None;
+        self.remote_desktop_panel = None;
         self.close_overview();
         let all = crate::icons::list_desktop_apps();
         if all.is_empty() {
@@ -4626,6 +4632,7 @@ impl BacakState {
         self.wifi_panel = None;
         self.bt_panel = None;
         self.uzakel_panel = None;
+        self.remote_desktop_panel = None;
         self.close_overview();
         let bounds = self
             .wm
@@ -4664,13 +4671,19 @@ impl BacakState {
         let aud_on = std::path::Path::new("/usr/share/bacak/plugins/audio.plugin").exists();
         let ds_on = std::path::Path::new("/usr/share/bacak/plugins/desktop-settings.plugin").exists();
         let uzakel_on = std::path::Path::new(crate::plugins::uzakel::MANIFEST).exists();
+        // Unconditional for now (no packaging manifest yet — this ships as
+        // part of bacak-compositor itself during development; gate it behind
+        // a `/usr/share/bacak/plugins/*.plugin` file like the other optional
+        // sections once it has its own package).
+        let remote_desktop_on = true;
 
         // Dynamic panel height: core rows + optional network + optional audio + optional DS + optional Uzakel.
         let net_h = if net_on { TR + GAP + EH + GAP } else { 0.0 };
         let aud_h = if aud_on { SL + GAP + AD + GAP + SL + GAP + AD + GAP } else { 0.0 };
         let ds_h = if ds_on { SH + GAP } else { 0.0 };
         let uzakel_h = if uzakel_on { SH + GAP } else { 0.0 };
-        let panel_h = PAD + CH + GAP + net_h + DK + GAP + SL + GAP + aud_h + ds_h + uzakel_h + SH + GAP + PR + PAD;
+        let remote_desktop_h = if remote_desktop_on { SH + GAP } else { 0.0 };
+        let panel_h = PAD + CH + GAP + net_h + DK + GAP + SL + GAP + aud_h + ds_h + uzakel_h + remote_desktop_h + SH + GAP + PR + PAD;
 
         let m = 14.0;
         let bx = (bounds.x + bounds.w - W - m).max(bounds.x + m);
@@ -4794,6 +4807,16 @@ impl BacakState {
                 action: CcAction::UzakelConnect,
                 kind: CcKind::Button { danger: false },
                 label: cc_rasterize(text, "📱  Uzakel'e Bağlan", 15.0, LABEL, iw),
+                sub: None,
+            });
+            y += SH + GAP;
+        }
+        if remote_desktop_on {
+            tiles.push(CcTile {
+                rect: Rect::new(cx, y, inner, SH),
+                action: CcAction::RemoteDesktopConnect,
+                kind: CcKind::Button { danger: false },
+                label: cc_rasterize(text, "🖥  Uzak Masaüstü", 15.0, LABEL, iw),
                 sub: None,
             });
             y += SH + GAP;
@@ -5677,6 +5700,7 @@ impl BacakState {
         self.apps_menu = None;
         self.wifi_panel = None;
         self.uzakel_panel = None;
+        self.remote_desktop_panel = None;
         if self.btctl.is_none() {
             self.btctl = crate::bluetooth::BtCtl::start();
         }
@@ -6116,6 +6140,7 @@ impl BacakState {
         self.bt_panel = None;
         self.control_center = None;
         self.uzakel_panel = None;
+        self.remote_desktop_panel = None;
 
         let bounds = self
             .wm
@@ -6234,6 +6259,7 @@ impl BacakState {
         self.bt_panel = None;
         self.control_center = None;
         self.uzakel_panel = None;
+        self.remote_desktop_panel = None;
         self.audio_panel = None;
 
         let bounds = self
@@ -7259,6 +7285,12 @@ impl BacakState {
                     self.open_uzakel_panel(out);
                 }
             }
+            CcAction::RemoteDesktopConnect => {
+                if let Some(out) = self.control_center.as_ref().map(|c| c.output) {
+                    self.control_center = None;
+                    self.open_remote_desktop_panel(out);
+                }
+            }
             CcAction::PowerOff => crate::controls::power_off(),
             CcAction::Reboot => crate::controls::reboot(),
             CcAction::Logout => crate::controls::logout(),
@@ -7535,6 +7567,7 @@ impl BacakState {
         self.wifi_panel = None;
         self.bt_panel = None;
         self.uzakel_panel = None;
+        self.remote_desktop_panel = None;
         // Every window across all workspaces — the Overview is a global
         // "all open apps" view, not just the current workspace. Ordered
         // most-recently-used so the last-used app leads (and is centred).
@@ -9569,6 +9602,7 @@ impl BacakState {
         self.wifi_panel = None;
         self.bt_panel = None;
         self.uzakel_panel = None;
+        self.remote_desktop_panel = None;
         self.close_overview();
 
         let bounds = self
