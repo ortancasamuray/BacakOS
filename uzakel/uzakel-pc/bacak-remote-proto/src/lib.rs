@@ -3,8 +3,19 @@
 //! One UDP socket per side carries every [`Message`] variant. Video frames are
 //! larger than a safe UDP payload, so they are split into [`FrameChunk`]s by
 //! the server and reassembled by the client (see `bacak-remote-client::network`).
+//!
+//! Pairing (`PairRequest`/`PairResponse`) is sent and read as plain
+//! [`Message`] variants; everything else — `FrameInfo`, `FrameChunk`,
+//! `Input`, `Heartbeat`, `Bye` — travels wrapped in `Message::Encrypted`
+//! once a session is established (see [`seal_message`]/[`open_message`]),
+//! the same "handshake in the clear, everything after it encrypted" shape
+//! `uzakel`'s daemon uses.
+
+pub mod crypto;
 
 use serde::{Deserialize, Serialize};
+
+use crypto::{Cipher, Opener, NONCE_LEN, PUBKEY_LEN, TAG_LEN};
 
 /// Rejects stray/foreign UDP traffic on the socket before it reaches decode.
 pub const MAGIC: u32 = 0xBACA_2026;
@@ -30,6 +41,10 @@ pub enum ProtoError {
     Truncated,
     #[error("serialize failed: {0}")]
     Serialize(#[from] postcard::Error),
+    #[error("message was not the expected variant")]
+    UnexpectedVariant,
+    #[error("decryption failed: bad key, forged/corrupted ciphertext, or replayed nonce")]
+    DecryptFailed,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,20 +109,62 @@ pub enum InputEvent {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Message {
-    /// Client -> server: request to start streaming.
-    Hello { client_name: String },
-    /// Server -> client: accepted, here is the source screen size.
-    HelloAck { screen_width: u32, screen_height: u32 },
+    /// Client -> server: starts pairing. `pin` is what the person at the
+    /// server typed in (shown there, e.g. on its console/tray icon);
+    /// `client_pubkey` is a fresh, single-use X25519 public key for this
+    /// attempt only.
+    PairRequest { client_name: String, pin: u32, client_pubkey: [u8; PUBKEY_LEN] },
+    /// Server -> client: `accepted` is false on a wrong PIN (no keys are
+    /// derived/stored in that case). On success, `confirm_tag` lets the
+    /// client verify it's really the server that knows the PIN — not a
+    /// man-in-the-middle who intercepted the exchange — before it trusts
+    /// `server_pubkey`/derives session keys from it (see `crypto` module doc).
+    PairResponse {
+        accepted: bool,
+        server_pubkey: [u8; PUBKEY_LEN],
+        confirm_tag: [u8; TAG_LEN],
+        screen_width: u32,
+        screen_height: u32,
+    },
+    /// Either direction, post-pairing: `ciphertext` decrypts (via the
+    /// session's [`Cipher`]/[`Opener`]) to a postcard-encoded inner
+    /// `Message` — `FrameInfo`, `FrameChunk`, `Input`, `Heartbeat`, or `Bye`.
+    Encrypted { nonce: [u8; NONCE_LEN], ciphertext: Vec<u8> },
     /// Server -> client: header for a frame, sent once before its chunks.
+    /// Always carried inside `Encrypted` once paired — never sent bare.
     FrameInfo(FrameInfo),
-    /// Server -> client: one piece of a frame's encoded payload.
+    /// Server -> client: one piece of a frame's encoded payload. Always
+    /// carried inside `Encrypted` once paired — never sent bare.
     FrameChunk(FrameChunk),
-    /// Client -> server: one input event to inject.
+    /// Client -> server: one input event to inject. Always carried inside
+    /// `Encrypted` once paired — never sent bare.
     Input(InputEvent),
-    /// Either direction: liveness + RTT probe.
+    /// Either direction: liveness + RTT probe. Always carried inside
+    /// `Encrypted` once paired — never sent bare.
     Heartbeat { timestamp_ms: u64 },
-    /// Either direction: clean session teardown.
+    /// Either direction: clean session teardown. Always carried inside
+    /// `Encrypted` once paired — never sent bare.
     Bye,
+}
+
+/// Encrypts `inner` (one of `FrameInfo`/`FrameChunk`/`Input`/`Heartbeat`/`Bye`)
+/// with the session's outbound [`Cipher`], wrapping the result as
+/// `Message::Encrypted` ready to pass to [`encode`].
+pub fn seal_message(inner: &Message, cipher: &mut Cipher) -> Result<Message, ProtoError> {
+    let plaintext = postcard::to_allocvec(inner)?;
+    let (nonce, ciphertext) = cipher.seal(&plaintext);
+    Ok(Message::Encrypted { nonce, ciphertext })
+}
+
+/// Inverse of [`seal_message`]: given an already-decoded `Message::Encrypted`,
+/// decrypts and deserializes the inner `Message` using the session's
+/// inbound [`Opener`]. Returns `None` on any failure (see [`Opener::open`]).
+pub fn open_message(msg: &Message, opener: &mut Opener) -> Result<Message, ProtoError> {
+    let Message::Encrypted { nonce, ciphertext } = msg else {
+        return Err(ProtoError::UnexpectedVariant);
+    };
+    let plaintext = opener.open(*nonce, ciphertext).ok_or(ProtoError::DecryptFailed)?;
+    Ok(postcard::from_bytes(&plaintext)?)
 }
 
 /// Encodes `msg` as `[MAGIC:4][VERSION:1][postcard bytes]`.
@@ -141,13 +198,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn roundtrip_hello() {
-        let msg = Message::Hello { client_name: "bacak-remote-client".into() };
+    fn roundtrip_pair_request() {
+        let msg = Message::PairRequest { client_name: "bacak-remote-client".into(), pin: 123456, client_pubkey: [1u8; PUBKEY_LEN] };
         let bytes = encode(&msg).unwrap();
         match decode(&bytes).unwrap() {
-            Message::Hello { client_name } => assert_eq!(client_name, "bacak-remote-client"),
+            Message::PairRequest { client_name, pin, .. } => {
+                assert_eq!(client_name, "bacak-remote-client");
+                assert_eq!(pin, 123456);
+            }
             other => panic!("unexpected: {other:?}"),
         }
+    }
+
+    #[test]
+    fn seal_and_open_message_roundtrip() {
+        let mut cipher = crypto::Cipher::new([5u8; 32]);
+        let mut opener = crypto::Opener::new([5u8; 32]);
+
+        let inner = Message::Input(InputEvent::TouchMotion { finger_id: 1, x: 0.5, y: 0.25 });
+        let sealed = seal_message(&inner, &mut cipher).unwrap();
+        assert!(matches!(sealed, Message::Encrypted { .. }));
+
+        let opened = open_message(&sealed, &mut opener).unwrap();
+        assert_eq!(format!("{opened:?}"), format!("{inner:?}"));
+    }
+
+    #[test]
+    fn open_message_rejects_wrong_key() {
+        let mut cipher = crypto::Cipher::new([5u8; 32]);
+        let mut wrong_opener = crypto::Opener::new([6u8; 32]);
+        let sealed = seal_message(&Message::Bye, &mut cipher).unwrap();
+        assert!(matches!(open_message(&sealed, &mut wrong_opener), Err(ProtoError::DecryptFailed)));
     }
 
     #[test]
