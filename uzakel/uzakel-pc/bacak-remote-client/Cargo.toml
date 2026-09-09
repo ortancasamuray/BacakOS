@@ -1,0 +1,23 @@
+[package]
+name = "bacak-remote-client"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "bacak-remote-client"
+path = "src/main.rs"
+
+[dependencies]
+bacak-remote-proto = { path = "../bacak-remote-proto" }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "time", "sync"] }
+zstd = "0.13"
+wgpu = "0.19"
+winit = "0.29"
+pollster = "0.3"
+bytemuck = { version = "1", features = ["derive"] }
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive"] }
