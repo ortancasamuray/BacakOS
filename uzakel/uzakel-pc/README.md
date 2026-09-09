@@ -201,8 +201,9 @@ One `Message` enum (`bacak-remote-proto`), postcard-encoded behind a fixed
 `[MAGIC:4][VERSION:1]` header so a stray or version-skewed packet is rejected
 before deserializing:
 
-- `Hello` / `HelloAck` — client announces itself on the video port, server
-  replies with the real screen size and remembers the client's address.
+- `PairRequest` / `PairResponse` — the only messages ever sent in the clear;
+  everything else travels wrapped in `Encrypted` once paired (see "Security
+  & pairing" below).
 - `FrameInfo` — one per frame, precedes its chunks; carries width/height/
   codec/chunk count.
 - `FrameChunk` — up to `MAX_CHUNK_BYTES` (1200 B) of the compressed frame
@@ -217,6 +218,41 @@ Video traffic and input traffic use **separate UDP sockets/ports**
 (`DEFAULT_VIDEO_PORT` 9910, `DEFAULT_INPUT_PORT` 9911) so a burst of frame
 chunks can never queue behind — or delay — an input packet, matching the
 per-purpose channel split `uzakel`'s Android bridge already uses.
+
+## Security & pairing
+
+Pairing reuses `uzakel`'s exact scheme (`uzakel/daemon/src/crypto.rs`,
+verified on real hardware there) rather than inventing a new one: a 6-digit
+PIN, shown on the server's console at startup, combined with an ephemeral
+**X25519 ECDH** key exchange. The PIN alone never touches the wire and is
+never used as an encryption key — it only authenticates the key exchange
+(via an HMAC-SHA256 `confirm_tag` the client checks before trusting the
+server's public key), so a passive eavesdropper watching the exchange learns
+nothing usable, and a man-in-the-middle without the PIN can't quietly
+substitute their own keys. See `bacak-remote-proto/src/crypto.rs`'s module
+doc for the exact derivation and honest caveats (it is not a full PAKE — an
+attacker who already knows the PIN can still complete a valid-looking
+handshake, same limitation `uzakel` documents for its own scheme).
+
+One detail specific to this project (not present in `uzakel`, which only
+has one encrypted channel): video and input travel on **separate UDP
+sockets**, so each gets its **own independently-derived key pair** via
+`SessionMaterial::channel_keys("video" | "input")` — reusing one key across
+two independently-counted nonce sequences would have been a real
+(key, nonce) reuse bug. `bacak_remote_proto::crypto`'s module doc spells
+this out; it's the one place this scheme had to extend `uzakel`'s original
+rather than copy it verbatim.
+
+Tested (loopback, Xvfb): correct-PIN pairing succeeds and streams normally;
+wrong-PIN pairing is cleanly rejected on both sides (server logs and refuses
+to derive/store keys; client gets a clear "server rejected pairing" error
+rather than hanging or retrying forever).
+
+**Not yet done:** a real PAKE (SPAKE2/OPAQUE) for PIN-guess resistance
+against an attacker who intercepts the exchange; PIN rotation after a
+successful pairing (`uzakel`'s daemon does this, this project's server
+doesn't yet — same PIN is valid for the whole process lifetime); a UI for
+entering the PIN (v1 is a CLI positional argument — see "Build & run").
 
 ## Build & run
 
@@ -236,9 +272,10 @@ cargo build --release --workspace
 
 # On the PC to be streamed (Windows/Linux/macOS):
 ./target/release/bacak-remote-server --fps 60
+#   Pairing PIN: 123456   <- shown once at startup; type this into the client
 
 # On the Bacak OS machine (or any test machine on the same LAN for now):
-./target/release/bacak-remote-client <server-lan-ip>
+./target/release/bacak-remote-client <server-lan-ip> <pairing-pin>
 ```
 
 ```sh

@@ -214,8 +214,9 @@ Tek bir `Message` enum'u (`bacak-remote-proto`), sabit bir
 başıboş ya da sürüm uyuşmazlığı olan bir paket, deserialize edilmeden önce
 reddedilir:
 
-- `Hello` / `HelloAck` — istemci video portunda kendini duyurur, sunucu
-  gerçek ekran boyutuyla yanıt verir ve istemcinin adresini hatırlar.
+- `PairRequest` / `PairResponse` — açık metinde gönderilen tek mesajlar;
+  eşleştikten sonra geri kalan her şey `Encrypted` içine sarılarak gider
+  (aşağıdaki "Güvenlik ve eşleşme" bölümüne bakın).
 - `FrameInfo` — kare başına bir tane, parçalarından önce gelir; genişlik/
   yükseklik/kodek/parça sayısını taşır.
 - `FrameChunk` — sıkıştırılmış kare yükünün en fazla `MAX_CHUNK_BYTES`
@@ -232,6 +233,45 @@ Video trafiği ve girdi trafiği **ayrı UDP soketleri/portları** kullanır
 parçası patlaması hiçbir zaman bir girdi paketinin arkasında kuyruğa
 giremez ya da onu geciktiremez; bu, `uzakel`'in Android köprüsünün zaten
 kullandığı amaca-özel kanal ayrımıyla örtüşür.
+
+## Güvenlik ve eşleşme
+
+Eşleşme, yeni bir şema icat etmek yerine `uzakel`'in tam olarak aynı
+şemasını yeniden kullanıyor (`uzakel/daemon/src/crypto.rs`, orada gerçek
+donanımda doğrulanmış): sunucunun başlangıçta konsoluna yazdığı 6 haneli
+bir PIN, geçici bir **X25519 ECDH** anahtar değişimiyle birleştirilmiş. PIN
+tek başına hiçbir zaman telin üzerinden geçmiyor ve asla bir şifreleme
+anahtarı olarak kullanılmıyor — yalnızca anahtar değişimini doğrulamak için
+kullanılıyor (istemcinin sunucunun genel anahtarına güvenmeden önce
+kontrol ettiği bir HMAC-SHA256 `confirm_tag` üzerinden), böylece değişimi
+izleyen pasif bir dinleyici kullanılabilir hiçbir şey öğrenmiyor, ve PIN'i
+bilmeyen bir ortadaki-adam kendi anahtarlarını sessizce ikame edemiyor.
+Tam türetme ve dürüst uyarılar için `bacak-remote-proto/src/crypto.rs`'in
+modül belgesine bakın (bu tam bir PAKE değil — PIN'i zaten bilen bir
+saldırgan hâlâ geçerli görünen bir el sıkışma tamamlayabilir, `uzakel`'in
+kendi şeması için belgelediği aynı sınırlama).
+
+Bu projeye özgü bir detay (`uzakel`'de yok, çünkü onun tek bir şifreli
+kanalı var): video ve girdi **ayrı UDP soketlerinde** gidiyor, bu yüzden
+her biri `SessionMaterial::channel_keys("video" | "input")` üzerinden
+**kendi bağımsız türetilmiş anahtar çiftini** alıyor — bir anahtarı iki
+bağımsız sayılan nonce dizisinde yeniden kullanmak gerçek bir (anahtar,
+nonce) tekrar kullanımı hatası olurdu. `bacak_remote_proto::crypto`'nun
+modül belgesi bunu ayrıntılı anlatıyor; bu, şemanın `uzakel`'in
+orijinalini birebir kopyalamak yerine genişletmesi gereken tek yer.
+
+Test edildi (loopback, Xvfb): doğru PIN ile eşleşme başarılı oluyor ve
+normal akıyor; yanlış PIN ile eşleşme her iki tarafta da temiz şekilde
+reddediliyor (sunucu loglayıp anahtar türetmeyi/saklamayı reddediyor;
+istemci sonsuza kadar askıda kalmak ya da yeniden denemek yerine net bir
+"sunucu eşleşmeyi reddetti" hatası alıyor).
+
+**Henüz yapılmayan:** değişimi yakalayan bir saldırgana karşı PIN-tahmin
+direnci için gerçek bir PAKE (SPAKE2/OPAQUE); başarılı bir eşleşmeden
+sonra PIN rotasyonu (`uzakel`'in daemon'u bunu yapıyor, bu projenin
+sunucusu henüz yapmıyor — aynı PIN süreç ömrü boyunca geçerli); PIN
+girmek için bir arayüz (v1 bir CLI konumsal argümanı — bkz. "Derleme &
+çalıştırma").
 
 ## Derleme & çalıştırma
 
@@ -252,9 +292,10 @@ cargo build --release --workspace
 
 # Akıtılacak PC üzerinde (Windows/Linux/macOS):
 ./target/release/bacak-remote-server --fps 60
+#   Pairing PIN: 123456   <- başlangıçta bir kez gösterilir; istemciye bunu girin
 
 # Bacak OS makinesinde (ya da şimdilik aynı LAN'daki herhangi bir test makinesinde):
-./target/release/bacak-remote-client <sunucu-lan-ip>
+./target/release/bacak-remote-client <sunucu-lan-ip> <eşleşme-pin>
 ```
 
 ```sh
