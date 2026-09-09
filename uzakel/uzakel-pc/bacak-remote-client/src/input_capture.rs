@@ -1,11 +1,14 @@
 //! Translates local `winit` input into wire [`InputEvent`]s.
 //!
-//! Pointer motion uses `DeviceEvent::MouseMotion` (raw, unaccelerated deltas)
-//! rather than `WindowEvent::CursorMoved`, since the latter reports absolute,
-//! OS-accelerated position — relative deltas are what the host's own
-//! `enigo::Coordinate::Rel` injection expects, matching how
-//! `uzakel/android`'s `TrackpadView` already sends deltas rather than
-//! absolute cursor positions.
+//! Pointer motion is sent as relative deltas (matching what the host's
+//! `enigo::Coordinate::Rel` injection expects, and how `uzakel/android`'s
+//! `TrackpadView` already does it) computed in `main.rs` from consecutive
+//! `WindowEvent::CursorMoved` positions — **not** `DeviceEvent::MouseMotion`,
+//! which winit's Wayland backend never emits (it reports raw per-axis
+//! `DeviceEvent::Motion` events instead); relying on `MouseMotion` alone
+//! left pointer motion silently dead under `bacak-compositor` until this was
+//! found via real-hardware testing (see the workspace README's real-machine
+//! testing notes).
 //!
 //! Touch coordinates are normalized against the *window's* current size, on
 //! the assumption the render surface shows the full remote screen at

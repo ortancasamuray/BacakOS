@@ -36,8 +36,13 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // `.add_directive("info")` after `from_default_env()` would silently
+    // override RUST_LOG's level (EnvFilter breaks ties between two equally
+    // unscoped directives in favor of whichever was added last) — this
+    // fallback only kicks in when RUST_LOG is unset/invalid, so RUST_LOG=debug
+    // actually takes effect.
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env().add_directive("info".parse()?))
+        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
 
     let args = Args::parse();
