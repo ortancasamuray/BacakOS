@@ -44,6 +44,7 @@ pub mod keyboard;
 pub mod network;
 pub mod onboarding;
 pub mod overview;
+pub mod remote_desktop;
 pub mod screenshot;
 pub mod selection;
 pub mod uzakel;
@@ -157,6 +158,7 @@ pub static PLUGINS: &[&dyn Plugin] = &[
     &audio::AudioPlugin,
     &desktop_settings::DesktopSettingsPlugin,
     &uzakel::UzakelPlugin,
+    &remote_desktop::RemoteDesktopPlugin,
     &keyboard::KeyboardPlugin,
     &dock::DockPlugin,
     &gestures::GesturePlugin,

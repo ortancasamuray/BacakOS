@@ -1608,7 +1608,7 @@ pub(crate) fn render_apps_menu(
 /// Push a rounded card (shader path) or a flat rect (fallback) — the
 /// shared primitive behind every Control-Center tile and the panel.
 #[allow(clippy::too_many_arguments)]
-fn cc_card(
+pub(crate) fn cc_card(
     out: &mut Vec<BacakElements>,
     renderer: &mut GlesRenderer,
     rect: Rect,
