@@ -93,9 +93,12 @@ screen and exercise the chunking path much harder.
 
 ```
 uzakel-pc/
+├── .cargo/config.toml      # Windows cross-compile linker + crt-static settings
+├── vendor/scrap-0.5.0/     # locally patched `scrap` (see "Windows: prebuilt .exe" below)
 ├── bacak-remote-proto/     # shared wire protocol (postcard-serialized)
 │   └── src/lib.rs          # Message, InputEvent, FrameInfo/FrameChunk, encode()/decode()
 ├── bacak-remote-server/    # PC-side daemon: capture, encode, stream, inject
+│   ├── packaging/windows/  # build.sh + installer.nsi -> bacak-remote-server-setup.exe
 │   └── src/
 │       ├── capture.rs      # scrap-based screen grabber, own OS thread
 │       ├── encode.rs       # zstd compress + chunk split
@@ -165,6 +168,60 @@ cargo clippy --workspace --all-targets
 Local loopback test (both binaries on the same machine, `127.0.0.1`) is the
 fastest way to confirm the pipeline before trying it across two machines on
 Wi-Fi.
+
+## Windows: prebuilt `.exe` + installer
+
+`bacak-remote-server` cross-compiles cleanly from Linux to a real, standalone
+Windows `.exe` — no Windows machine or Visual Studio needed to *build* it
+(running it is of course still a Windows-only step). `bacak-remote-client`
+is not built for Windows: it's the Bacak OS-side receiver, meaningless on
+the platform being streamed *from*.
+
+```sh
+rustup target add x86_64-pc-windows-gnu
+sudo apt-get install mingw-w64 nsis   # gcc-mingw-w64 linker + NSIS installer builder
+
+bacak-remote-server/packaging/windows/build.sh
+# -> bacak-remote-server/packaging/windows/bacak-remote-server-setup.exe
+```
+
+What `build.sh` does, and why each piece exists:
+
+- **`.cargo/config.toml`** points the `x86_64-pc-windows-gnu` target at
+  `x86_64-w64-mingw32-gcc-posix` specifically (not whatever
+  `x86_64-w64-mingw32-gcc` defaults to via `update-alternatives` — the
+  `win32` threading variant is missing pieces Rust's std needs) and sets
+  `-C target-feature=+crt-static`, so the shipped `.exe` depends on nothing
+  but stock Windows DLLs (`kernel32`, `user32`, `ws2_32`, `d3d11`, `dxgi`,
+  `msvcrt`) — confirmed via `objdump -p`, no `libwinpthread-1.dll`/
+  `libgcc_s_seh-1.dll`/`libstdc++-6.dll` to bundle or ask the user to install.
+- **`vendor/scrap-0.5.0/`** is a locally patched copy of the `scrap` crate.
+  Upstream's `build.rs` picks its capture backend with `cfg!(windows)` —
+  which reflects the *host* a build script runs on, not the `--target`
+  being cross-compiled for, so building from Linux always selected the X11
+  backend and failed to link against Windows' DXGI. The vendored copy
+  reads Cargo's `TARGET` env var instead (one-line fix; see the file's own
+  comment). Pinned via `[patch.crates-io]` in the workspace `Cargo.toml`,
+  so the native Linux build is unaffected — verified with
+  `cargo check --workspace` after applying the patch.
+- **`installer.nsi`** (built with `makensis`, from the `nsis` Debian
+  package — works fine cross-platform, no Windows needed here either)
+  installs to `Program Files`, adds Start Menu shortcuts, registers an
+  uninstaller, and opens the inbound Windows Firewall UDP rule for ports
+  9910–9911 — without that rule, Windows Defender Firewall silently drops
+  the client's `Hello`, with no error on either side, which would otherwise
+  be a very confusing first-run failure.
+
+**Not yet done:** this `.exe`/installer has been produced and inspected
+(`file`, `objdump`) but **never run on an actual Windows machine** — no
+Windows hardware/VM was available to verify DXGI capture or `enigo`'s
+`SendInput` injection actually work there. `scrap`'s DXGI backend (inherited
+third-party code, not ours) also uses `mem::uninitialized()` in a few spots —
+deprecated and technically UB, though the structs are populated immediately
+after by the DXGI/Direct3D call, which is the pattern that made this
+acceptable when the crate was written. Treat the Windows build as "compiles
+and links correctly," not "confirmed working," until it's actually run
+against a real screen.
 
 ## License
 

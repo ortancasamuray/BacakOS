@@ -97,9 +97,12 @@ yolunu çok daha zorlayacak gerçek (Xvfb olmayan) masaüstü içeriği.
 
 ```
 uzakel-pc/
+├── .cargo/config.toml      # Windows cross-compile linker + crt-static ayarları
+├── vendor/scrap-0.5.0/     # yerelde yamalanmış `scrap` (aşağıdaki "Windows: hazır .exe" bölümüne bakın)
 ├── bacak-remote-proto/     # paylaşılan tel protokolü (postcard ile serileştirilmiş)
 │   └── src/lib.rs          # Message, InputEvent, FrameInfo/FrameChunk, encode()/decode()
 ├── bacak-remote-server/    # PC tarafı daemon: yakalama, kodlama, akış, enjeksiyon
+│   ├── packaging/windows/  # build.sh + installer.nsi -> bacak-remote-server-setup.exe
 │   └── src/
 │       ├── capture.rs      # scrap tabanlı ekran yakalayıcı, kendi OS thread'inde
 │       ├── encode.rs       # zstd sıkıştırma + parça bölme
@@ -173,6 +176,64 @@ cargo clippy --workspace --all-targets
 Yerel loopback testi (her iki binary de aynı makinede, `127.0.0.1`), hattı
 iki makine arasında Wi-Fi üzerinden denemeden önce doğrulamanın en hızlı
 yoludur.
+
+## Windows: hazır `.exe` + kurulum paketi
+
+`bacak-remote-server`, Linux'tan gerçek, bağımsız bir Windows `.exe`'sine
+temiz şekilde cross-compile ediliyor — *derlemek* için Windows makinesi ya
+da Visual Studio gerekmiyor (elbette *çalıştırmak* hâlâ Windows'a özgü bir
+adım). `bacak-remote-client` Windows için derlenmiyor: o, Bacak OS
+tarafındaki alıcı, akışın *kaynağı* olan platformda bir anlamı yok.
+
+```sh
+rustup target add x86_64-pc-windows-gnu
+sudo apt-get install mingw-w64 nsis   # gcc-mingw-w64 linker + NSIS kurulum paketleyici
+
+bacak-remote-server/packaging/windows/build.sh
+# -> bacak-remote-server/packaging/windows/bacak-remote-server-setup.exe
+```
+
+`build.sh`'nin yaptıkları ve her birinin neden var olduğu:
+
+- **`.cargo/config.toml`**, `x86_64-pc-windows-gnu` hedefini özellikle
+  `x86_64-w64-mingw32-gcc-posix`'e yönlendiriyor (`update-alternatives`
+  üzerinden `x86_64-w64-mingw32-gcc`'nin varsayılan olarak seçtiği şeye
+  değil — `win32` thread modeli varyantında Rust'ın std'sinin ihtiyaç
+  duyduğu bazı parçalar eksik) ve `-C target-feature=+crt-static`
+  ayarlıyor; böylece gönderilen `.exe` yalnızca standart Windows
+  DLL'lerine bağımlı (`kernel32`, `user32`, `ws2_32`, `d3d11`, `dxgi`,
+  `msvcrt`) — `objdump -p` ile doğrulandı, paketlenecek ya da kullanıcıdan
+  kurmasını isteyeceğimiz bir `libwinpthread-1.dll`/`libgcc_s_seh-1.dll`/
+  `libstdc++-6.dll` yok.
+- **`vendor/scrap-0.5.0/`**, `scrap` crate'inin yerelde yamalanmış bir
+  kopyası. Upstream'in `build.rs`'i yakalama arka ucunu `cfg!(windows)` ile
+  seçiyor — bu, cross-compile edilen `--target`'ı değil, bir build
+  script'inin çalıştığı *host*'u yansıtıyor; bu yüzden Linux'tan derlemek
+  her zaman X11 arka ucunu seçip Windows'un DXGI'sine karşı linklemeyi
+  başaramıyordu. Yamalanmış kopya bunun yerine Cargo'nun `TARGET` ortam
+  değişkenini okuyor (tek satırlık bir düzeltme; dosyanın kendi yorumuna
+  bakın). Workspace `Cargo.toml`'undaki `[patch.crates-io]` ile sabitlendi,
+  böylece yerel Linux derlemesi etkilenmiyor — yama uygulandıktan sonra
+  `cargo check --workspace` ile doğrulandı.
+- **`installer.nsi`** (`makensis` ile derlendi, Debian'ın `nsis` paketinden
+  — burada da cross-platform çalışıyor, Windows gerekmiyor) `Program
+  Files`'a kuruyor, Başlat Menüsü kısayolları ekliyor, bir kaldırıcı
+  kaydediyor ve 9910–9911 portları için gelen Windows Güvenlik Duvarı UDP
+  kuralını açıyor — bu kural olmadan Windows Defender Güvenlik Duvarı,
+  istemcinin `Hello`'sunu hiçbir hata vermeden sessizce düşürür; bu da
+  aksi halde çok kafa karıştırıcı bir ilk-çalıştırma hatası olurdu.
+
+**Henüz yapılmayan:** bu `.exe`/kurulum paketi üretildi ve incelendi
+(`file`, `objdump`) ama **gerçek bir Windows makinesinde hiç
+çalıştırılmadı** — DXGI yakalamanın ya da `enigo`'nun `SendInput`
+enjeksiyonunun orada gerçekten çalıştığını doğrulamak için Windows
+donanımı/VM'i yoktu. `scrap`'in DXGI arka ucu (bize ait olmayan, miras
+alınan 3. parti kod) birkaç yerde `mem::uninitialized()` kullanıyor —
+kullanımdan kaldırılmış ve teknik olarak UB, ama struct'lar hemen
+ardından DXGI/Direct3D çağrısı tarafından dolduruluyor; bu, crate
+yazıldığında bunu kabul edilebilir kılan örüntü. Windows derlemesini
+"gerçekten bir ekrana karşı çalıştırılıp doğrulandı" değil, "doğru
+derleniyor ve linkleniyor" olarak değerlendirin.
 
 ## Lisans
 
