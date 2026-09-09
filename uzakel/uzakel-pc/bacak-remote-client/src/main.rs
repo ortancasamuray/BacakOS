@@ -55,7 +55,9 @@ fn main() -> anyhow::Result<()> {
     let mut window_size = window.inner_size();
 
     event_loop.run(move |event, elwt| match event {
-        Event::WindowEvent { event, window_id } if window_id == window.id() => match event {
+        Event::WindowEvent { event, window_id } if window_id == window.id() => {
+            tracing::debug!("window event: {event:?}");
+            match event {
             WindowEvent::CloseRequested => elwt.exit(),
             WindowEvent::Resized(size) => {
                 window_size = size;
@@ -74,9 +76,12 @@ fn main() -> anyhow::Result<()> {
                 network::send_input(&input_socket, ev);
             }
             _ => {}
-        },
+        }},
         Event::DeviceEvent { event: DeviceEvent::MouseMotion { delta: (dx, dy) }, .. } => {
             network::send_input(&input_socket, bacak_remote_proto::InputEvent::PointerMotion { dx: dx as f32, dy: dy as f32 });
+        }
+        Event::DeviceEvent { event, .. } => {
+            tracing::debug!("device event: {event:?}");
         }
         Event::AboutToWait => {
             let mut latest = None;
