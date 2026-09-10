@@ -305,14 +305,22 @@ impl BacakState {
     pub fn open_remote_desktop_panel(&mut self, out: OutputId) {
         self.control_center = None;
 
+        // Full-bleed: the remote screen is the content people actually want
+        // to look at, so it covers the *entire* output — no margin — with
+        // the close button and status line floating as a small overlay on
+        // top of it (see `render_remote_desktop_panel`) rather than reserving
+        // dedicated space that would shrink the video.
         let bounds = self.wm.output(out).map(|o| o.bounds).unwrap_or(Rect::new(0.0, 0.0, 1920.0, 1080.0));
-        let m = 40.0;
-        let video_rect = Rect::new(bounds.x + m, bounds.y + m, (bounds.w - 2.0 * m).max(1.0), (bounds.h - 2.0 * m - 56.0).max(1.0));
-        let close_rect = Rect::new(bounds.x + bounds.w - m - 120.0, bounds.y + bounds.h - m - 40.0, 120.0, 40.0);
+        let video_rect = bounds;
+        let m = 16.0;
+        // Bottom-right, alongside the status line (bottom-left) — a single
+        // overlay strip along the bottom edge rather than splitting the
+        // controls between the top and bottom of the screen.
+        let close_rect = Rect::new(bounds.x + bounds.w - m - 100.0, bounds.y + bounds.h - m - 36.0, 100.0, 36.0);
 
         let text = self.text.as_ref();
         const LABEL: [u8; 3] = [232, 236, 244];
-        let close_label = rasterize(text, "Kapat", 15.0, LABEL, 120);
+        let close_label = rasterize(text, "Kapat", 14.0, LABEL, 100);
 
         let outcome = read_pair_config().and_then(|cfg| RemoteDesktopSession::start(cfg).map_err(|e| e.to_string()));
         let (session, status_text) = match outcome {
@@ -457,6 +465,40 @@ pub(crate) fn render_remote_desktop_panel(
         Point::<f64, Physical>::from((((x - off_x as f32) * scale) as f64, ((y - off_y as f32) * scale) as f64))
     };
 
+    // Push order matters: this element list is top-first (earliest push =
+    // frontmost), so the overlays (status, close button) must be pushed
+    // *before* the video frame to end up drawn on top of it — pushing them
+    // after, like an earlier version of this function did, buried them
+    // completely under the full-screen video (the same class of bug
+    // `uzakel`'s QR panel hit for the same reason — see that project's
+    // ARCHITECTURE.md §6).
+
+    // Status text floats over the video's bottom-left corner rather than
+    // reserving a strip below it — `video_rect` is the full output now, so
+    // there is no "below" on-screen to put it in. A small backing card
+    // keeps it legible over arbitrary (possibly light) remote content.
+    if let Some((buf, sw, sh)) = &p.status_label {
+        let m = 16.0;
+        let card = Rect::new(p.video_rect.x + m - 8.0, p.video_rect.y + p.video_rect.h - m - *sh as f32 - 8.0, *sw as f32 + 16.0, *sh as f32 + 16.0);
+        let phys = to_phys(card.x + 8.0, card.y + 8.0);
+        if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(renderer, phys, buf, Some(1.0), None, None, Kind::Unspecified) {
+            out.push(crate::render::BacakElements::Memory(el));
+        }
+        crate::render::cc_card(out, renderer, card, smithay::backend::renderer::Color32F::new(0.03, 0.05, 0.08, 0.85), 10.0, output_scale, off_x, off_y);
+    }
+
+    // Close button: a small pill in the top-right corner, also floating
+    // over the video.
+    let cx = p.close_rect.x + (p.close_rect.w - p.close_label.as_ref().map(|(_, w, _)| *w as f32).unwrap_or(0.0)) / 2.0;
+    let cy = p.close_rect.y + (p.close_rect.h - p.close_label.as_ref().map(|(_, _, h)| *h as f32).unwrap_or(0.0)) / 2.0;
+    if let Some((buf, _, _)) = &p.close_label {
+        let phys = to_phys(cx, cy);
+        if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(renderer, phys, buf, Some(1.0), None, None, Kind::Unspecified) {
+            out.push(crate::render::BacakElements::Memory(el));
+        }
+    }
+    crate::render::cc_card(out, renderer, p.close_rect, smithay::backend::renderer::Color32F::new(0.03, 0.05, 0.08, 0.85), 10.0, output_scale, off_x, off_y);
+
     if let Some((buf, w, h)) = &p.frame {
         let phys = to_phys(p.video_rect.x, p.video_rect.y);
         // Scale the source frame to fill `video_rect` exactly, regardless of
@@ -467,35 +509,12 @@ pub(crate) fn render_remote_desktop_panel(
         if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(renderer, phys, buf, Some(1.0), None, Some(dst), Kind::Unspecified) {
             out.push(crate::render::BacakElements::Memory(el));
         }
-    } else {
-        // Nothing decoded yet (still pairing, or the connection failed) —
-        // the status label below is the only content.
     }
 
-    let status_x = p.video_rect.x + (p.video_rect.w - p.status_label.as_ref().map(|(_, w, _)| *w as f32).unwrap_or(0.0)) / 2.0;
-    let status_y = p.video_rect.y + p.video_rect.h + 10.0;
-    if let Some((buf, _, _)) = &p.status_label {
-        let phys = to_phys(status_x, status_y);
-        if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(renderer, phys, buf, Some(1.0), None, None, Kind::Unspecified) {
-            out.push(crate::render::BacakElements::Memory(el));
-        }
-    }
-
-    let cx = p.close_rect.x + (p.close_rect.w - p.close_label.as_ref().map(|(_, w, _)| *w as f32).unwrap_or(0.0)) / 2.0;
-    let cy = p.close_rect.y + (p.close_rect.h - p.close_label.as_ref().map(|(_, _, h)| *h as f32).unwrap_or(0.0)) / 2.0;
-    if let Some((buf, _, _)) = &p.close_label {
-        let phys = to_phys(cx, cy);
-        if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(renderer, phys, buf, Some(1.0), None, None, Kind::Unspecified) {
-            out.push(crate::render::BacakElements::Memory(el));
-        }
-    }
-    crate::render::cc_card(out, renderer, p.close_rect, smithay::backend::renderer::Color32F::new(1.0, 1.0, 1.0, 0.12), 12.0, output_scale, off_x, off_y);
-
-    // Backdrop behind everything — pushed last (this element list is
-    // top-first: earliest push = frontmost), so it never covers the video
-    // frame, status text, or close button pushed above. Doubles as visible
-    // content while `p.frame` is still `None` (pairing in progress, or a
-    // failed connection), so the panel never looks like nothing happened.
-    let backdrop = Rect::new(p.video_rect.x - 12.0, p.video_rect.y - 12.0, p.video_rect.w + 24.0, p.video_rect.h + 24.0 + 56.0);
-    crate::render::cc_card(out, renderer, backdrop, smithay::backend::renderer::Color32F::new(0.03, 0.05, 0.08, 0.97), 18.0, output_scale, off_x, off_y);
+    // Backdrop, full-bleed — pushed last (this element list is top-first:
+    // earliest push = frontmost), so it only ever shows through where the
+    // video/labels above don't cover. It's the only visible content while
+    // `p.frame` is still `None` (pairing in progress, or a failed
+    // connection), so the panel never looks like nothing happened.
+    crate::render::cc_card(out, renderer, p.video_rect, smithay::backend::renderer::Color32F::new(0.03, 0.05, 0.08, 0.97), 0.0, output_scale, off_x, off_y);
 }
