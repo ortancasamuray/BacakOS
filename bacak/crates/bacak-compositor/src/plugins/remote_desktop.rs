@@ -38,6 +38,28 @@ impl Plugin for RemoteDesktopPlugin {
         ctx.state().remote_desktop_pointer_release(gx as f32, gy as f32)
     }
 
+    fn on_touch_press(&self, ctx: &mut PluginCtx, tx: f32, ty: f32, slot: i32) -> bool {
+        ctx.state().remote_desktop_touch_press(tx, ty, slot)
+    }
+
+    fn on_touch_motion(&self, ctx: &mut PluginCtx, tx: f32, ty: f32, slot: i32) -> bool {
+        let st = ctx.state();
+        if st.remote_desktop_touch_slot() == Some(slot) {
+            st.remote_desktop_touch_motion(tx, ty)
+        } else {
+            false
+        }
+    }
+
+    fn on_touch_up(&self, ctx: &mut PluginCtx, slot: i32) -> bool {
+        let st = ctx.state();
+        if st.remote_desktop_touch_slot() == Some(slot) {
+            st.remote_desktop_touch_up()
+        } else {
+            false
+        }
+    }
+
     fn tick(&self, state: &mut BacakState, _now: std::time::Instant) -> bool {
         state.remote_desktop_tick()
     }
