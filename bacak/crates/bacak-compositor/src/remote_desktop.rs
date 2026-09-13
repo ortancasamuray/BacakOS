@@ -407,6 +407,11 @@ impl BacakState {
         let Some(panel) = self.remote_desktop_panel.as_mut() else { return false };
         let mut dirty = false;
         if let Some((w, h, bgra)) = panel.session.poll() {
+            // Tried reusing the same `MemoryRenderBuffer` + `RenderContext::draw`
+            // here to avoid a fresh texture import every frame — measured
+            // *slower*/laggier on real hardware than just rebuilding it, so
+            // reverted. Left unexplained; a profiler pass would be needed
+            // before trying that again.
             let buf = MemoryRenderBuffer::from_slice(&bgra, Fourcc::Argb8888, (w as i32, h as i32), 1, Transform::Normal, None);
             panel.frame = Some((buf, w, h));
             dirty = true;
