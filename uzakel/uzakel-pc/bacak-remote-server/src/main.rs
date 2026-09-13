@@ -9,7 +9,6 @@ use bacak_remote_proto::{DEFAULT_INPUT_PORT, DEFAULT_VIDEO_PORT};
 use clap::Parser;
 use input_inject::Injector;
 use tokio::net::UdpSocket;
-use tokio::sync::mpsc;
 
 /// bacak-remote-server: streams this PC's screen to a Bacak OS client and
 /// injects the input events it sends back. The pairing PIN is generated on
@@ -30,8 +29,14 @@ pub(crate) struct Args {
     /// Capture rate; encode/network time permitting.
     #[arg(long, default_value_t = 60)]
     pub(crate) fps: u32,
-    /// zstd compression level: higher = smaller frames, more CPU per frame.
-    #[arg(long, default_value_t = 3)]
+    /// zstd compression level: higher = smaller frames (less bandwidth per
+    /// frame), more CPU per frame. Raised from zstd's own default (3) since
+    /// this pipeline has no real video codec/delta-encoding — every frame is
+    /// a full raw-BGRA zstd blob, so compression ratio is the only lever
+    /// available for keeping bandwidth within what the link can actually
+    /// drain (see `run_session`'s `watch`-channel doc comment for the other
+    /// half of that fix: not sending already-stale frames at all).
+    #[arg(long, default_value_t = 9)]
     pub(crate) zstd_level: i32,
     /// The PIN shown on the BacakOS screen, passed non-interactively instead
     /// of typing it into the pairing window/console prompt — for
@@ -137,7 +142,19 @@ pub(crate) async fn run_session(args: Args, pin: u32, status_tx: Option<StatusCh
     let (screen_width, screen_height) = (first_frame.width, first_frame.height);
     tracing::info!("capturing {screen_width}x{screen_height} at up to {} fps", args.fps);
 
-    let (encoded_tx, encoded_rx) = mpsc::channel(2);
+    // `watch`, not `mpsc`: an mpsc queue (even a small bounded one) still
+    // forces the network task to send *every* encoded frame's chunks in
+    // order, including ones that are already stale by the time their turn
+    // comes up if the link can't keep draining as fast as frames are
+    // produced — that backlog of "chunks still queued to go out" is exactly
+    // what made the video fall further and further behind the longer a
+    // session ran. `watch` only ever holds the *latest* encoded frame: if a
+    // newer one lands before the network task has picked up the last one,
+    // the superseded one is simply never sent — same "freshest wins" policy
+    // this codebase already uses for capture (`scrap`'s next-new-frame
+    // semantics) and decode (`FrameReassembler`/`RemoteDesktopSession::poll`
+    // on the BacakOS side), just extended to the one place it was missing.
+    let (encoded_tx, encoded_rx) = tokio::sync::watch::channel(None);
     let zstd_level = args.zstd_level;
     tokio::spawn(async move {
         let mut frame_id: u32 = 0;
@@ -155,8 +172,8 @@ pub(crate) async fn run_session(args: Args, pin: u32, status_tx: Option<StatusCh
             };
             match encode::encode_frame(&frame, frame_id, zstd_level) {
                 Ok(encoded) => {
-                    if encoded_tx.send(encoded).await.is_err() {
-                        return;
+                    if encoded_tx.send(Some(encoded)).is_err() {
+                        return; // network task's receiver dropped
                     }
                 }
                 Err(e) => tracing::warn!("encode failed for frame {frame_id}: {e}"),

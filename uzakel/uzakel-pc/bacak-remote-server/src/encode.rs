@@ -7,6 +7,7 @@ use bacak_remote_proto::{Codec, FrameChunk, FrameInfo, MAX_CHUNK_BYTES};
 
 use crate::capture::CapturedFrame;
 
+#[derive(Clone)]
 pub struct EncodedFrame {
     pub info: FrameInfo,
     pub chunks: Vec<FrameChunk>,
