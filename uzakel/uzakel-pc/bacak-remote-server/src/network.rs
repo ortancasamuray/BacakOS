@@ -15,7 +15,7 @@ use std::sync::Arc;
 use bacak_remote_proto::crypto::{Cipher, EphemeralKeypair, Opener};
 use bacak_remote_proto::{decode, encode, open_message, seal_message, Message};
 use tokio::net::UdpSocket;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::Mutex;
 
 use crate::encode::EncodedFrame;
 use crate::input_inject::Injector;
@@ -46,7 +46,7 @@ pub async fn run_video_link(
     pin: u32,
     screen_width: u32,
     screen_height: u32,
-    mut frame_rx: mpsc::Receiver<EncodedFrame>,
+    mut frame_rx: tokio::sync::watch::Receiver<Option<EncodedFrame>>,
     session: SharedSession,
     status_tx: Option<StatusChannel>,
 ) -> anyhow::Result<()> {
@@ -139,7 +139,14 @@ pub async fn run_video_link(
         }
     });
 
-    while let Some(encoded) = frame_rx.recv().await {
+    while frame_rx.changed().await.is_ok() {
+        // Clone out of the borrow (dropping it) before the `.await` below —
+        // a `watch::Ref` held across an await point would keep the sender
+        // waiting on us for the whole send, defeating the point of using
+        // `watch` here. `mark_unchanged()`-free: `changed()` already clears
+        // the changed flag on the value we're about to read via
+        // `borrow_and_update()`.
+        let Some(encoded) = frame_rx.borrow_and_update().clone() else { continue };
         let mut guard = session.lock().await;
         let Some(sess) = guard.as_mut() else { continue };
         send_frame(&socket, sess.addr, &encoded, &mut sess.video_cipher).await;
