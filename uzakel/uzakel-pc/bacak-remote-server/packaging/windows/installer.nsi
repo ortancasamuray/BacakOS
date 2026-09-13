@@ -27,6 +27,11 @@ Section "Install"
     CreateDirectory "$SMPROGRAMS\Bacak Remote"
     CreateShortcut "$SMPROGRAMS\Bacak Remote\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}"
     CreateShortcut "$SMPROGRAMS\Bacak Remote\Uninstall.lnk" "$INSTDIR\uninstall.exe"
+    ; Double-click-to-run from the desktop too, not just the Start Menu —
+    ; no arguments needed: the exe's own defaults (fps=15, zstd level=3) are
+    ; already the known-good settings from real-hardware testing, and it
+    ; opens straight into the graphical pairing window (see `gui.rs`).
+    CreateShortcut "$DESKTOP\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}"
 
     WriteRegStr HKLM "${UNINST_KEY}" "DisplayName" "${APP_NAME}"
     WriteRegStr HKLM "${UNINST_KEY}" "DisplayVersion" "${APP_VERSION}"
@@ -49,6 +54,7 @@ Section "Uninstall"
     Delete "$SMPROGRAMS\Bacak Remote\${APP_NAME}.lnk"
     Delete "$SMPROGRAMS\Bacak Remote\Uninstall.lnk"
     RMDir "$SMPROGRAMS\Bacak Remote"
+    Delete "$DESKTOP\${APP_NAME}.lnk"
     RMDir "$INSTDIR"
     DeleteRegKey HKLM "${UNINST_KEY}"
 SectionEnd

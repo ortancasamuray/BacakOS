@@ -26,17 +26,23 @@ pub(crate) struct Args {
     /// UDP port carrying inbound touch/pointer events.
     #[arg(long, default_value_t = DEFAULT_INPUT_PORT)]
     pub(crate) input_port: u16,
-    /// Capture rate; encode/network time permitting.
-    #[arg(long, default_value_t = 60)]
+    /// Capture rate; encode/network time permitting. Kept modest (not 30/60)
+    /// by default: this pipeline has no real video codec/delta-encoding —
+    /// every frame is a full raw-BGRA zstd blob — so a higher target here
+    /// asks for more encode CPU *and* more bandwidth per second than most
+    /// real links/CPUs sustain, which showed up on real hardware as bursty
+    /// "sometimes fast, sometimes stalls" video rather than a clean
+    /// lower-but-steady frame rate.
+    #[arg(long, default_value_t = 15)]
     pub(crate) fps: u32,
     /// zstd compression level: higher = smaller frames (less bandwidth per
-    /// frame), more CPU per frame. Raised from zstd's own default (3) since
-    /// this pipeline has no real video codec/delta-encoding — every frame is
-    /// a full raw-BGRA zstd blob, so compression ratio is the only lever
-    /// available for keeping bandwidth within what the link can actually
-    /// drain (see `run_session`'s `watch`-channel doc comment for the other
-    /// half of that fix: not sending already-stale frames at all).
-    #[arg(long, default_value_t = 9)]
+    /// frame), more CPU per frame. Left at zstd's own fast default — a
+    /// real-hardware test raising this to 9 (to trade CPU for bandwidth)
+    /// made the video *more* erratic, not less, on a CPU that couldn't
+    /// keep up with that level at any usable frame rate. Bandwidth is
+    /// better addressed via `fps`/resolution than via a heavier codec
+    /// level in this naive per-frame-blob pipeline.
+    #[arg(long, default_value_t = 3)]
     pub(crate) zstd_level: i32,
     /// The PIN shown on the BacakOS screen, passed non-interactively instead
     /// of typing it into the pairing window/console prompt — for
