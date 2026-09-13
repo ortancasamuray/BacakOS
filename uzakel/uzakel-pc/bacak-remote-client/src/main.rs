@@ -11,7 +11,7 @@ use clap::Parser;
 use render::Renderer;
 use winit::event::{Event, WindowEvent};
 use winit::event_loop::EventLoop;
-use winit::window::WindowBuilder;
+use winit::window::{Fullscreen, WindowBuilder};
 
 use bacak_remote_proto::{DEFAULT_INPUT_PORT, DEFAULT_VIDEO_PORT};
 use decode::DecodedFrame;
@@ -60,7 +60,19 @@ fn main() -> anyhow::Result<()> {
     let input_socket = network::connect_input_socket(args.server_ip, args.input_port)?;
 
     let event_loop = EventLoop::new()?;
-    let window = Arc::new(WindowBuilder::new().with_title("Bacak Remote").build(&event_loop)?);
+    // Borderless-fullscreen (not exclusive) so it always covers this
+    // machine's whole screen at *its* native resolution/refresh rate,
+    // whatever that is relative to the server's — `render.rs`'s
+    // fullscreen-triangle shader already stretches the decoded frame to
+    // fill the surface at any size, so making the window itself fullscreen
+    // is the only piece needed for the server's (possibly higher-res) feed
+    // to fully cover this (possibly lower-res) client's screen.
+    let window = Arc::new(
+        WindowBuilder::new()
+            .with_title("Bacak Remote")
+            .with_fullscreen(Some(Fullscreen::Borderless(None)))
+            .build(&event_loop)?,
+    );
     let mut renderer = pollster::block_on(Renderer::new(window.clone()))?;
     let mut window_size = window.inner_size();
     // Relative deltas computed from consecutive `CursorMoved` positions,
