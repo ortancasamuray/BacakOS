@@ -16,8 +16,17 @@ use enigo::{Axis, Button, Coordinate, Direction, Enigo, Mouse, Settings};
 
 pub struct Injector {
     enigo: Enigo,
-    screen_width: u32,
-    screen_height: u32,
+    /// The reference size `enigo::Mouse::move_mouse(.., Coordinate::Abs)`
+    /// scales against on this platform (Windows: `GetSystemMetrics(SM_CXSCREEN/
+    /// SM_CYSCREEN)`, via `enigo`'s own `main_display()`) — **not** the video
+    /// capture's reported resolution. On at least one real VM the two
+    /// disagreed (capture 1400x1050 vs `SM_CXSCREEN/CYSCREEN` 1024x768,
+    /// stale guest-display metrics after a resolution change), which made
+    /// every absolute move land off by the ratio between them — worse near
+    /// the edges. Normalizing against `main_display()` instead of
+    /// `screen_width`/`screen_height` keeps `move_absolute`'s output in the
+    /// same reference frame `move_mouse` itself will rescale it against.
+    abs_display: (i32, i32),
     /// The finger currently driving the pointer, so a second concurrent touch
     /// doesn't fight it for control (see the module-level limitation above).
     active_finger: Option<u32>,
@@ -26,7 +35,12 @@ pub struct Injector {
 impl Injector {
     pub fn new(screen_width: u32, screen_height: u32) -> anyhow::Result<Self> {
         let enigo = Enigo::new(&Settings::default()).map_err(|e| anyhow::anyhow!("enigo init failed: {e}"))?;
-        Ok(Self { enigo, screen_width, screen_height, active_finger: None })
+        // Prefer enigo's own idea of the screen (what it will actually scale
+        // absolute moves against); fall back to the capture size if that
+        // query fails, rather than erroring the whole session out over it.
+        let abs_display = enigo.main_display().unwrap_or((screen_width as i32, screen_height as i32));
+        tracing::info!("capture={screen_width}x{screen_height} enigo main_display={abs_display:?}");
+        Ok(Self { enigo, abs_display, active_finger: None })
     }
 
     pub fn inject(&mut self, event: InputEvent) -> anyhow::Result<()> {
@@ -51,6 +65,11 @@ impl Injector {
                     self.active_finger = Some(finger_id);
                     self.move_absolute(x, y)?;
                     self.enigo.button(Button::Left, Direction::Press)?;
+                } else {
+                    tracing::warn!(
+                        "TouchDown finger {finger_id} ignored — finger {:?} still active (its TouchUp may have been lost)",
+                        self.active_finger
+                    );
                 }
             }
             InputEvent::TouchMotion { finger_id, x, y } => {
@@ -69,8 +88,9 @@ impl Injector {
     }
 
     fn move_absolute(&mut self, norm_x: f32, norm_y: f32) -> anyhow::Result<()> {
-        let x = (norm_x.clamp(0.0, 1.0) * self.screen_width as f32) as i32;
-        let y = (norm_y.clamp(0.0, 1.0) * self.screen_height as f32) as i32;
+        let (w, h) = self.abs_display;
+        let x = (norm_x.clamp(0.0, 1.0) * w as f32) as i32;
+        let y = (norm_y.clamp(0.0, 1.0) * h as f32) as i32;
         self.enigo.move_mouse(x, y, Coordinate::Abs)?;
         Ok(())
     }

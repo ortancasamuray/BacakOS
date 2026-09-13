@@ -19,6 +19,7 @@ use tokio::sync::{mpsc, Mutex};
 
 use crate::encode::EncodedFrame;
 use crate::input_inject::Injector;
+use crate::{SessionStatus, StatusChannel};
 
 /// A completed pairing: independently-keyed encrypt/decrypt state for each
 /// channel, plus the address it belongs to (so a stale session for a
@@ -38,7 +39,8 @@ pub fn new_shared_session() -> SharedSession {
 
 /// Answers `PairRequest` (checking `pin`) with `PairResponse`, and forwards
 /// every `EncodedFrame` produced by the capture/encode pipeline to whichever
-/// client most recently paired successfully.
+/// client most recently paired successfully. `status_tx`, when given, is
+/// told about each pairing attempt's outcome — see [`SessionStatus`].
 pub async fn run_video_link(
     socket: UdpSocket,
     pin: u32,
@@ -46,6 +48,7 @@ pub async fn run_video_link(
     screen_height: u32,
     mut frame_rx: mpsc::Receiver<EncodedFrame>,
     session: SharedSession,
+    status_tx: Option<StatusChannel>,
 ) -> anyhow::Result<()> {
     let socket = Arc::new(socket);
     let recv_socket = socket.clone();
@@ -68,6 +71,9 @@ pub async fn run_video_link(
 
                     if given_pin != pin {
                         tracing::warn!("client '{client_name}' from {from} gave wrong PIN, rejecting");
+                        if let Some(tx) = &status_tx {
+                            let _ = tx.send(SessionStatus::Rejected { from: from.to_string() });
+                        }
                         let resp = Message::PairResponse {
                             accepted: false,
                             server_pubkey: [0; 32],
@@ -93,6 +99,9 @@ pub async fn run_video_link(
                     });
 
                     tracing::info!("client '{client_name}' paired successfully from {from}");
+                    if let Some(tx) = &status_tx {
+                        let _ = tx.send(SessionStatus::Paired { client_name: client_name.clone(), addr: from.to_string() });
+                    }
                     let resp = Message::PairResponse {
                         accepted: true,
                         server_pubkey,
