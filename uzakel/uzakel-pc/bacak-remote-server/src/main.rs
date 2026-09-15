@@ -252,6 +252,27 @@ fn main() -> anyhow::Result<()> {
     runtime.block_on(run_session(args, pin, None, None))
 }
 
+/// The encode task's other end of a [`network::FrameSource`] — see that
+/// type's doc for why encoded frames need two different delivery policies
+/// depending on the codec.
+enum EncodeSink {
+    Latest(tokio::sync::watch::Sender<Option<encode::EncodedFrame>>),
+    Ordered(tokio::sync::mpsc::Sender<encode::EncodedFrame>),
+}
+
+impl EncodeSink {
+    /// `false` means the network task's receiving end is gone (session
+    /// over) — same meaning as the old `.send(..).is_err()` checks this
+    /// replaced, just spelled the other way since `Ordered`'s `.await` is
+    /// naturally a `bool`-returning check here rather than a `Result`.
+    async fn send(&self, encoded: encode::EncodedFrame) -> bool {
+        match self {
+            EncodeSink::Latest(tx) => tx.send(Some(encoded)).is_ok(),
+            EncodeSink::Ordered(tx) => tx.send(encoded).await.is_ok(),
+        }
+    }
+}
+
 /// The full pairing/streaming session: starts screen capture, binds the
 /// sockets, and answers `PairRequest`s against `pin` until the process
 /// exits, the link fails, or `shutdown_rx` (when given) is flipped to
@@ -274,27 +295,49 @@ pub(crate) async fn run_session(
     let (screen_width, screen_height) = (first_frame.width, first_frame.height);
     tracing::info!("capturing {screen_width}x{screen_height} at up to {} fps", args.fps);
 
-    // `watch`, not `mpsc`: an mpsc queue (even a small bounded one) still
-    // forces the network task to send *every* encoded frame's chunks in
-    // order, including ones that are already stale by the time their turn
-    // comes up if the link can't keep draining as fast as frames are
-    // produced — that backlog of "chunks still queued to go out" is exactly
-    // what made the video fall further and further behind the longer a
-    // session ran. `watch` only ever holds the *latest* encoded frame: if a
-    // newer one lands before the network task has picked up the last one,
-    // the superseded one is simply never sent — same "freshest wins" policy
-    // this codebase already uses for capture (`scrap`'s next-new-frame
-    // semantics) and decode (`FrameReassembler`/`RemoteDesktopSession::poll`
-    // on the BacakOS side), just extended to the one place it was missing.
-    let (encoded_tx, encoded_rx) = tokio::sync::watch::channel(None);
+    // `RawZstd` frames are independent, so a `watch` channel — "freshest
+    // wins", the superseded frame is simply never sent if a newer one lands
+    // before the network task got to the last one — is exactly right: it's
+    // what stops the video from falling further and further behind the
+    // longer a session runs, same "freshest wins" policy this codebase
+    // already uses for capture (`scrap`'s next-new-frame semantics) and
+    // decode (`FrameReassembler`/`RemoteDesktopSession::poll` on the BacakOS
+    // side). H.264 delta frames are NOT independent — skipping one that way
+    // breaks the next one's reference to it, which real-hardware testing
+    // (2026-09-15) found causes multi-second freezes on ordinary scene
+    // changes. So `--hardware-encode` uses a bounded `mpsc` instead (backs
+    // the encode task off with real backpressure rather than silently
+    // dropping) — see [`network::FrameSource`]'s doc for the full story.
     let zstd_level = args.zstd_level;
     #[cfg(windows)]
+    let use_ordered_channel = args.hardware_encode;
+    #[cfg(not(windows))]
+    let use_ordered_channel = false;
+    let (frame_source, encode_sink) = if use_ordered_channel {
+        let (tx, rx) = tokio::sync::mpsc::channel(32);
+        (network::FrameSource::Ordered(rx), EncodeSink::Ordered(tx))
+    } else {
+        let (tx, rx) = tokio::sync::watch::channel(None);
+        (network::FrameSource::Latest(rx), EncodeSink::Latest(tx))
+    };
+    #[cfg(windows)]
     let hardware_encoder = if args.hardware_encode {
-        // 4 Mbps / keyframe every ~2s: same starting point as
-        // `--test-h264-encode` — not yet exposed as its own CLI flags
-        // (nothing has needed to tune them against a real session yet).
+        // 4 Mbps / keyframe every ~1s: real-hardware end-to-end testing
+        // (2026-09-15) found a big scene change (closing a window) could
+        // stay frozen for ~10s — 5x the "~2s worst case" the original
+        // `fps*2` GOP assumed. There's no NACK/retransmit (see
+        // `FrameReassembler`'s `h264_awaiting_keyframe` doc in
+        // `remote_desktop.rs`), so a lost keyframe access unit (bigger than
+        // a delta frame, and thus more UDP chunks and more likely to lose
+        // at least one) means waiting for the *next* one — a shorter GOP
+        // halves that single-miss wait and, since losses are roughly
+        // independent per attempt, makes several-in-a-row misses (which is
+        // what actually produced the 10s freeze) considerably less likely.
+        // Costs more bandwidth per second; not yet exposed as its own CLI
+        // flag since this is a first real-hardware-informed adjustment, not
+        // a tuned final value.
         let bitrate_bits_per_sec = 4_000_000;
-        let keyframe_interval = args.fps.max(1) * 2;
+        let keyframe_interval = args.fps.max(1);
         let encoder = encode_h264::H264Encoder::new(screen_width, screen_height, args.fps, bitrate_bits_per_sec, keyframe_interval)?;
         tracing::info!(
             "hardware encode: {} ({})",
@@ -328,7 +371,7 @@ pub(crate) async fn run_session(
                     Ok(packets) => {
                         for packet in packets {
                             let encoded = encode_h264::chunk_packet(packet, frame_id, frame.width, frame.height);
-                            if encoded_tx.send(Some(encoded)).is_err() {
+                            if !encode_sink.send(encoded).await {
                                 return; // network task's receiver dropped
                             }
                             frame_id = frame_id.wrapping_add(1);
@@ -341,7 +384,7 @@ pub(crate) async fn run_session(
 
             match encode::encode_frame(&frame, frame_id, zstd_level) {
                 Ok(encoded) => {
-                    if encoded_tx.send(Some(encoded)).is_err() {
+                    if !encode_sink.send(encoded).await {
                         return; // network task's receiver dropped
                     }
                 }
@@ -368,7 +411,7 @@ pub(crate) async fn run_session(
     // still report `Ended` once the session is over, however it ends.
     let status_tx_end = status_tx.clone();
 
-    let mut video_task = tokio::spawn(network::run_video_link(video_socket, pin, screen_width, screen_height, encoded_rx, session.clone(), status_tx));
+    let mut video_task = tokio::spawn(network::run_video_link(video_socket, pin, screen_width, screen_height, frame_source, session.clone(), status_tx));
     let mut input_task = tokio::spawn(network::run_input_listener(input_socket, injector, session));
 
     let wait_for_shutdown = async move {
