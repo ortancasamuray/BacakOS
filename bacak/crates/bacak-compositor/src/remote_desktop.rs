@@ -221,6 +221,13 @@ enum SessionStatus {
     Connecting,
     Failed(String),
     Connected { width: u32, height: u32 },
+    /// The Windows side ended the session on its own (its "Eşleşmeyi
+    /// Bitir" button — see `bacak-remote-server`'s `gui.rs`) by sending
+    /// `Message::Bye`, rather than this end dropping/closing the panel
+    /// itself. `remote_desktop_tick` closes the panel the moment it sees
+    /// this, so in practice nothing ever reads the label for it — kept
+    /// anyway so `remote_desktop_status_text`'s match stays exhaustive.
+    Ended,
 }
 
 /// Owns the background pairing/receive thread and the encrypted input send
@@ -337,6 +344,15 @@ async fn run(
         let Ok(msg) = decode(&buf[..len]) else { continue };
         let Ok(inner) = open_message(&msg, &mut video_opener) else { continue };
         match inner {
+            Message::Bye => {
+                // The Windows operator hit "Eşleşmeyi Bitir" (see
+                // `bacak-remote-server`'s `gui.rs`) — without this, the
+                // panel would just sit on its last frame forever: a UDP
+                // peer going away sends nothing to make `socket.recv`
+                // above ever return/error on its own.
+                let _ = status_tx.send(SessionStatus::Ended);
+                return Ok(());
+            }
             Message::FrameInfo(info) => reassembler.start_frame(info),
             Message::FrameChunk(chunk) => {
                 if let Some(frame) = reassembler.add_chunk(chunk.frame_id, chunk.chunk_index, chunk.data) {
@@ -391,6 +407,7 @@ impl BacakState {
             SessionStatus::Connecting => "Bağlanıyor…".to_string(),
             SessionStatus::Failed(e) => format!("Bağlantı hatası: {e}"),
             SessionStatus::Connected { width, height } => format!("Bağlandı — {width}x{height}"),
+            SessionStatus::Ended => "Oturum sonlandırıldı.".to_string(),
         }
     }
 
@@ -485,9 +502,17 @@ impl BacakState {
             panel.frame = Some((buf, w, h));
             dirty = true;
         }
+        let ended = matches!(panel.session.status, SessionStatus::Ended);
         let status_text = Self::remote_desktop_status_text(&panel.session.status);
         let text = self.text.as_ref();
         panel.status_label = rasterize(text, &status_text, 14.0, [232, 236, 244], panel.video_rect.w as usize);
+        if ended {
+            // The Windows side ended the session itself ("Eşleşmeyi
+            // Bitir") — close the panel rather than leaving it sitting on
+            // its last frame with a status label nobody asked to read.
+            self.close_remote_desktop_panel();
+            return true;
+        }
         dirty
     }
 
