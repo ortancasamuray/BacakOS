@@ -60,13 +60,24 @@ impl PixelFormat {
     }
 }
 
-/// v1 ships a lossless zstd-compressed raw frame so the pipeline is real and
-/// dependency-light on every target OS. Hardware H.264/AV1 is the designed
-/// upgrade path (see workspace README) — add a variant here and a matching
-/// encoder/decoder backend without touching the transport or input path.
+/// v1 shipped a lossless zstd-compressed raw frame so the pipeline was real
+/// and dependency-light on every target OS. `H264` is the hardware upgrade
+/// path (see `uzakel-pc/HARDWARE_ENCODE_PLAN.md`) — the server doesn't send
+/// it yet (encode is written and vendor-agnostic-tested but not wired into
+/// the real session, see that plan's "nerede duruyoruz"), and neither
+/// decoder (`bacak-compositor::remote_desktop`, `bacak-remote-client`) can
+/// decode it yet (plan step 5) — both already match it exhaustively and
+/// drop/reject the frame in the meantime.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Codec {
     RawZstd,
+    /// `is_keyframe` is per-frame (an H.264 access unit is either an IDR
+    /// frame, decodable standalone, or a delta frame that needs every frame
+    /// back to the last IDR) — unlike `RawZstd` where every frame already
+    /// stands alone, so the receiving side needs this to know whether it's
+    /// safe to start decoding from a given frame after joining mid-stream or
+    /// after a dropped packet (see the plan's keyframe-loss-tolerance step).
+    H264 { is_keyframe: bool },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
