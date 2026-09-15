@@ -133,13 +133,50 @@ directly-injected wire packets:
   packet sent directly at the input port, never the client's own
   `winit` capture code.
 
-**Not yet tested:** macOS (no Mac available in this pass); the same
-PIN-paired security flow over a real Wi-Fi link between two separate
-machines (tested on loopback and via the Windows pass above, but not both
-combined in one run); behavior under real packet loss/jitter; sustained
-multi-minute runs; real (non-Xvfb, non-blank) desktop content, which
-compresses far larger than a blank/static screen and exercises the
-chunking path much harder.
+**Not yet tested:** the same PIN-paired security flow over a real Wi-Fi
+link between two separate machines (tested on loopback and via the
+Windows/macOS passes, but not both combined in one run); behavior under
+real packet loss/jitter; sustained multi-minute runs; real (non-Xvfb,
+non-blank) desktop content, which compresses far larger than a
+blank/static screen and exercises the chunking path much harder.
+
+## Real macOS end-to-end pass (2026-09-15) — two real bugs found and fixed
+
+Real Apple Silicon hardware (M4 MacBook Air) found two bugs this crate's
+"already cross-platform, per `scrap`/`enigo`'s own docs" design claim
+didn't anticipate — worth recording the same way as the Windows findings
+above rather than treating "compiles for other platforms" as "works on
+other platforms":
+
+- **`enigo`'s macOS backend isn't `Send`.** `network::run_input_listener`
+  used to hold the `Injector` across an `.await`, which `tokio::spawn`
+  requires the whole future to be `Send` for — fine on Windows/Linux,
+  where `enigo`'s backend happens to be `Send`, but macOS's holds a raw
+  `NonNull<CGEventSource>` that isn't. Fixed by moving `Injector` onto its
+  own plain OS thread (`input_inject::run_injector_thread`) fed by a
+  `std::sync::mpsc` channel — the same reason `capture.rs` already built
+  `scrap::Capturer` on its own thread rather than taking one by value.
+- **`scrap`'s quartz (macOS) capture produced a sheared/striped image.**
+  Root cause: the vendored `scrap` fork derived each captured frame's
+  row stride as `frame.len() / height`, correct on the DXGI/X11 backends
+  but not on quartz — `IOSurfaceGetAllocSize` (what `frame.len()` reads)
+  is the surface's *total* backing allocation, not reliably an exact
+  multiple of the row count. Fixed by querying the real stride via
+  `IOSurfaceGetBytesPerRow` instead (`vendor/scrap-0.5.0/src/quartz/
+  frame.rs`, threaded through to `capture.rs`).
+- **Also found along the way:** macOS gates `scrap`'s CoreGraphics
+  capture behind a Screen Recording (TCC) permission that does **not**
+  carry over from one launching context to another — granting it via a
+  physical `Terminal.app` launch does not let a later SSH-launched run of
+  the *same binary* capture; each responsible-process context needs its
+  own grant. Mirrors the Windows session-0/`SendInput` finding below:
+  run this on a Mac from an actual interactive Terminal session, not
+  over SSH.
+
+With both fixed: real end-to-end video (BacakOS decoding the Mac's actual
+screen, correctly, not sheared) and real input injection (BacakOS-side
+pointer movement landing on the Mac's real cursor via `enigo`/`CGEvent`)
+confirmed on real Apple Silicon hardware.
 
 ## What real two-machine testing found
 

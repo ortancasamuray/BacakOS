@@ -140,13 +140,51 @@ enjekte edilen tel paketleriyle test etmişti:
   hazırlanmış bir tel paketi kullanmıştı, client'ın kendi `winit` yakalama
   kodunu hiç değil.
 
-**Henüz test edilmeyenler:** macOS (bu geçişte bir Mac yoktu); aynı
-PIN-eşleşmeli güvenlik akışının iki ayrı makine arasında gerçek bir Wi-Fi
-bağlantısı üzerinden (loopback'te ve yukarıdaki Windows geçişinde test
-edildi, ama ikisi birlikte tek bir çalıştırmada değil); gerçek paket
-kaybı/jitter altındaki davranış; çok dakikalık sürekli çalışma; boş bir
-ekrandan çok daha büyük sıkışacak ve parçalama yolunu çok daha zorlayacak
-gerçek (Xvfb olmayan, boş olmayan) masaüstü içeriği.
+**Henüz test edilmeyenler:** aynı PIN-eşleşmeli güvenlik akışının iki
+ayrı makine arasında gerçek bir Wi-Fi bağlantısı üzerinden (loopback'te
+ve aşağıdaki Windows/macOS geçişlerinde test edildi, ama ikisi birlikte
+tek bir çalıştırmada değil); gerçek paket kaybı/jitter altındaki davranış;
+çok dakikalık sürekli çalışma; boş bir ekrandan çok daha büyük sıkışacak
+ve parçalama yolunu çok daha zorlayacak gerçek (Xvfb olmayan, boş olmayan)
+masaüstü içeriği.
+
+## Gerçek macOS uçtan uca geçişi (2026-09-15) — iki gerçek bug bulundu ve düzeltildi
+
+Gerçek Apple Silicon donanımı (M4 MacBook Air), bu crate'in "scrap/enigo
+kendi belgelerine göre zaten platform-bağımsız" tasarım iddiasının
+öngörmediği iki bug ortaya çıkardı — "diğer platformlar için derleniyor"
+ile "diğer platformlarda çalışıyor" arasındaki farkı, yukarıdaki Windows
+bulguları gibi burada kayıt altına almaya değer:
+
+- **`enigo`'nun macOS backend'i `Send` değil.** `network::run_input_listener`
+  eskiden `Injector`'ı bir `.await` boyunca tutuyordu — `tokio::spawn`
+  bunun için tüm future'ın `Send` olmasını istiyor, Windows/Linux'ta sorun
+  değil (`enigo`'nun backend'i orada `Send`) ama macOS'ta ham bir
+  `NonNull<CGEventSource>` tutuyor, o değil. Çözüm: `Injector`'ı kendi
+  düz OS thread'ine taşımak (`input_inject::run_injector_thread`),
+  `std::sync::mpsc` kanalıyla beslemek — `capture.rs`'in `scrap::Capturer`'ı
+  zaten kendi thread'inde inşa etmesiyle aynı sebep.
+- **`scrap`'in quartz (macOS) yakalaması kaymış/çizgili görüntü
+  üretiyordu.** Kök sebep: vendor'lanmış `scrap` fork'u her yakalanan
+  karenin satır aralığını `frame.len() / height` olarak türetiyordu —
+  DXGI/X11 backend'lerinde doğru, quartz'ta değil —
+  `IOSurfaceGetAllocSize` (`frame.len()`'in okuduğu şey) yüzeyin *toplam*
+  ayrılan alanı, satır sayısının kesin bir katı olması güvenilir değil.
+  Çözüm: gerçek stride'ı `IOSurfaceGetBytesPerRow` ile sorgulamak
+  (`vendor/scrap-0.5.0/src/quartz/frame.rs`, `capture.rs`'e taşındı).
+- **Yol boyunca ayrıca bulunan:** macOS, `scrap`'in CoreGraphics
+  yakalamasını bir Ekran Kaydı (TCC) izninin arkasına koyuyor ve bu izin
+  bir başlatma bağlamından diğerine **taşınmıyor** — fiziksel bir
+  `Terminal.app` başlatmasıyla izin vermek, aynı binary'nin daha sonra
+  SSH'tan başlatılan bir çalıştırmasının yakalama yapmasına izin vermiyor;
+  her sorumlu-süreç bağlamı kendi iznini istiyor. Aşağıdaki Windows
+  session-0/`SendInput` bulgusuyla aynı ders: bunu Mac'te gerçek
+  interaktif bir Terminal oturumundan çalıştır, SSH üzerinden değil.
+
+İkisi de düzeltildikten sonra: gerçek uçtan uca video (BacakOS, Mac'in
+gerçek ekranını doğru — kaymadan — çözüyor) ve gerçek girdi enjeksiyonu
+(BacakOS taraflı imleç hareketi `enigo`/`CGEvent` üzerinden Mac'in gerçek
+imlecine ulaşıyor) gerçek Apple Silicon donanımında doğrulandı.
 
 ## Gerçek iki-makine testinin bulduğu şeyler
 
