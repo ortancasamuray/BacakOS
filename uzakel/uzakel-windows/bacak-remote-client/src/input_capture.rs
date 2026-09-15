@@ -1,7 +1,7 @@
 //! Translates local `winit` input into wire [`InputEvent`]s.
 //!
 //! Pointer motion is sent as relative deltas (matching what the host's
-//! `enigo::Coordinate::Rel` injection expects, and how `uzakel/android`'s
+//! `enigo::Coordinate::Rel` injection expects, and how `uzakel/uzakel-android/android`'s
 //! `TrackpadView` already does it) computed in `main.rs` from consecutive
 //! `WindowEvent::CursorMoved` positions — **not** `DeviceEvent::MouseMotion`,
 //! which winit's Wayland backend never emits (it reports raw per-axis

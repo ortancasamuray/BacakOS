@@ -74,18 +74,18 @@ dirs    = { version = "5", optional = true }
 # gating as the other rasterisation deps above.
 qrcode  = { workspace = true, optional = true }
 
-# bacak-remote (uzakel/uzakel-pc) wire protocol + PIN/X25519/ChaCha20-Poly1305
+# bacak-remote (uzakel/uzakel-windows) wire protocol + PIN/X25519/ChaCha20-Poly1305
 # pairing crypto, reused as-is for the "Uzak Masaüstü" panel's PC-streaming
 # session rather than re-implemented here. Cross-workspace path dependency —
 # see the panel module's doc comment for why this lives in a sibling project
 # instead of under bacak/. Same optional/runtime gating as the rasterisation
 # deps above: only needed when the real renderer exists to draw the stream.
-bacak-remote-proto = { path = "../../../uzakel/uzakel-pc/bacak-remote-proto", optional = true }
+bacak-remote-proto = { path = "../../../uzakel/uzakel-windows/bacak-remote-proto", optional = true }
 tokio = { workspace = true, features = ["net"], optional = true }
 zstd = { version = "0.13", optional = true }
 
 # H.264 decode for the "Uzak Masaüstü" panel's hardware-encode path (see
-# uzakel/uzakel-pc/HARDWARE_ENCODE_PLAN.md step 5) — native Linux build, so
+# uzakel/uzakel-windows/HARDWARE_ENCODE_PLAN.md step 5) — native Linux build, so
 # it links the system's libavcodec/libavutil/libswscale via pkg-config
 # (`apt install libavcodec-dev libavutil-dev libswscale-dev`), unlike the
 # server side's cross-compiled, vendored-FFmpeg Windows build.

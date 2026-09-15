@@ -73,14 +73,14 @@ pub mod foreign_toplevel;
 pub mod render;
 
 /// H.264 decode for the "Uzak Masaüstü" panel's hardware-encode path (see
-/// `uzakel/uzakel-pc/HARDWARE_ENCODE_PLAN.md` step 5). Only used by
+/// `uzakel/uzakel-windows/HARDWARE_ENCODE_PLAN.md` step 5). Only used by
 /// `remote_desktop`; a separate module because that file is already large.
 #[cfg(feature = "runtime")]
 mod decode_h264;
 
 /// "Uzak Masaüstü" panel — pairs with a `bacak-remote-server` PC and streams
 /// its screen inside the desktop. See the module doc for why it depends on
-/// the sibling `uzakel/uzakel-pc` workspace instead of a local reimplementation.
+/// the sibling `uzakel/uzakel-windows` workspace instead of a local reimplementation.
 #[cfg(feature = "runtime")]
 pub mod remote_desktop;
 

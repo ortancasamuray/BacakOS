@@ -6,7 +6,7 @@
 //! touch points here — only the first active finger drives the pointer, and
 //! a second concurrent finger is ignored. Real multi-touch injection needs a
 //! dedicated virtual touch device (Linux: a second `/dev/uinput` node
-//! advertising `ABS_MT_*`, mirroring how `uzakel/daemon/src/input_manager.rs`
+//! advertising `ABS_MT_*`, mirroring how `uzakel/uzakel-android/daemon/src/input_manager.rs`
 //! owns its own uinput device) — worth lifting into its own backend once
 //! gesture translation (pinch/pan) is designed, rather than folding it into
 //! this pointer-shaped injector.
