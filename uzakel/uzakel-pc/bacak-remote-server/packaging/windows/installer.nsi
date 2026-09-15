@@ -23,6 +23,13 @@ UninstPage instfiles
 Section "Install"
     SetOutPath "$INSTDIR"
     File "${APP_EXE}"
+    ; `--hardware-encode` (see ../../../HARDWARE_ENCODE_PLAN.md) links these
+    ; dynamically, unlike the mingw runtime — without them next to the exe,
+    ; the app exits instantly with no error the moment that encoder path
+    ; runs. Wildcard, not the exact versioned names (avcodec-63.dll etc.),
+    ; so an FFmpeg vendor bump doesn't silently stop installing them.
+    ; `build.sh` copies them here from `vendor/…/bin/` before this runs.
+    File "*.dll"
 
     CreateDirectory "$SMPROGRAMS\Bacak Remote"
     CreateShortcut "$SMPROGRAMS\Bacak Remote\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}"
@@ -50,6 +57,7 @@ SectionEnd
 Section "Uninstall"
     nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="Bacak Remote Server"'
     Delete "$INSTDIR\${APP_EXE}"
+    Delete "$INSTDIR\*.dll"
     Delete "$INSTDIR\uninstall.exe"
     Delete "$SMPROGRAMS\Bacak Remote\${APP_NAME}.lnk"
     Delete "$SMPROGRAMS\Bacak Remote\Uninstall.lnk"
