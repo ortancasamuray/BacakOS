@@ -1,5 +1,5 @@
 //! X25519 ECDH + HKDF-SHA256 key derivation + ChaCha20-Poly1305 AEAD for
-//! the encrypted pairing session, mirroring `uzakel/daemon/src/crypto.rs`
+//! the encrypted pairing session, mirroring `uzakel/uzakel-android/daemon/src/crypto.rs`
 //! byte-for-byte in structure (different domain-separation strings only) —
 //! that scheme is already verified on real hardware (uzakel's ARCHITECTURE.md
 //! §2.3.1/§6), so reusing it here is a deliberate low-risk choice over
@@ -191,7 +191,7 @@ fn counter_nonce(counter: u64) -> [u8; NONCE_LEN] {
 
 /// Generates a fresh 6-digit pairing PIN (100000..=999999), shown to the
 /// person at the server so they can type it into the client — mirrors
-/// `uzakel/daemon/src/discovery.rs`'s PIN generation.
+/// `uzakel/uzakel-android/daemon/src/discovery.rs`'s PIN generation.
 pub fn generate_pin() -> u32 {
     use rand::Rng;
     rand::thread_rng().gen_range(100_000..=999_999)
