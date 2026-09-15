@@ -1,0 +1,18 @@
+[package]
+name = "bacak-remote-server-gui-launcher"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# SKELETON — dependency versions picked from what's already in this
+# machine's cargo registry cache, not from having actually resolved/built
+# against macOS. Pin exact versions once someone can actually build this.
+[dependencies]
+objc2 = "0.4"
+objc2-foundation = "0.3"
+objc2-app-kit = "0.3"
+anyhow = "1"
+
+[[bin]]
+name = "bacak-remote-server-gui-launcher"
+path = "src/main.rs"
