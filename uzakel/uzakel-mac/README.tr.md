@@ -105,23 +105,47 @@ kaldırdıktan sonra sıfır uyarı) ve gerçek Mac'te `open` ile çalıştırı
 Henüz yapılmayan: gerçek eşleşme durumu için alt sürecin çıktısını takip
 etmek (bu dosyanın kendi modül yorumuna bak — henüz süreç sınırı boyunca
 bir kanal yok, bu yüzden pencere sadece "PIN gönderildi…" gösteriyor,
-"eşleşti"/"reddedildi" hiç değil), ve bunun inşa edilme amacı olan
-Finder'dan çift tıklama yolu (hâlâ `build_mac.sh`'ın `.app`'ına sunucuyla
-birlikte paketlenmesi gerekiyor — bu geçişte yapılmadı, launcher kendi
-`target/release/`'inden doğrudan çalıştırıldı).
+"eşleşti"/"reddedildi" hiç değil).
+
+## Finder'dan çift tıklama — uçtan uca doğrulandı, 2026-09-15
+
+`build_mac.sh` artık **her iki** binary'yi tek bir `.app`'a paketliyor
+(`CFBundleExecutable` launcher; gerçek sunucu tam yanında,
+`Contents/MacOS/` içinde — `find_server_binary()`'nin "kendi yanıma bak"
+kontrolü onu orada buluyor). `open` ile başlatıldı (gerçek bir Finder
+çift tıklamasını simüle ederek): pencere göründü, PIN göndermek
+*paketlenmiş* sunucuyu başlattı (süreç yolunun `.app` içine işaret
+etmesiyle doğrulandı, geliştirme kopyasına değil) ve BacakOS ile eşleşip
+gerçek video/girdi akıttı.
+
+**Bulunan ve düzeltilen gerçek, apaçık olmayan bir blokaj: paket
+imzalanmış olmalı — sadece ad-hoc bile olsa (`codesign --sign -`, gerçek
+bir Developer ID gerekmiyor) — Ekran Kaydı (TCC) izninin hiç çalışması
+için.** İmzasız bırakıldığında, Sistem Ayarları'nda "Bacak Remote
+Server"a Ekran Kaydı izni vermek hiçbir işe yaramadı — asıl yakalayan kod
+*alt süreçte* (`bacak-remote-server`) çalışıyor, paketin ana yürütülebilir
+dosyası olan (önceden imzasız) `gui-launcher`'da değil — TCC'nin ebeveynden
+çocuğa sorumlu-süreç aktarımı, ebeveynin gerçek bir kod kimliğine sahip
+olmasını istiyor gibi görünüyor, tamamen imzasız bir paketin bu kimliği
+yok. `build_mac.sh` artık son adım olarak bitmiş pakette `codesign --sign
+- --deep --force` çalıştırıyor; bundan sonra (ve yeniden imzalama kimliği
+değiştirdiği için Ekran Kaydı iznini bir kez daha vererek) hemen çalıştı.
+
+Şimdiye kadar sadece kozmetik, henüz kök nedeni bulunmamış bir gözlem:
+taze bir eşleşmeden sonraki ilk video karesi görünmesi kabaca 10 saniye
+sürdü (oturumun kalanı sorunsuzdu) — muhtemelen `CGDisplayStream`'in
+kendi ilk-kare başlangıç gecikmesi (o API'nin bilinen gerçek bir
+özelliği, bu kod tabanının kontrol ettiği bir şey değil) bir bug değil,
+ama sadece bir kez test edildi; tutarlı mı yoksa tek seferlik mi olduğu
+beklenen davranış olarak kabul edilmeden önce izlenmeye değer.
 
 ## Bilinen eksik
 
-- `build_mac.sh`'ın ürettiği `.app` hâlâ sadece `bacak-remote-server`
-  içeriyor, `gui-launcher` değil — Finder'dan çift tıklamak hâlâ yukarıda
-  anlatılan `prompt_pin()`/`stdin` yok hatasına düşüyor;
-  `gui-launcher` kendi başına bağımsız bir binary olarak doğrulandı, o
-  `.app` üzerinden değil. İki binary'yi birlikte paketlemek (ve
-  `gui-launcher`'ı paketlenmiş kardeşine yönlendirmek —
-  `find_server_binary()` zaten önce oraya bakıyor) gerçek bir çift-tıklama
-  deneyimi için kalan adım.
-- Ekran Kaydı (TCC) izninin "başlatma bağlamları arasında taşınmama"
-  davranışı (bağlantılı yazıya bak) bir `open`/Finder ile başlatılan
-  `.app` için özellikle henüz yeniden kontrol edilmedi (sadece çıplak
-  binary'nin SSH'a karşı Terminal.app başlatmaları için kontrol edildi)
-  — yukarıdaki paketleme yapıldığında kontrol edilmeye değer.
+- Alt sürecin `stdout`'unu gerçek eşleşme durumu için takip etmek
+  (yukarıya bak).
+- *Gerçek* kod imzalama (asıl bir Developer ID) ve notarization —
+  yukarıdaki ad-hoc imza TCC'yi yerel olarak düzeltiyor, ama
+  internetten indirilen ad-hoc imzalı bir `.app` hâlâ Gatekeeper
+  tarafından engelleniyor (bkz. `build_mac.sh`'ın kendi TODO'ları).
+- Yukarıda not edilen ~10sn'lik ilk kare gecikmesi — tek bir veri noktası,
+  henüz tekrarlanabilir olduğu doğrulanmadı ya da kök nedeni bulunmadı.
