@@ -479,6 +479,40 @@ Kullanıcı geri bildirimiyle `gui.rs` üç şekilde iyileştirildi:
   gösteriliyor (`nwg::TrayNotification`, stok `OemIcon::WinLogo` — ekstra
   `.ico` asseti yok).
 
+## Kapanış donması (10sn) — KÖK NEDEN BULUNDU VE DÜZELTİLDİ, 2026-09-15
+
+Fiziksel donanımda uçtan uca çalışırken bulunan gerçek bir performans
+bug'ı: bir pencere (Firefox) açılışı ~2-3sn kabul edilebilir gecikmeyle
+görünürken, **kapanışı ekranda ~10 saniye donuk kalıyordu**.
+
+İlk deneme — anahtar-kare aralığını `fps*2`'den `fps*1`'e düşürmek —
+donmayı GİDERMEDİ. Asıl kök neden farklıydı: `encoded_tx`/`encoded_rx`
+`watch` kanalı ("en yeniyi gönder, eskiyi sessizce at" — `run_session`'da
+zaten belgeliydi) hem `RawZstd` hem `--hardware-encode` (H.264) yolu
+tarafından paylaşılıyordu. `RawZstd` için bu doğru: her kare bağımsız
+kod çözülüyor. **H.264 delta kareleri için YANLIŞ**: bir delta kare
+sadece kendinden önceki karenin decoder'da bıraktığı referans duruma
+göre çözülebiliyor. Network task network'e büyük bir keyframe
+gönderirken (ör. pencere kapanışı gibi büyük bir sahne değişimi
+sırasında) encode task yeni delta kareler üretmeye devam ediyor —
+`watch` kanalı bunların hepsini "en yeniyle" değiştiriyor, aradakiler
+**hiç gönderilmiyor**. BacakOS tarafındaki decoder bunu gerçek bir paket
+kaybından ayırt edemiyor, `h264_awaiting_keyframe = true` moduna geçip
+sıradaki keyframe'e kadar donuyor — tam da gözlemlenen davranış.
+
+**Düzeltme**: `network::FrameSource` enum'u eklendi —
+`Latest(watch::Receiver<...>)` (RawZstd, değişmedi) ve
+`Ordered(mpsc::Receiver<EncodedFrame>)` (H.264, hiçbir kareyi atlamaz,
+network yavaşsa encode task'ı `.send().await` ile geri bastırır —
+sessizce atlamak yerine gerçek backpressure). `main.rs`'te yeni
+`EncodeSink` enum'u aynı ayrımı gönderen tarafta yapıyor. Fiziksel
+donanımda doğrulandı: **Firefox kapanış donması tamamen geçti.**
+
+Ders: "en yeniyi göster, eskiyi at" deseni (bu kod tabanında capture ve
+zstd decode için doğru ve kasıtlı) sahne-bağımsız veri için güvenli,
+ama H.264 gibi zamansal referans zinciri olan bir codec'in kodlanmış
+çıktısına doğrudan uygulanamaz.
+
 ## Bırakıldığı yer — 2026-09-14 oturum sonu
 
 Yeni bir olası "gerçek donanım" makinesi denendi: `192.168.1.181`

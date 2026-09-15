@@ -37,6 +37,52 @@ pub fn new_shared_session() -> SharedSession {
     Arc::new(Mutex::new(None))
 }
 
+/// How encoded frames flow from the encode task to this module's send loop.
+///
+/// `RawZstd` frames are independent — the *n*th frame decodes correctly no
+/// matter what happened to frame *n-1*, so it's fine (and, at any real
+/// resolution/frame rate, necessary — see `run_session`'s doc on why this
+/// used a `watch` channel in the first place) for a network task that falls
+/// behind to skip straight to the newest one and never send the
+/// superseded ones at all.
+///
+/// H.264 delta frames are NOT independent: each one is only decodable
+/// relative to the reference picture the *previous* frame actually left in
+/// the decoder. A "freshest wins" channel silently skipping delta frames
+/// whenever the network task is still busy sending an earlier (often
+/// larger, e.g. a keyframe) one breaks that reference chain — the decoder
+/// on the other end (`FrameReassembler` in `bacak-compositor`) has no way
+/// to tell an intentional skip from actual packet loss, so it does the only
+/// safe thing and stalls until the next keyframe, same as it would for a
+/// real dropped packet. Real-hardware testing (2026-09-15) found this is
+/// what actually produced multi-second freezes on ordinary scene changes
+/// (closing a window), not network loss — so H.264 frames instead go
+/// through `Ordered`, a bounded `mpsc` that blocks the encode task
+/// (backpressure, not silent drops) when the network can't keep up.
+pub enum FrameSource {
+    Latest(tokio::sync::watch::Receiver<Option<EncodedFrame>>),
+    Ordered(tokio::sync::mpsc::Receiver<EncodedFrame>),
+}
+
+impl FrameSource {
+    async fn recv(&mut self) -> Option<EncodedFrame> {
+        match self {
+            FrameSource::Latest(rx) => loop {
+                if rx.changed().await.is_err() {
+                    return None;
+                }
+                if let Some(v) = rx.borrow_and_update().clone() {
+                    return Some(v);
+                }
+                // Only reachable before the encode task's first `send` —
+                // keep waiting for the real first frame instead of treating
+                // that initial `None` as "channel closed".
+            },
+            FrameSource::Ordered(rx) => rx.recv().await,
+        }
+    }
+}
+
 /// Answers `PairRequest` (checking `pin`) with `PairResponse`, and forwards
 /// every `EncodedFrame` produced by the capture/encode pipeline to whichever
 /// client most recently paired successfully. `status_tx`, when given, is
@@ -46,7 +92,7 @@ pub async fn run_video_link(
     pin: u32,
     screen_width: u32,
     screen_height: u32,
-    mut frame_rx: tokio::sync::watch::Receiver<Option<EncodedFrame>>,
+    mut frame_rx: FrameSource,
     session: SharedSession,
     status_tx: Option<StatusChannel>,
 ) -> anyhow::Result<()> {
@@ -139,14 +185,7 @@ pub async fn run_video_link(
         }
     });
 
-    while frame_rx.changed().await.is_ok() {
-        // Clone out of the borrow (dropping it) before the `.await` below —
-        // a `watch::Ref` held across an await point would keep the sender
-        // waiting on us for the whole send, defeating the point of using
-        // `watch` here. `mark_unchanged()`-free: `changed()` already clears
-        // the changed flag on the value we're about to read via
-        // `borrow_and_update()`.
-        let Some(encoded) = frame_rx.borrow_and_update().clone() else { continue };
+    while let Some(encoded) = frame_rx.recv().await {
         let mut guard = session.lock().await;
         let Some(sess) = guard.as_mut() else { continue };
         send_frame(&socket, sess.addr, &encoded, &mut sess.video_cipher).await;
