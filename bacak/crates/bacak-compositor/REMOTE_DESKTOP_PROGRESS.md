@@ -3,7 +3,7 @@
 Bu dosya, "Uzak Masaüstü" (`bacak-remote` + compositor plugin) özelliğinin
 o anki geliştirme oturumundaki durumunu kaydeder — oturum kesilirse
 kaldığı yerden devam edebilmek için. Kalıcı mimari belgeleri değil,
-bunlar sırasıyla `ARCHITECTURE.md` §3 ve `uzakel/uzakel-pc/README.md`'de.
+bunlar sırasıyla `ARCHITECTURE.md` §3 ve `uzakel/uzakel-windows/README.md`'de.
 
 ## Genel özet
 
@@ -144,7 +144,7 @@ bir `tracing::warn!` var (RDDEBUG etiketsiz, gerçek bir hata durumu için).
   (SSH'tan başlatılırsa Session 0/"Services"e düşüyor, hem `SendInput`
   hem grafik pencere orada işe yaramıyor).
 - Cross-compile: `rustup target x86_64-pc-windows-gnu` kurulu;
-  `cd uzakel/uzakel-pc && cargo build --release -p bacak-remote-server
+  `cd uzakel/uzakel-windows && cargo build --release -p bacak-remote-server
   --target x86_64-pc-windows-gnu` (ya da `bacak-remote-client` için aynı
   hedef) ile Windows exe'si üretiliyor, `sshpass -e scp ...
   "os6@192.168.1.55:C:\\Users\\os6\\Desktop\\<exe>"` ile kopyalanıyor

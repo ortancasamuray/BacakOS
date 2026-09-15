@@ -1,5 +1,5 @@
 //! H.264 decode for the "Uzak Masaüstü" panel's hardware-encode path — see
-//! `../../../uzakel/uzakel-pc/HARDWARE_ENCODE_PLAN.md` step 5. Used by
+//! `../../../uzakel/uzakel-windows/HARDWARE_ENCODE_PLAN.md` step 5. Used by
 //! `remote_desktop::FrameReassembler` once `Codec::H264` frames arrive.
 //!
 //! Software decode only (FFmpeg's default `h264` decoder, no VAAPI/hardware

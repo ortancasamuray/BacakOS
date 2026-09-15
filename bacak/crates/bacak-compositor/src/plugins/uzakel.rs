@@ -3,7 +3,7 @@
 //! the Android app doesn't require typing a 6-digit PIN and an IP address
 //! by hand. Enabled when `/usr/share/uzakel/plugins/uzakel.plugin` is
 //! installed (provided by the `uzakel-daemon` package — see
-//! `../../../../uzakel/daemon`), matching every other optional Control
+//! `../../../../uzakel/uzakel-android/daemon`), matching every other optional Control
 //! Center section's manifest-gating convention.
 use smithay::backend::renderer::gles::GlesRenderer;
 

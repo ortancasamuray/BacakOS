@@ -1,5 +1,5 @@
 //! "Uzak Masaüstü" (Remote Desktop) panel — pairs with a `bacak-remote-server`
-//! (see `../../../uzakel/uzakel-pc`) and displays its PC screen inside the
+//! (see `../../../uzakel/uzakel-windows`) and displays its PC screen inside the
 //! real Bacak OS desktop, forwarding local pointer input back to it. This is
 //! the plugin `bacak-remote-client`'s own `render.rs` module doc names as
 //! its intended home, instead of a standalone `winit` window — see that
@@ -11,7 +11,7 @@
 //! `bacak-remote-proto` (PIN + ephemeral X25519 ECDH + HKDF-SHA256 +
 //! ChaCha20-Poly1305, verified on real Windows/Linux hardware — see that
 //! workspace's README) is pulled in as-is via a path dependency
-//! (`../../../uzakel/uzakel-pc/bacak-remote-proto`). Reimplementing the same
+//! (`../../../uzakel/uzakel-windows/bacak-remote-proto`). Reimplementing the same
 //! handshake a second time here would be a second place to get the crypto
 //! subtly wrong; a path dependency costs nothing at runtime and keeps the
 //! two projects' wire formats identical by construction.
@@ -107,7 +107,7 @@ struct DecodedFrame {
 
 /// One in-flight frame's chunks, reassembled the same "drop the incomplete
 /// frame the moment a newer one starts" way as
-/// `uzakel-pc/bacak-remote-client/src/decode.rs::FrameReassembler` — see
+/// `uzakel-windows/bacak-remote-client/src/decode.rs::FrameReassembler` — see
 /// that file's doc comment for why (a live desktop stream prefers a dropped
 /// frame over a stale one).
 struct FrameReassembler {

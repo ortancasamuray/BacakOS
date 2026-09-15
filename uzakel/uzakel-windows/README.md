@@ -251,7 +251,7 @@ own logging is lying to you before suspecting the platform.
 ## Workspace layout
 
 ```
-uzakel-pc/
+uzakel-windows/
 ├── .cargo/config.toml      # Windows cross-compile linker + crt-static settings
 ├── vendor/scrap-0.5.0/     # locally patched `scrap` (see "Windows: prebuilt .exe" below)
 ├── bacak-remote-proto/     # shared wire protocol (postcard-serialized)
@@ -299,7 +299,7 @@ per-purpose channel split `uzakel`'s Android bridge already uses.
 
 ## Security & pairing
 
-Pairing reuses `uzakel`'s exact scheme (`uzakel/daemon/src/crypto.rs`,
+Pairing reuses `uzakel`'s exact scheme (`uzakel/uzakel-android/daemon/src/crypto.rs`,
 verified on real hardware there) rather than inventing a new one: a 6-digit
 PIN, shown on the server's console at startup, combined with an ephemeral
 **X25519 ECDH** key exchange. The PIN alone never touches the wire and is
@@ -345,7 +345,7 @@ sudo apt-get install libxcb-randr0-dev libxdo-dev   # Debian/Ubuntu Linux host
 ```
 
 ```sh
-cd uzakel-pc
+cd uzakel-windows
 cargo build --release --workspace
 
 # On the PC to be streamed (Windows/Linux/macOS):

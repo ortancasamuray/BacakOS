@@ -268,7 +268,7 @@ söyleyip söylemediğini kontrol edin.
 ## Workspace düzeni
 
 ```
-uzakel-pc/
+uzakel-windows/
 ├── .cargo/config.toml      # Windows cross-compile linker + crt-static ayarları
 ├── vendor/scrap-0.5.0/     # yerelde yamalanmış `scrap` (aşağıdaki "Windows: hazır .exe" bölümüne bakın)
 ├── bacak-remote-proto/     # paylaşılan tel protokolü (postcard ile serileştirilmiş)
@@ -320,7 +320,7 @@ kullandığı amaca-özel kanal ayrımıyla örtüşür.
 ## Güvenlik ve eşleşme
 
 Eşleşme, yeni bir şema icat etmek yerine `uzakel`'in tam olarak aynı
-şemasını yeniden kullanıyor (`uzakel/daemon/src/crypto.rs`, orada gerçek
+şemasını yeniden kullanıyor (`uzakel/uzakel-android/daemon/src/crypto.rs`, orada gerçek
 donanımda doğrulanmış): sunucunun başlangıçta konsoluna yazdığı 6 haneli
 bir PIN, geçici bir **X25519 ECDH** anahtar değişimiyle birleştirilmiş. PIN
 tek başına hiçbir zaman telin üzerinden geçmiyor ve asla bir şifreleme
@@ -370,7 +370,7 @@ sudo apt-get install libxcb-randr0-dev libxdo-dev   # Debian/Ubuntu Linux host
 ```
 
 ```sh
-cd uzakel-pc
+cd uzakel-windows
 cargo build --release --workspace
 
 # Akıtılacak PC üzerinde (Windows/Linux/macOS):

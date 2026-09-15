@@ -35,13 +35,13 @@ var. Değerlendirilen seçenekler:
 
 ## Bu oturumda doğrulanan/hazırlanan temel
 
-- **`uzakel/uzakel-pc/vendor/ffmpeg-n9.0-latest-win64-gpl-shared-9.0/`**
+- **`uzakel/uzakel-windows/vendor/ffmpeg-n9.0-latest-win64-gpl-shared-9.0/`**
   altında BtbN'in [FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds)
   projesinden **win64-gpl-shared, n9.0** sürümü indirilip açıldı:
   ```sh
   curl -sL -o /tmp/ffmpeg.zip \
     "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n9.0-latest-win64-gpl-shared-9.0.zip"
-  unzip /tmp/ffmpeg.zip -d uzakel/uzakel-pc/vendor/
+  unzip /tmp/ffmpeg.zip -d uzakel/uzakel-windows/vendor/
   ```
   (Bu dizin `.gitignore`'a eklendi — ~200MB, commit'lenmedi. Yeni bir
   oturumda yukarıdaki komutla yeniden indirilebilir; `latest` tag'i
@@ -284,11 +284,11 @@ makinede hiç tetiklenmedi).
   ile derlenir/çalışır durumda tutuldu):
   - `bacak/crates/bacak-compositor/src/remote_desktop.rs` (asıl
     BacakOS taraf decode noktası — madde 5'in yeri)
-  - `uzakel-pc/bacak-remote-client/src/decode.rs` (ayrı, bağımsız
+  - `uzakel-windows/bacak-remote-client/src/decode.rs` (ayrı, bağımsız
     winit istemcisi — `bacak-compositor` eklentisi öncesi yazılmış bir
     dev/test harness'i, o da video decode ediyor, unutulmamalı)
   Doğrulama: `cargo build --workspace --target x86_64-pc-windows-gnu`
-  (uzakel-pc) ve `cargo check -p bacak-compositor` (bacak) hatasız;
+  (uzakel-windows) ve `cargo check -p bacak-compositor` (bacak) hatasız;
   `cargo test -p bacak-remote-proto` (13 test) hâlâ geçiyor. Sunucu
   hâlâ hiçbir zaman `Codec::H264` göndermiyor — bu adım sadece telin
   yeni bir codec'i taşıyabildiğini ve her iki decode noktasının
@@ -408,7 +408,7 @@ keyframe fırsatı) sayesinde en kötü durumda ~2 saniyelik donma.
 
 Doğrulama: `cargo check -p bacak-compositor --features runtime` ve
 `--features udev` hatasız (let-chain sözdizimi bu crate'in edition'ında
-desteklenmediği için nested `if let`'e çevrildi — `uzakel-pc` tarafının
+desteklenmediği için nested `if let`'e çevrildi — `uzakel-windows` tarafının
 aksine bu crate 2024 edition değil).
 
 ## Şu an nerede duruyoruz (2026-09-14, güncel)

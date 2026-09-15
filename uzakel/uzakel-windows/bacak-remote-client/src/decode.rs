@@ -4,7 +4,7 @@
 //! `frame_id` arrives while the previous one is still incomplete, the old one
 //! is dropped rather than buffered. For a live desktop stream a late frame is
 //! worse than a dropped one — the same "freshest wins" choice
-//! `uzakel/daemon/src/input_manager.rs` makes for input packets.
+//! `uzakel/uzakel-android/daemon/src/input_manager.rs` makes for input packets.
 
 use bacak_remote_proto::{Codec, FrameInfo, PixelFormat};
 
