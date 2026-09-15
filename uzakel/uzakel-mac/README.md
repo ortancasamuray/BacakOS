@@ -104,23 +104,48 @@ the real Mac:
 Not yet done: tailing the child's output for real pairing status (see
 this file's own module doc for why — no channel across a process
 boundary yet, so the window only ever shows "PIN gönderildi…", never
-"eşleşti"/"reddedildi"), and the double-click-from-Finder path this was
-built to enable (still needs bundling *into* `build_mac.sh`'s `.app`
-alongside the server — not done in this pass, which ran the launcher
-directly from its own `target/release/`).
+"eşleşti"/"reddedildi").
+
+## Double-click-from-Finder — verified end-to-end, 2026-09-15
+
+`build_mac.sh` now bundles **both** binaries into one `.app`
+(`CFBundleExecutable` is the launcher; the real server sits right next
+to it in `Contents/MacOS/`, where `find_server_binary()`'s
+look-next-to-myself check finds it). Launched via `open` (simulating a
+real Finder double-click): the window appeared, submitting a PIN spawned
+the *bundled* server (confirmed via its process path pointing inside the
+`.app`, not the dev checkout), and it paired with BacakOS and streamed
+real video/input.
+
+**One real, non-obvious blocker found and fixed: the bundle has to be
+code-signed — even just ad-hoc (`codesign --sign -`, no real Developer
+ID needed) — for Screen Recording (TCC) permission to work at all.**
+Left unsigned, granting "Bacak Remote Server" Screen Recording in System
+Settings did nothing — `capture.rs`'s `CGDisplayStream` call inside the
+*child* process kept failing. The actual capturing code runs in
+`bacak-remote-server`, not in the signed... well, previously *unsigned*
+`gui-launcher` that's the bundle's main executable — TCC's
+responsible-process inheritance from parent to spawned child apparently
+needs the parent to have a real code identity, which a fully unsigned
+bundle doesn't have. `build_mac.sh` now runs `codesign --sign - --deep
+--force` on the finished bundle as its last step; after that (and
+re-granting Screen Recording once, since re-signing changes the
+identity TCC tracks), it worked immediately.
+
+One cosmetic-so-far observation, not yet root-caused: the very first
+video frame after a fresh pairing took roughly 10 seconds to appear
+(session otherwise fine afterward) — plausibly `CGDisplayStream`'s own
+first-frame startup latency (a known real characteristic of that API,
+not something this codebase controls) rather than a bug in this
+pipeline, but only tested once; worth watching for whether it's
+consistent or was a one-off before treating it as expected behavior.
 
 ## Known gap
 
-- The `.app` `build_mac.sh` produces still only contains
-  `bacak-remote-server`, not `gui-launcher` — double-clicking it from
-  Finder is therefore still the `prompt_pin()`/no-`stdin` failure
-  described above; `gui-launcher` was verified as its own standalone
-  binary, launched directly, not through that `.app`. Bundling both
-  binaries together (and pointing `gui-launcher` at its bundled sibling
-  — `find_server_binary()` already looks there first) is the remaining
-  step for a real double-click experience.
-- Screen Recording (TCC) permission and its "doesn't carry over between
-  launch contexts" behavior (see the linked writeup) hasn't been
-  re-checked for an `open`/Finder-launched `.app` specifically (only for
-  bare-binary SSH vs. Terminal.app launches) — worth checking once the
-  bundling above is done.
+- Tailing the child's stdout for real pairing status (see above).
+- *Real* code signing (an actual Developer ID) and notarization — the
+  ad-hoc signature above fixes TCC locally, but a Gatekeeper-blocked,
+  ad-hoc-signed `.app` downloaded from the internet is still a real
+  distribution blocker (see `build_mac.sh`'s own TODOs).
+- The ~10s first-frame delay noted above — one data point, not yet
+  confirmed reproducible or root-caused.
