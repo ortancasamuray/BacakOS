@@ -322,21 +322,21 @@ pub(crate) async fn run_session(
     };
     #[cfg(windows)]
     let hardware_encoder = if args.hardware_encode {
-        // 4 Mbps / keyframe every ~1s: real-hardware end-to-end testing
-        // (2026-09-15) found a big scene change (closing a window) could
-        // stay frozen for ~10s — 5x the "~2s worst case" the original
-        // `fps*2` GOP assumed. There's no NACK/retransmit (see
-        // `FrameReassembler`'s `h264_awaiting_keyframe` doc in
-        // `remote_desktop.rs`), so a lost keyframe access unit (bigger than
-        // a delta frame, and thus more UDP chunks and more likely to lose
-        // at least one) means waiting for the *next* one — a shorter GOP
-        // halves that single-miss wait and, since losses are roughly
-        // independent per attempt, makes several-in-a-row misses (which is
-        // what actually produced the 10s freeze) considerably less likely.
-        // Costs more bandwidth per second; not yet exposed as its own CLI
-        // flag since this is a first real-hardware-informed adjustment, not
-        // a tuned final value.
-        let bitrate_bits_per_sec = 4_000_000;
+        // Keyframe every ~1s (was `fps*2` — real-hardware testing
+        // 2026-09-15 found a big scene change could stay frozen for ~10s,
+        // and no NACK/retransmit exists to recover a lost keyframe access
+        // unit sooner — see `FrameReassembler`'s `h264_awaiting_keyframe`
+        // doc in `remote_desktop.rs`).
+        //
+        // 15 Mbps, not 4: after fixing the *other* contributor to that
+        // freeze (see `network::FrameSource`'s doc — delta frames were
+        // being silently skipped, breaking the decoder's reference chain),
+        // the same scene change still took 3-4s, but now for a mundane
+        // reason — a 1920x1080 keyframe is commonly 1.5-2 MB, and at 4 Mbps
+        // (0.5 MB/s) that alone is a 3-4s *transmission* time, not a
+        // decoder stall. Bumped for the LAN link this was tested over;
+        // still not a tuned final value or its own CLI flag.
+        let bitrate_bits_per_sec = 15_000_000;
         let keyframe_interval = args.fps.max(1);
         let encoder = encode_h264::H264Encoder::new(screen_width, screen_height, args.fps, bitrate_bits_per_sec, keyframe_interval)?;
         tracing::info!(
@@ -395,7 +395,11 @@ pub(crate) async fn run_session(
     });
 
     let session = network::new_shared_session();
-    let video_socket = UdpSocket::bind(("0.0.0.0", args.video_port)).await?;
+    // `Arc`, not owned outright: `run_video_link` needs its own handle to
+    // keep using after this function hands it off, and the shutdown branch
+    // below needs one too, to send `Message::Bye` on the way out (see
+    // `network::send_bye`).
+    let video_socket = std::sync::Arc::new(UdpSocket::bind(("0.0.0.0", args.video_port)).await?);
     let input_socket = UdpSocket::bind(("0.0.0.0", args.input_port)).await?;
     tracing::info!("listening: video={}, input={}", args.video_port, args.input_port);
 
@@ -411,8 +415,8 @@ pub(crate) async fn run_session(
     // still report `Ended` once the session is over, however it ends.
     let status_tx_end = status_tx.clone();
 
-    let mut video_task = tokio::spawn(network::run_video_link(video_socket, pin, screen_width, screen_height, frame_source, session.clone(), status_tx));
-    let mut input_task = tokio::spawn(network::run_input_listener(input_socket, injector, session));
+    let mut video_task = tokio::spawn(network::run_video_link(video_socket.clone(), pin, screen_width, screen_height, frame_source, session.clone(), status_tx));
+    let mut input_task = tokio::spawn(network::run_input_listener(input_socket, injector, session.clone()));
 
     let wait_for_shutdown = async move {
         let Some(mut rx) = shutdown_rx else {
@@ -425,10 +429,20 @@ pub(crate) async fn run_session(
         }
     };
 
+    let mut disconnect_requested = false;
     tokio::select! {
         res = &mut video_task => res??,
         res = &mut input_task => res??,
-        _ = wait_for_shutdown => tracing::info!("session ended: disconnect requested"),
+        _ = wait_for_shutdown => {
+            tracing::info!("session ended: disconnect requested");
+            disconnect_requested = true;
+        }
+    }
+    // Only for the "operator hit the button" path above — the other two
+    // branches mean the link itself already broke, so there's no live
+    // peer to send a goodbye to (and nothing to say goodbye to it *for*).
+    if disconnect_requested {
+        network::send_bye(&video_socket, &session).await;
     }
     // Whichever of the two tasks didn't win the select above is still
     // running (dropping its `JoinHandle` here wouldn't stop it) — abort it

@@ -513,6 +513,14 @@ zstd decode için doğru ve kasıtlı) sahne-bağımsız veri için güvenli,
 ama H.264 gibi zamansal referans zinciri olan bir codec'in kodlanmış
 çıktısına doğrudan uygulanamaz.
 
+**Kurulu paket (NSIS) üzerinde tekrar test edildi**: `FrameSource`
+düzeltmesi sonrası donma 10sn'den 3-4sn'ye düştü — artık bozulma değil,
+gerçek bir aktarım süresi (1920x1080 anahtar-kare ~1.5-2MB, 4 Mbps'te
+bu kadar sürer). Bitrate 4→15 Mbps'e çıkarıldı (LAN için), sonuç:
+**kabul edilebilir bir gecikme, donma değil.** Hem `main.rs`'teki
+kod hem paketleme (`build.sh`/`installer.nsi`) hem de kurulu `.exe`
+üzerinde doğrulandı.
+
 ## Bırakıldığı yer — 2026-09-14 oturum sonu
 
 Yeni bir olası "gerçek donanım" makinesi denendi: `192.168.1.181`

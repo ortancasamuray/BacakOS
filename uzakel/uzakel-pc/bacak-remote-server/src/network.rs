@@ -88,7 +88,7 @@ impl FrameSource {
 /// client most recently paired successfully. `status_tx`, when given, is
 /// told about each pairing attempt's outcome — see [`SessionStatus`].
 pub async fn run_video_link(
-    socket: UdpSocket,
+    socket: Arc<UdpSocket>,
     pin: u32,
     screen_width: u32,
     screen_height: u32,
@@ -96,7 +96,6 @@ pub async fn run_video_link(
     session: SharedSession,
     status_tx: Option<StatusChannel>,
 ) -> anyhow::Result<()> {
-    let socket = Arc::new(socket);
     let recv_socket = socket.clone();
     let recv_session = session.clone();
 
@@ -221,6 +220,22 @@ async fn send_frame(socket: &UdpSocket, addr: SocketAddr, encoded: &EncodedFrame
 fn seal_and_encode(inner: &Message, cipher: &mut Cipher) -> anyhow::Result<Vec<u8>> {
     let sealed = seal_message(inner, cipher)?;
     Ok(encode(&sealed)?)
+}
+
+/// Tells whichever client is currently paired (if any) that the operator
+/// ended the session from this side (`gui.rs`'s "Eşleşmeyi Bitir") — a
+/// silent goodbye instead of just going dark, so the BacakOS panel
+/// (`remote_desktop.rs`'s `run` loop) knows to close itself rather than
+/// sitting on the last frame forever (there's nothing else that would ever
+/// make its `socket.recv` return for a peer that simply stopped sending).
+/// Best-effort: called right before `run_session` aborts the video/input
+/// tasks, so a send failure here changes nothing about the shutdown itself.
+pub async fn send_bye(socket: &UdpSocket, session: &SharedSession) {
+    let mut guard = session.lock().await;
+    let Some(sess) = guard.as_mut() else { return };
+    if let Ok(bytes) = seal_and_encode(&Message::Bye, &mut sess.video_cipher) {
+        let _ = socket.send_to(&bytes, sess.addr).await;
+    }
 }
 
 /// Receives `Input` events from the client and injects them immediately —
