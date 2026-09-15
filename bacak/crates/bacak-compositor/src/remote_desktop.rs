@@ -61,6 +61,7 @@ use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::element::memory::MemoryRenderBuffer;
 use smithay::utils::Transform;
 
+use crate::decode_h264::H264Decoder;
 use crate::state::{BacakState, LABEL_SUPERSAMPLE};
 use crate::text::TextRenderer;
 use crate::wm::{OutputId, Rect};
@@ -109,9 +110,30 @@ struct DecodedFrame {
 /// `uzakel-pc/bacak-remote-client/src/decode.rs::FrameReassembler` — see
 /// that file's doc comment for why (a live desktop stream prefers a dropped
 /// frame over a stale one).
-#[derive(Default)]
 struct FrameReassembler {
     current: Option<InProgress>,
+    // Persists across the whole session (unlike `current`, rebuilt every
+    // frame) — an H.264 decoder needs continuity across access units (a
+    // delta frame only decodes against the state left by earlier ones), so
+    // it can't be recreated per frame the way `zstd::decode_all` is.
+    // Lazily created on the first `Codec::H264` frame the session actually
+    // receives, since most sessions (still `RawZstd` by default — see
+    // `bacak-remote-server`'s `--hardware-encode` flag) never need one.
+    h264_decoder: Option<H264Decoder>,
+    // Packet-loss/keyframe-wait tolerance (plan step 4). H.264 delta frames
+    // decode *against* the decoder's state from earlier frames — unlike
+    // `RawZstd` where every frame stands alone, a single dropped/corrupt
+    // H.264 access unit poisons every delta frame after it until the next
+    // keyframe resets the decoder's reference state. So once that's known
+    // to have happened, delta frames are skipped (not fed to the decoder at
+    // all) until a complete keyframe arrives — starts `true` since nothing
+    // has been decoded yet at session start either.
+    h264_awaiting_keyframe: bool,
+}
+impl Default for FrameReassembler {
+    fn default() -> Self {
+        Self { current: None, h264_decoder: None, h264_awaiting_keyframe: true }
+    }
 }
 struct InProgress {
     info: FrameInfo,
@@ -120,6 +142,18 @@ struct InProgress {
 }
 impl FrameReassembler {
     fn start_frame(&mut self, info: FrameInfo) {
+        if let Some(prev) = &self.current {
+            if prev.received < prev.info.chunk_count && matches!(prev.info.codec, Codec::H264 { .. }) {
+                tracing::debug!(
+                    "incomplete H.264 access unit {} dropped ({}/{} chunks) for newer frame {} — waiting for next keyframe",
+                    prev.info.frame_id,
+                    prev.received,
+                    prev.info.chunk_count,
+                    info.frame_id
+                );
+                self.h264_awaiting_keyframe = true;
+            }
+        }
         self.current = Some(InProgress { chunks: vec![None; info.chunk_count as usize], received: 0, info });
     }
 
@@ -141,10 +175,45 @@ impl FrameReassembler {
         for chunk in progress.chunks {
             payload.extend_from_slice(&chunk?);
         }
-        let bgra = match progress.info.codec {
-            Codec::RawZstd => zstd::stream::decode_all(payload.as_slice()).ok()?,
-        };
-        Some(DecodedFrame { width: progress.info.width, height: progress.info.height, bgra })
+        match progress.info.codec {
+            Codec::RawZstd => {
+                let bgra = zstd::stream::decode_all(payload.as_slice()).ok()?;
+                Some(DecodedFrame { width: progress.info.width, height: progress.info.height, bgra })
+            }
+            Codec::H264 { is_keyframe } => {
+                if !is_keyframe && self.h264_awaiting_keyframe {
+                    tracing::debug!("skipping H.264 delta frame {frame_id}: waiting for next keyframe");
+                    return None;
+                }
+                let decoder = match self.h264_decoder.as_mut() {
+                    Some(d) => d,
+                    None => match H264Decoder::new() {
+                        Ok(d) => self.h264_decoder.insert(d),
+                        Err(e) => {
+                            tracing::warn!("dropping frame {frame_id}: failed to create H.264 decoder: {e}");
+                            return None;
+                        }
+                    },
+                };
+                match decoder.decode(&payload) {
+                    // A decode call doesn't always yield a frame right away
+                    // (decoder-internal buffering) — when it yields more
+                    // than one, only the newest is worth displaying live.
+                    Ok(frames) => {
+                        self.h264_awaiting_keyframe = false;
+                        frames.into_iter().next_back().map(|f| DecodedFrame { width: f.width, height: f.height, bgra: f.bgra })
+                    }
+                    Err(e) => {
+                        // The decoder's internal reference state is now
+                        // unknown-good — same "wait for the next keyframe"
+                        // recovery as an incomplete access unit.
+                        tracing::warn!("dropping frame {frame_id}: H.264 decode failed: {e}");
+                        self.h264_awaiting_keyframe = true;
+                        None
+                    }
+                }
+            }
+        }
     }
 }
 

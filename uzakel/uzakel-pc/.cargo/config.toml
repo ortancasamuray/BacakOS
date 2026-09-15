@@ -5,3 +5,18 @@ ar = "x86_64-w64-mingw32-ar"
 # target Windows machine doesn't need libwinpthread-1.dll / libgcc_s_seh-1.dll
 # / libstdc++-6.dll installed alongside it.
 rustflags = ["-C", "target-feature=+crt-static"]
+
+[env]
+# ffmpeg-sys-next (hardware H.264/QSV encode, Windows-only — see
+# ../HARDWARE_ENCODE_PLAN.md) needs these to cross-compile:
+#
+# FFMPEG_DIR points at the vendored prebuilt FFmpeg (include/ + lib/ +
+# lib/pkgconfig/), re-downloadable with the command in that plan.
+FFMPEG_DIR = { value = "vendor/ffmpeg-n9.0-latest-win64-gpl-shared-9.0", relative = true }
+# bindgen's libclang doesn't auto-find its own resource-dir headers on this
+# machine's split llvm-19 package, so mingw's malloc.h -> <mm_malloc.h>
+# fails; point it at clang's own (ABI-compatible) intrinsics headers.
+# NOTE: this path is machine-specific (llvm version-pinned) — if it breaks
+# on another machine, find the right dir with:
+#   find / -iname mm_malloc.h 2>/dev/null | grep clang
+BINDGEN_EXTRA_CLANG_ARGS = "-I/usr/lib/llvm-19/lib/clang/19/include"
