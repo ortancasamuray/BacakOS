@@ -84,6 +84,13 @@ bacak-remote-proto = { path = "../../../uzakel/uzakel-pc/bacak-remote-proto", op
 tokio = { workspace = true, features = ["net"], optional = true }
 zstd = { version = "0.13", optional = true }
 
+# H.264 decode for the "Uzak Masaüstü" panel's hardware-encode path (see
+# uzakel/uzakel-pc/HARDWARE_ENCODE_PLAN.md step 5) — native Linux build, so
+# it links the system's libavcodec/libavutil/libswscale via pkg-config
+# (`apt install libavcodec-dev libavutil-dev libswscale-dev`), unlike the
+# server side's cross-compiled, vendored-FFmpeg Windows build.
+ffmpeg-next = { version = "9.0", optional = true, default-features = false, features = ["codec", "software-scaling", "format"] }
+
 # NOTE: the udev backend uses smithay's re-exported `rustix` (see
 # `smithay::reexports::rustix`). Pinning our own copy creates a parallel
 # rustix in the dep graph and the OFlags types stop matching across calls.
@@ -93,7 +100,7 @@ default = []
 # Enable the live Smithay-based runtime. Pulls in libwayland-server, libinput,
 # libudev, libdrm, libxkbcommon, libgbm, libegl, libseat — system dev headers
 # are required (installed via apt: libegl-dev libseat-dev libsystemd-dev …).
-runtime = ["dep:smithay", "dep:calloop", "dep:winit", "dep:fontdue", "dep:cosmic-text", "dep:zbus", "dep:image", "dep:resvg", "dep:freedesktop-icons", "dep:notify", "dep:libc", "dep:ttf-parser", "dep:dirs", "dep:qrcode", "dep:bacak-remote-proto", "dep:tokio", "dep:zstd"]
+runtime = ["dep:smithay", "dep:calloop", "dep:winit", "dep:fontdue", "dep:cosmic-text", "dep:zbus", "dep:image", "dep:resvg", "dep:freedesktop-icons", "dep:notify", "dep:libc", "dep:ttf-parser", "dep:dirs", "dep:qrcode", "dep:bacak-remote-proto", "dep:tokio", "dep:zstd", "dep:ffmpeg-next"]
 # Native-session backend: libseat + libudev + libinput + DRM/KMS + GBM + EGL.
 # Pulls every dependency `runtime` does, plus the udev / DRM / session pieces
 # of Smithay. Requires the same headers as `runtime` AND the DRM/KMS stack:

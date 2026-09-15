@@ -67,6 +67,11 @@ impl FrameReassembler {
 
         let bgra = match progress.info.codec {
             Codec::RawZstd => zstd::stream::decode_all(payload.as_slice())?,
+            // H.264 decode isn't wired up yet (see
+            // uzakel-pc/HARDWARE_ENCODE_PLAN.md step 5) — the server never
+            // actually sends this codec yet, but the match must stay
+            // exhaustive now that the variant exists on the wire.
+            Codec::H264 { .. } => anyhow::bail!("H.264 decode not implemented yet (frame {frame_id})"),
         };
 
         Ok(Some(DecodedFrame { width: progress.info.width, height: progress.info.height, format: progress.info.format, bgra }))
