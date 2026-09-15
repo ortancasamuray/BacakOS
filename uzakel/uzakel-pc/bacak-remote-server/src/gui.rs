@@ -40,7 +40,18 @@ use crate::{run_session, Args, SessionStatus, StatusChannel};
 
 #[derive(Default, NwgUi)]
 pub struct PairingWindow {
-    #[nwg_control(size: (380, 230), position: (300, 300), title: "Bacak Remote — Eşleştirme", flags: "WINDOW|VISIBLE")]
+    // The app's own icon (`resources/app.ico`, embedded into the .exe by
+    // `build.rs`/`resources/app.rc` at resource ID 1) — loaded from the
+    // running executable itself, not a file on disk, so it survives the
+    // exe being copied/renamed. Used for both the window's title bar and
+    // the tray icon below.
+    #[nwg_resource]
+    embed: nwg::EmbedResource,
+
+    #[nwg_resource(source_embed: Some(&data.embed), source_embed_id: 1)]
+    app_icon: nwg::Icon,
+
+    #[nwg_control(size: (380, 230), position: (300, 300), title: "Bacak Remote — Eşleştirme", icon: Some(&data.app_icon), flags: "WINDOW|VISIBLE")]
     #[nwg_events( OnWindowClose: [PairingWindow::on_close], OnKeyEnter: [PairingWindow::on_submit] )]
     window: nwg::Window,
 
@@ -72,12 +83,7 @@ pub struct PairingWindow {
     #[nwg_events( OnNotice: [PairingWindow::on_status_notice] )]
     status_notice: nwg::Notice,
 
-    // A stock Windows icon — no `.ico` asset to ship/keep in sync with the
-    // binary; good enough for "something is running in the tray".
-    #[nwg_resource(source_system: Some(nwg::OemIcon::WinLogo))]
-    tray_icon: nwg::Icon,
-
-    #[nwg_control(icon: Some(&data.tray_icon), tip: Some("Bacak Remote — Uzak Masaüstü"))]
+    #[nwg_control(icon: Some(&data.app_icon), tip: Some("Bacak Remote — Uzak Masaüstü"))]
     tray: nwg::TrayNotification,
 
     status_tx: RefCell<Option<Sender<SessionStatus>>>,
@@ -173,7 +179,7 @@ impl PairingWindow {
                         &format!("'{client_name}' bağlandı — ekran paylaşılıyor."),
                         Some("Bacak Remote"),
                         Some(flags),
-                        Some(&self.tray_icon),
+                        Some(&self.app_icon),
                     );
                 }
                 SessionStatus::Rejected { from } => {

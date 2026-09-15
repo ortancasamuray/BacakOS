@@ -33,3 +33,13 @@ winapi = { version = "0.3", features = ["wincon"] }
 # Needs FFMPEG_DIR pointing at ../vendor/ffmpeg-n9.0-latest-win64-gpl-shared-9.0
 # for cross-compiling to x86_64-pc-windows-gnu.
 ffmpeg-next = "9.0"
+
+
+# Compiles resources/app.rc (the app icon, resources/app.ico) into the .exe
+# via the mingw `windres` on the cross-compile host — see build.rs. Not
+# under `[target.'cfg(windows)']`: build-dependency cfg gating is evaluated
+# against the *host* running the build script, not the `--target` being
+# built for, so it would (wrongly) drop this when cross-compiling to
+# Windows from Linux — build.rs itself checks `CARGO_CFG_WINDOWS` instead.
+[build-dependencies]
+embed-resource = "3"
