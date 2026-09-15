@@ -10,6 +10,16 @@
 //! owns its own uinput device) — worth lifting into its own backend once
 //! gesture translation (pinch/pan) is designed, rather than folding it into
 //! this pointer-shaped injector.
+//!
+//! [`Injector`] itself never crosses an `.await` — [`run_injector_thread`]
+//! owns it on a plain OS thread instead, the same reason `capture.rs`
+//! builds `scrap::Capturer` inside its own thread rather than taking one by
+//! value: a real-Mac build (found running this crate there for the first
+//! time, not by inspection) failed with "future cannot be sent between
+//! threads safely" because `enigo`'s macOS backend holds a raw
+//! `NonNull<CGEventSource>` — `Send` on Windows/Linux, not on macOS. Moving
+//! it into a `tokio::spawn`'d future (as `network::run_input_listener` did
+//! before) is exactly the platform-dependently-`Send` situation that broke.
 
 use bacak_remote_proto::{InputEvent, PointerButton as ProtoButton};
 use enigo::{Axis, Button, Coordinate, Direction, Enigo, Mouse, Settings};
@@ -102,4 +112,46 @@ fn map_button(button: ProtoButton) -> Button {
         ProtoButton::Right => Button::Right,
         ProtoButton::Middle => Button::Middle,
     }
+}
+
+/// Spawns [`Injector`] on its own OS thread and returns a channel to feed
+/// it decoded [`InputEvent`]s — see the module doc for why it can't just be
+/// handed to `tokio::spawn` the way it used to be. `std::sync::mpsc`, not
+/// `tokio::sync::mpsc`: nothing on the sending side (`network::
+/// run_input_listener`) needs to `.await` a send, and this way the receive
+/// loop below stays a plain blocking `recv()`, no local `tokio::runtime`
+/// needed on this thread just to drive one channel.
+pub fn run_injector_thread(screen_width: u32, screen_height: u32) -> anyhow::Result<std::sync::mpsc::Sender<InputEvent>> {
+    let (tx, rx) = std::sync::mpsc::channel::<InputEvent>();
+    // `Injector::new` has to run *inside* the spawned thread, not before
+    // it: on macOS, `std::thread::Builder::spawn` itself refused to compile
+    // otherwise — its closure has to be `Send` to hand off to the new
+    // thread at all, and a closure capturing a not-`Send` `Injector` isn't
+    // (same underlying reason as the module doc's `tokio::spawn` story,
+    // just enforced at a different point). `ready_rx.recv()` below still
+    // makes a construction failure (e.g. accessibility permission not yet
+    // granted on macOS) fail the whole session start synchronously, same
+    // as when `main.rs` called `Injector::new` directly — it just has to
+    // cross a channel to get back here instead of a plain `?`.
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<anyhow::Result<()>>();
+    std::thread::Builder::new().name("bacak-remote-input".into()).spawn(move || {
+        let mut injector = match Injector::new(screen_width, screen_height) {
+            Ok(i) => {
+                let _ = ready_tx.send(Ok(()));
+                i
+            }
+            Err(e) => {
+                let _ = ready_tx.send(Err(e));
+                return;
+            }
+        };
+        while let Ok(event) = rx.recv() {
+            if let Err(e) = injector.inject(event) {
+                tracing::warn!("input injection failed: {e}");
+            }
+        }
+        tracing::info!("input injector thread ending: sender dropped");
+    })?;
+    ready_rx.recv().map_err(|_| anyhow::anyhow!("input injector thread died before initializing"))??;
+    Ok(tx)
 }

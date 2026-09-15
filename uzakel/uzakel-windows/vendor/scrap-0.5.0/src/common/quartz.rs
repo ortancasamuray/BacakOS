@@ -66,6 +66,14 @@ pub struct Frame<'a>(
     PhantomData<&'a [u8]>
 );
 
+impl<'a> Frame<'a> {
+    /// The real per-row stride — see `quartz::Frame::stride`'s doc for why
+    /// this must not be derived as `self.len() / height` instead.
+    pub fn stride(&self) -> usize {
+        self.0.stride()
+    }
+}
+
 impl<'a> ops::Deref for Frame<'a> {
     type Target = [u8];
     fn deref(&self) -> &[u8] {

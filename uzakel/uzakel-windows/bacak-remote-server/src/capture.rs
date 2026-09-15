@@ -67,7 +67,20 @@ fn capture_loop(mut capturer: Capturer, frame_interval: Duration, tx: mpsc::Send
         let tick_start = std::time::Instant::now();
         match capturer.frame() {
             Ok(frame) => {
-                let packed = strip_stride_padding(&frame, width, height);
+                // macOS: `scrap`'s quartz backend now exposes the real
+                // per-row stride (`IOSurfaceGetBytesPerRow`) — found on
+                // real Apple Silicon hardware that guessing it as
+                // `frame.len() / height` (fine on the DXGI/X11 backends,
+                // per real-hardware Windows testing) produced a
+                // sheared/striped image here, because `IOSurfaceGetAllocSize`
+                // (what `frame.len()` is) isn't reliably an exact multiple
+                // of the row count. See `vendor/scrap-0.5.0/src/quartz/
+                // ffi.rs`'s `IOSurfaceGetBytesPerRow` doc comment.
+                #[cfg(target_os = "macos")]
+                let stride = frame.stride();
+                #[cfg(not(target_os = "macos"))]
+                let stride = frame.len() / height.max(1) as usize;
+                let packed = strip_stride_padding(&frame, width, height, stride);
                 let captured = CapturedFrame { width, height, format: PixelFormat::Bgra8, bgra: packed };
                 if tx.blocking_send(captured).is_err() {
                     tracing::info!("capture: receiver gone, stopping");
@@ -92,10 +105,12 @@ fn capture_loop(mut capturer: Capturer, frame_interval: Duration, tx: mpsc::Send
 }
 
 /// `scrap` frame buffers are row-padded to the platform's stride; the wire
-/// protocol assumes tightly packed BGRA so the client can `width * 4` index it.
-fn strip_stride_padding(frame: &[u8], width: u32, height: u32) -> Vec<u8> {
+/// protocol assumes tightly packed BGRA so the client can `width * 4` index
+/// it. `stride` is the caller's real per-row byte count — see the call
+/// site's comment for why that can't just be derived from `frame.len()`
+/// and `height` on every platform.
+fn strip_stride_padding(frame: &[u8], width: u32, height: u32, stride: usize) -> Vec<u8> {
     let row_bytes = width as usize * PixelFormat::Bgra8.bytes_per_pixel();
-    let stride = frame.len() / height.max(1) as usize;
     if stride == row_bytes {
         return frame.to_vec();
     }

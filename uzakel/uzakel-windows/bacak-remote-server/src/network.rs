@@ -13,12 +13,11 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use bacak_remote_proto::crypto::{Cipher, EphemeralKeypair, Opener};
-use bacak_remote_proto::{decode, encode, open_message, seal_message, Message};
+use bacak_remote_proto::{decode, encode, open_message, seal_message, InputEvent, Message};
 use tokio::net::UdpSocket;
 use tokio::sync::Mutex;
 
 use crate::encode::EncodedFrame;
-use crate::input_inject::Injector;
 use crate::{SessionStatus, StatusChannel};
 
 /// A completed pairing: independently-keyed encrypt/decrypt state for each
@@ -238,13 +237,15 @@ pub async fn send_bye(socket: &UdpSocket, session: &SharedSession) {
     }
 }
 
-/// Receives `Input` events from the client and injects them immediately —
-/// this loop is deliberately separate from video traffic (see module doc).
+/// Receives `Input` events from the client and forwards them to the
+/// injector thread (see `input_inject::run_injector_thread` — `Injector`
+/// itself can't live in this `async fn`, it isn't `Send` on macOS) — this
+/// loop is deliberately separate from video traffic (see module doc).
 /// Every packet must decrypt under the *current* paired session's input key
 /// and match its address; anything else (no session yet, wrong address,
 /// bad/replayed ciphertext) is silently dropped, same as an unpaired sender
 /// always was before encryption existed.
-pub async fn run_input_listener(socket: UdpSocket, mut injector: Injector, session: SharedSession) -> anyhow::Result<()> {
+pub async fn run_input_listener(socket: UdpSocket, input_tx: std::sync::mpsc::Sender<InputEvent>, session: SharedSession) -> anyhow::Result<()> {
     let mut buf = vec![0u8; 512];
     loop {
         let (len, from) = socket.recv_from(&mut buf).await?;
@@ -272,8 +273,8 @@ pub async fn run_input_listener(socket: UdpSocket, mut injector: Injector, sessi
         match open_message(&msg, &mut sess.input_opener) {
             Ok(Message::Input(event)) => {
                 tracing::info!("received input from {from}: {event:?}");
-                if let Err(e) = injector.inject(event) {
-                    tracing::warn!("input injection failed: {e}");
+                if input_tx.send(event).is_err() {
+                    tracing::warn!("input injector thread gone, dropping event");
                 }
             }
             Ok(other) => tracing::debug!("unexpected inner message on input socket: {other:?}"),
