@@ -174,6 +174,13 @@ extern {
     // IOSurface
 
     pub fn IOSurfaceGetAllocSize(buffer: IOSurfaceRef) -> usize;
+    // `IOSurfaceGetAllocSize` is the *total* backing allocation — often
+    // page-rounded, so `allocSize / height` is not reliably the real
+    // per-row stride (found on real Apple Silicon hardware: it produced a
+    // sheared/striped captured image — every row starting a few bytes into
+    // the previous one — bacak-remote-server's `capture.rs` now asks for
+    // the real stride here instead of guessing).
+    pub fn IOSurfaceGetBytesPerRow(buffer: IOSurfaceRef) -> usize;
     pub fn IOSurfaceGetBaseAddress(buffer: IOSurfaceRef) -> *mut c_void;
     pub fn IOSurfaceIncrementUseCount(buffer: IOSurfaceRef);
     pub fn IOSurfaceDecrementUseCount(buffer: IOSurfaceRef);

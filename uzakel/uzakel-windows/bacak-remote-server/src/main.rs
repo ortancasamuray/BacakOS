@@ -9,7 +9,6 @@ mod network;
 
 use bacak_remote_proto::{DEFAULT_INPUT_PORT, DEFAULT_VIDEO_PORT};
 use clap::Parser;
-use input_inject::Injector;
 use tokio::net::UdpSocket;
 
 /// bacak-remote-server: streams this PC's screen to a Bacak OS client and
@@ -408,7 +407,7 @@ pub(crate) async fn run_session(
     }
     tracing::info!("pairing PIN accepted — waiting for the Bacak OS client to connect");
 
-    let injector = Injector::new(screen_width, screen_height)?;
+    let input_tx = input_inject::run_injector_thread(screen_width, screen_height)?;
 
     // Kept separately from the clone handed to `run_video_link` below (which
     // owns *that* one for the rest of the session) so this function can
@@ -416,7 +415,7 @@ pub(crate) async fn run_session(
     let status_tx_end = status_tx.clone();
 
     let mut video_task = tokio::spawn(network::run_video_link(video_socket.clone(), pin, screen_width, screen_height, frame_source, session.clone(), status_tx));
-    let mut input_task = tokio::spawn(network::run_input_listener(input_socket, injector, session.clone()));
+    let mut input_task = tokio::spawn(network::run_input_listener(input_socket, input_tx, session.clone()));
 
     let wait_for_shutdown = async move {
         let Some(mut rx) = shutdown_rx else {

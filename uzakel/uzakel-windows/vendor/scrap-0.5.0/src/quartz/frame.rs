@@ -3,7 +3,8 @@ use std::{ops, ptr, slice};
 
 pub struct Frame {
     surface: IOSurfaceRef,
-    inner: &'static [u8]
+    inner: &'static [u8],
+    bytes_per_row: usize
 }
 
 impl Frame {
@@ -21,8 +22,17 @@ impl Frame {
             IOSurfaceGetBaseAddress(surface) as *const u8,
             IOSurfaceGetAllocSize(surface)
         );
+        let bytes_per_row = IOSurfaceGetBytesPerRow(surface);
 
-        Frame { surface, inner }
+        Frame { surface, inner, bytes_per_row }
+    }
+
+    /// The real per-row stride (`IOSurfaceGetBytesPerRow`) — NOT the same
+    /// as `self.len() / height`, which only holds if `IOSurfaceGetAllocSize`
+    /// happens to be an exact multiple of the row count (see this file's
+    /// `ffi.rs` doc comment on `IOSurfaceGetBytesPerRow`).
+    pub fn stride(&self) -> usize {
+        self.bytes_per_row
     }
 }
 

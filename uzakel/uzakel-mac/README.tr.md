@@ -15,9 +15,22 @@ Bu crate'te sadece iki şey Windows'a özgü (`#[cfg(windows)]`): grafik
 eşleştirme penceresi (`gui.rs`) ve donanım H.264 kodlama (`encode_h264.rs`,
 `ffmpeg-next` + Intel/NVIDIA/AMD vendor SDK'ları gerektiriyor, Mac'te zaten
 anlamsız — bkz. `../uzakel-windows/HARDWARE_ENCODE_PLAN.md`). Bunlar
-olmadan crate zaten platform-bağımsız varsayılana düşüyor: konsol `--pin`
-yolu, `RawZstd` encode. Bu varsayılanın macOS'ta *olduğu gibi* derlenip
-çalışması gerekir — **bu doğrulanmadı**, aşağıdaki "Bilinen eksik"e bakın.
+olmadan crate platform-bağımsız varsayılana düşüyor: konsol `--pin` yolu,
+`RawZstd` encode.
+
+**Güncelleme, 2026-09-15 — gerçek Apple Silicon donanımında (M4 MacBook
+Air) doğrulandı.** Bu varsayılan orada derlenip çalışıyor, ve tam bir
+oturum — eşleşme, video (BacakOS, Mac'in gerçek ekranını çözüyor) ve
+girdi (BacakOS taraflı imleç hareketi Mac'in gerçek imlecine ulaşıyor) —
+uçtan uca doğrulandı. Bunu doğrularken paylaşılan crate'te/onun
+vendor'lanmış `scrap` fork'unda iki gerçek bug bulundu ve düzeltildi
+(`#[cfg(windows)]` ile korunmuyorlardı, yani herhangi bir macOS derlemesi
+bunlara çarpardı): `enigo`'nun macOS backend'i `Send` değil (girdi
+task'ını `tokio::spawn` etmeyi kırıyordu), ve `scrap`'in quartz yakalaması
+yanlış satır aralığı (stride) türetiyordu (kaymış/çizgili görüntü
+üretiyordu). Tam yazı için `../uzakel-windows/README.tr.md`'nin "Gerçek
+macOS uçtan uca geçişi" bölümüne bakın — iki düzeltme de burada değil o
+paylaşılan crate'te.
 
 Bu dizin, o paylaşılan, platform-bağımsız crate'e ait olmayan macOS'a özgü
 parçalar için var:
@@ -37,20 +50,17 @@ parçalar için var:
   planlanıyor — Windows GUI'sinin `run_session` ile ilişkisiyle aynı,
   sadece süreç-içi değil süreç-dışı.
 
-## Bilinen eksik — burada hiçbir şey derlenmedi ya da çalıştırılmadı
+## Bilinen eksik — bu dizinin kendi parçaları hâlâ doğrulanmadı
 
-Bu ortamda ne bir macOS makinesi ne de çalışan bir macOS çapraz araç
-zinciri (osxcross) var. `rustup target add aarch64-apple-darwin` başarılı
-oluyor (Rust bu hedef için derlenmiş `std`'yi zaten dağıtıyor), ama
-`uzakel-windows`'tan `cargo check --target aarch64-apple-darwin -p
-bacak-remote-server` bu crate'in kendi koduna ulaşmadan **önce** başarısız
-oluyor — `zstd-sys`'in C kısmı gerçek bir Apple `cc` (`-arch`/
-`-mmacosx-version-min` anlayan) istiyor, Linux makinenin `cc`'si anlamıyor.
-Yani:
+Paylaşılan sunucu crate'i doğrulandı (yukarıya bak). Doğrulanmayan:
 
-- Paylaşılan `bacak-remote-server` crate'inin macOS için gerçekten temiz
-  derlenip derlenmediği **doğrulanmadı** — sadece GUI/paketleme kısmı
-  değil.
+- `packaging/build_mac.sh` *Linux'tan* çapraz derliyor (`osxcross`) —
+  yukarıdaki doğrulamada gerçek Mac'te çalıştırılan native `cargo build`
+  ile farklı bir yol. Bu ortamda osxcross araç zinciri yok, script'in
+  kendisi hâlâ hiç çalışmadı. Gerçek bir Mac varsa (yukarıdaki doğrulamada
+  olduğu gibi), doğrudan onun üzerinde native derlemek (çapraz derleme
+  yok, osxcross yok) daha basit ve çalıştığı zaten biliniyor — script'e
+  sadece özellikle Linux/CI'dan derlemek hedefse başvur.
 - `gui-launcher/`, `cargo check --target aarch64-apple-darwin` /
   `--target x86_64-apple-darwin` ile temiz geçiyor (`objc2`/
   `objc2-app-kit` saf Rust bağlayıcıları — `check` için C derleyici ya da
@@ -59,9 +69,9 @@ Yani:
   `main()` düz bir `todo!()` — hiçbir şey linklenmedi (gerçek
   framework'ler gerekir) ya da çalıştırılmadı (gerçek bir Mac gerekir),
   yani hâlâ başlangıç taslağı, çalışan kod değil.
-
-Bunu bir sonraki oturumda gerçek bir Mac'te (ya da düzgün kurulmuş bir
-osxcross ile) devam ettirecek kişi: önce `uzakel-windows`'tan `cargo build
---target <aarch64|x86_64>-apple-darwin -p bacak-remote-server`'ı konsol
-`--pin` yoluyla yeşile çıkarsın, *sonra* bu dizinin paketleme/GUI
-parçalarına dönsün.
+- Ekran Kaydı (TCC) izninin "başlatma bağlamları arasında taşınmama"
+  davranışı (bağlantılı yazıya bak) `build_mac.sh`'ın kendi TODO'sunu
+  gerçek ve çözülmemiş bırakıyor: bir kullanıcının indirip çift tıkladığı
+  bir `.app`, şimdiye kadar test edilen SSH ya da Terminal.app
+  bağlamlarından apaçık farklı, üçüncü bir başlatma bağlamı — `.app`
+  paketleme gerçek olduğunda özellikle yeniden doğrulanmaya değer.

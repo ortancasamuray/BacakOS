@@ -15,10 +15,20 @@ Only two things in that crate are Windows-only (`#[cfg(windows)]`): the
 graphical pairing window (`gui.rs`) and hardware H.264 encode
 (`encode_h264.rs`, needs `ffmpeg-next` + Intel/NVIDIA/AMD vendor SDKs that
 don't apply on Mac anyway — see `../uzakel-windows/HARDWARE_ENCODE_PLAN.md`).
-Without those, the crate already falls through to its cross-platform
-default: the console `--pin` path, `RawZstd` encode. That default should
-build and run on macOS *as-is*, from the existing crate — **this has not
-been verified**, see "Known gap" below.
+Without those, the crate falls through to its cross-platform default: the
+console `--pin` path, `RawZstd` encode.
+
+**Update, 2026-09-15 — verified on real Apple Silicon hardware (M4
+MacBook Air).** That default builds and runs there, and a full session —
+pairing, video (BacakOS decoding the Mac's actual screen), and input
+(BacakOS-side pointer movement landing on the Mac's real cursor) — was
+confirmed end-to-end. Getting there found and fixed two real bugs in the
+shared crate/its vendored `scrap` fork (not `#[cfg(windows)]`-gated, so
+they'd have hit any macOS build): `enigo`'s macOS backend isn't `Send`
+(broke `tokio::spawn`ing the input task), and `scrap`'s quartz capture
+derived the wrong per-row stride (produced a sheared/striped image). See
+`../uzakel-windows/README.md`'s "Real macOS end-to-end pass" section for
+the full writeup — both fixes live in that shared crate, not here.
 
 This directory exists for the macOS-only pieces that don't belong in that
 shared, cross-platform crate:
@@ -38,18 +48,18 @@ shared, cross-platform crate:
   is submitted, the same relationship the Windows GUI has with `run_session`
   — just out-of-process instead of in-process.
 
-## Known gap — nothing here has been built or run
+## Known gap — this directory's own pieces are still unverified
 
-There is no macOS machine and no working macOS cross-toolchain (osxcross)
-in this environment. `rustup target add aarch64-apple-darwin` succeeds
-(Rust ships precompiled `std` for it), but `cargo check --target
-aarch64-apple-darwin -p bacak-remote-server` from `uzakel-windows` already
-fails *before* reaching any of this crate's own code — `zstd-sys`'s C
-shim needs a real Apple `cc` (understands `-arch`/`-mmacosx-version-min`),
-and the Linux host's `cc` doesn't. So:
+The shared server crate is verified (see above). What's *not*:
 
-- Whether the shared `bacak-remote-server` crate actually builds clean for
-  macOS is **unverified**, not just "the GUI/packaging part."
+- `packaging/build_mac.sh` cross-compiles *from Linux* (`osxcross`), a
+  different path than the native `cargo build` that was actually run on
+  the real Mac to get the verification above — no osxcross toolchain
+  exists in this environment, so the script itself has still never run.
+  If a real Mac is available (as it was for the verification above),
+  building natively *on* it (no cross-compile, no osxcross) is simpler
+  and already known to work — reach for the script only if the goal is
+  specifically building from Linux/CI.
 - `gui-launcher/` does `cargo check --target aarch64-apple-darwin` /
   `--target x86_64-apple-darwin` clean (`objc2`/`objc2-app-kit` are pure
   Rust bindings — `check` needs no C compiler or Apple frameworks, just
@@ -57,9 +67,9 @@ and the Linux host's `cc` doesn't. So:
   type-checks, but its `main()` is a bare `todo!()`: nothing has been
   linked (needs the real frameworks) or run (needs a real Mac), so it's
   still a starting sketch, not working code.
-
-Whoever picks this up next, on a real Mac (or with osxcross set up
-properly): first get `cargo build --target
-<aarch64|x86_64>-apple-darwin -p bacak-remote-server` green from
-`uzakel-windows` with the console `--pin` path, *then* come back to this
-directory's packaging/GUI pieces.
+- Screen Recording (TCC) permission and its "doesn't carry over between
+  launch contexts" behavior (see the linked writeup) means `build_mac.sh`'s
+  own TODO about it is real and unresolved: a `.app` a user downloads and
+  double-clicks is yet another launch context, not obviously the same as
+  either the SSH or Terminal.app contexts tested so far — worth
+  re-verifying specifically once the `.app` bundling itself is real.
