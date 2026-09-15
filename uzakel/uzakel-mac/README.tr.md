@@ -50,28 +50,45 @@ parçalar için var:
   planlanıyor — Windows GUI'sinin `run_session` ile ilişkisiyle aynı,
   sadece süreç-içi değil süreç-dışı.
 
+## `packaging/build_mac.sh` — gerçek Mac'te doğrulandı, 2026-09-15
+
+Gerçek Mac'in *üzerinde* native çalıştırıldı (Linux'tan çapraz derleme
+değil — bu ortamda osxcross yok, o yol hâlâ doğrulanmadı; gerçek bir
+Mac'te doğrudan native derlemek zaten daha basit ve buna gerek yok).
+Her iki `cargo build --release --target {aarch64,x86_64}-apple-darwin`,
+`lipo -create` ile evrensel binary, ve `.app` paketi (doğru doldurulmuş
+`Info.plist` dahil) hepsi çalıştı — `lipo -info` sonuçta hem `x86_64`
+hem `arm64` dilimlerini doğruluyor.
+
+**Ama `.app` çift tıklandığında gerçekten çalışmıyor** (`open 'Bacak
+Remote Server.app'` ile simüle edildi: hiçbir süreç oluşmuyor). Kök
+sebep (henüz düzeltilmedi): çift tıklama `bacak-remote-server`'ı **hiç
+argümansız** başlatıyor, bu yüzden `main()` konsol `--pin` yoluna
+düşüyor, `prompt_pin()` `stdin` okumaya çalışıyor — ama Finder/`open`
+ile başlatılan bir uygulamanın okuyacağı bir `stdin`'i yok, bu yüzden
+anında başarısız oluyor ve görünür hiçbir şey olmadan çıkıyor (bağlı bir
+konsol da yok — Windows'un gerçek bir GUI'ye kavuşmadan önce
+`gui.rs`'in modül yorumunda anlattığı sorunun aynısı). Bu tam olarak
+`gui-launcher/`'ın doldurması gereken boşluk — o gerçek, linklenmiş,
+çalışan bir program olana kadar, bu script'in ürettiği `.app` çift
+tıklayarak kullanılamıyor, sadece bir terminalden `--pin <n> --no-gui`
+ile başlatılırsa çalışıyor (paylaşılan crate'in yukarıdaki kendi
+doğrulaması buna göre).
+
 ## Bilinen eksik — bu dizinin kendi parçaları hâlâ doğrulanmadı
 
-Paylaşılan sunucu crate'i doğrulandı (yukarıya bak). Doğrulanmayan:
-
-- `packaging/build_mac.sh` *Linux'tan* çapraz derliyor (`osxcross`) —
-  yukarıdaki doğrulamada gerçek Mac'te çalıştırılan native `cargo build`
-  ile farklı bir yol. Bu ortamda osxcross araç zinciri yok, script'in
-  kendisi hâlâ hiç çalışmadı. Gerçek bir Mac varsa (yukarıdaki doğrulamada
-  olduğu gibi), doğrudan onun üzerinde native derlemek (çapraz derleme
-  yok, osxcross yok) daha basit ve çalıştığı zaten biliniyor — script'e
-  sadece özellikle Linux/CI'dan derlemek hedefse başvur.
 - `gui-launcher/`, `cargo check --target aarch64-apple-darwin` /
   `--target x86_64-apple-darwin` ile temiz geçiyor (`objc2`/
   `objc2-app-kit` saf Rust bağlayıcıları — `check` için C derleyici ya da
   Apple framework'leri gerekmiyor, sadece hedefin `std`'si). Bu, kodun
   *şeklinin* tip kontrolünden geçtiğine dair gerçek bir sinyal, ama
   `main()` düz bir `todo!()` — hiçbir şey linklenmedi (gerçek
-  framework'ler gerekir) ya da çalıştırılmadı (gerçek bir Mac gerekir),
-  yani hâlâ başlangıç taslağı, çalışan kod değil.
+  framework'ler gerekir) ya da çalıştırılmadı (gerçek bir Mac gerekir).
+  Bunu inşa edip bağlamak artık çift-tıkla-çalışır bir `.app` için
+  varsayımsal bir "olsa iyi olur" değil, somut bir blokaj (yukarıya bak).
 - Ekran Kaydı (TCC) izninin "başlatma bağlamları arasında taşınmama"
   davranışı (bağlantılı yazıya bak) `build_mac.sh`'ın kendi TODO'sunu
-  gerçek ve çözülmemiş bırakıyor: bir kullanıcının indirip çift tıkladığı
-  bir `.app`, şimdiye kadar test edilen SSH ya da Terminal.app
-  bağlamlarından apaçık farklı, üçüncü bir başlatma bağlamı — `.app`
-  paketleme gerçek olduğunda özellikle yeniden doğrulanmaya değer.
+  gerçek ve çözülmemiş bırakıyor: `open`/Finder ile başlatma, şimdiye
+  kadar test edilen SSH ya da Terminal.app bağlamlarından apaçık farklı,
+  üçüncü bir başlatma bağlamı — `gui-launcher` `.app`'ın ekranı yakalamayı
+  gerçekten denemesine izin verdiğinde kontrol edilmeye değer.
