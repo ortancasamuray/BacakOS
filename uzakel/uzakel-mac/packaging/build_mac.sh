@@ -41,7 +41,9 @@ done
 
 rm -rf "$out_dir"
 bundle_dir="$out_dir/$app_name.app"
-mkdir -p "$bundle_dir/Contents/MacOS"
+mkdir -p "$bundle_dir/Contents/MacOS" "$bundle_dir/Contents/Resources"
+
+cp "$script_dir/app.icns" "$bundle_dir/Contents/Resources/app.icns"
 
 # TODO: verify `lipo` is actually available in whatever environment
 # finally runs this (it ships with Xcode Command Line Tools on real macOS;
@@ -85,8 +87,5 @@ codesign --sign - --deep --force "$bundle_dir"
 #   bundle (launcher process spawning the actual capturing process as a
 #   child) or whether the child needs its own entry too hasn't been
 #   checked against a real permission prompt yet.
-# - An actual app icon (.icns) — see ../../uzakel-windows/bacak-remote-server
-#   /resources/app.ico's sibling for the Windows equivalent; needs a
-#   macOS-appropriate design pass, not just format-converting that one.
 
 echo "Bundled and ad-hoc signed: $bundle_dir"
