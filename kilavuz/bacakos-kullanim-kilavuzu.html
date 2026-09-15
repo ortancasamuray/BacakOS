@@ -299,6 +299,7 @@
       <a href="#jestler">Fare &amp; Dokunmatik Jestler</a>
       <a href="#kontrol-merkezi">Kontrol Merkezi</a>
       <a href="#masaustu-ayarlari">Masaüstü Ayarları</a>
+      <a href="#uzak-masaustu">Uzak Masaüstü</a>
     </div>
     <div class="group">
       <div class="group-label">Uygulamalı</div>
@@ -512,8 +513,30 @@
       </div>
     </section>
 
+    <section id="uzak-masaustu">
+      <h2><span class="num">08</span> Uzak Masaüstü</h2>
+      <p class="lede">Kontrol Merkezi'ndeki "🖥 Uzak Masaüstü" döşemesinden açılır — bir Windows veya macOS bilgisayarın ekranını BacakOS panelinin içinde izleyip fare/dokunmatik ile kontrol edin.</p>
+
+      <h3>Karşı taraftaki bilgisayarda</h3>
+      <p>Kontrol edilecek Windows veya macOS bilgisayara <code>bacak-remote-server</code> kurulur ve çalıştırılır:</p>
+      <ul>
+        <li><strong>Windows:</strong> kurulum paketiyle (<code>.exe</code>) kurulur; masaüstü/Başlat Menüsü kısayolundan çift tıklanır, açılan pencerede BacakOS ekranında gösterilen PIN girilip "Eşleştir"e basılır. Uygun donanımda (Intel/NVIDIA/AMD) donanım hızlandırmalı H.264 kodlama otomatik denenir, yoksa yazılım koduna düşer.</li>
+        <li><strong>macOS:</strong> <code>.app</code> paketiyle kurulur; ilk açılışta Gatekeeper uygulamayı engeller — Sistem Ayarları → Gizlilik ve Güvenlik → aşağı kaydırıp "Yine de Aç"a basmak gerekir. Ardından aynı pencereden PIN girilir. macOS ayrıca ekran yakalama ve fare/dokunmatik kontrolü için <strong>Ekran Kaydı</strong> ve <strong>Erişilebilirlik</strong> izinlerini (Sistem Ayarları → Gizlilik ve Güvenlik) ayrı ayrı ister — her ikisi de verilmeden görüntü veya girdi çalışmaz.</li>
+      </ul>
+
+      <h3>BacakOS tarafında</h3>
+      <p>PIN, karşı tarafa girilmeden önce <strong>BacakOS'ta üretilir</strong> — panel açıldığı anda ekranda büyük şekilde gösterilir; operatör bu PIN'i okuyup karşı bilgisayardaki pencereye kendisi yazar. Panel, hangi bilgisayara bağlanacağını <code>~/.config/bacak-remote/pair.json</code> dosyasındaki IP adresinden öğrenir:</p>
+      <pre><code>{"ip": "192.168.1.42"}</code></pre>
+      <div class="note">
+        <strong>v1 sınırı:</strong> Bu IP adresi şu an elle düzenlenen bir yapılandırma dosyasından okunuyor — panelde ekrana IP yazmak için bir metin girişi henüz yok. Karşı bilgisayarın IP'si değiştiğinde bu dosyayı güncellemeniz gerekir; unutulursa panel sessizce eski adrese bağlanmaya çalışır ve "sunucu PIN'i reddetti" gibi kafa karıştırıcı bir hataya yol açar.
+      </div>
+
+      <h3>Kullanım</h3>
+      <p>Eşleşme tamamlanınca karşı bilgisayarın ekranı panelin içinde tam boyutta görünür; tek parmak/tek fare tıklaması gerçek bir dokunuşa/tıklamaya, sürükleme ise sürüklemeye dönüşür. Karşı taraftaki pencereden "Eşleşmeyi Bitir"e basılırsa (Windows/macOS) BacakOS panel otomatik kapanır — sizin bir şey yapmanız gerekmez.</p>
+    </section>
+
     <section id="dosya-yoneticisi">
-      <h2><span class="num">08</span> Dosya Yöneticisi — altay</h2>
+      <h2><span class="num">09</span> Dosya Yöneticisi — altay</h2>
       <p class="lede">Ev dizininizi ve bağlı sürücüleri gezmek için. Sistem dizinlerine erişimi kapalıdır (sandbox).</p>
 
       <h3>Arşivler</h3>
@@ -534,7 +557,7 @@
     </section>
 
     <section id="belge-goruntuleyici">
-      <h2><span class="num">09</span> Belge Görüntüleyici — bacak-belge</h2>
+      <h2><span class="num">10</span> Belge Görüntüleyici — bacak-belge</h2>
       <p class="lede">PDF, EPUB ve resim dosyaları için tek, birleşik görüntüleyici.</p>
       <ul>
         <li><strong>PDF:</strong> sayfa sayfa gezinme, %10–%800 arası yakınlaştırma.</li>
@@ -545,7 +568,7 @@
     </section>
 
     <section id="tahta">
-      <h2><span class="num">10</span> Dijital Tahta — tahta</h2>
+      <h2><span class="num">11</span> Dijital Tahta — tahta</h2>
       <p class="lede">
         Dokunmatik etkileşimli panellerde ders/sunum yapmak için tasarlanmış,
         wgpu tabanlı tam ekran çizim uygulaması. Açılır açılmaz tam ekrana
@@ -572,7 +595,7 @@
     </section>
 
     <section id="varsayilan-uygulamalar">
-      <h2><span class="num">11</span> Varsayılan Uygulamalar</h2>
+      <h2><span class="num">12</span> Varsayılan Uygulamalar</h2>
       <p class="lede">Dock'ta hazır sabitlenmiş gelen uygulamalar:</p>
       <div class="app-list">
         <div class="card"><span class="app-icon">A</span><div><h4>altay</h4><p>Dosya yöneticisi</p></div></div>
@@ -584,7 +607,7 @@
     </section>
 
     <section id="sorun-giderme">
-      <h2><span class="num">12</span> Sorun Giderme</h2>
+      <h2><span class="num">13</span> Sorun Giderme</h2>
 
       <h3>Açılışta ekran siyah kalıyor / sürekli yanıp sönen imleç</h3>
       <p>Ctrl+Alt+F2 ile bir metin konsoluna geçip <code>systemctl status bacak-display-manager</code> ve <code>journalctl -u bacak-display-manager</code> ile hata mesajına bakın. Genellikle giriş ekranı servisinin bir önceki oturumu düzgün kapatamamasından kaynaklanır; <code>sudo systemctl restart bacak-display-manager</code> çoğu zaman yeterlidir.</p>
