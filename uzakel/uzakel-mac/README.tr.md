@@ -38,17 +38,17 @@ parçalar için var:
 - `packaging/build_mac.sh` — paylaşılan sunucuyu `aarch64-apple-darwin`/
   `x86_64-apple-darwin` için çapraz derler ve minimal bir `.app` paketine
   koyar (iskelet/test edilmedi — script'in kendi başlığına bakın).
-- `gui-launcher/` — Windows crate'indeki `gui.rs`'in macOS karşılığı için
-  **bir iskelet, çalışan bir uygulama değil**. Paylaşılan sunucu crate'ine
-  `#[cfg(target_os = "macos")]` bir GUI modülü eklemek yerine *ayrı* küçük
-  bir binary olarak tasarlandı (Windows GUI'si `main.rs`/`run_session`
-  içine oldukça karmaşık şekilde örülmüş — bkz. `gui.rs`'in kendi modül
-  yorumu — ve burada henüz kimsenin derleyip test edemediği bir platform
-  için o örgüyü tekrarlamak, çalışan Windows yolunu incelikli şekilde
-  bozma riskine değmez). Bir PIN girildiğinde gerçek
-  `bacak-remote-server --pin <n> --no-gui`'yi çalıştırması/spawn etmesi
-  planlanıyor — Windows GUI'sinin `run_session` ile ilişkisiyle aynı,
-  sadece süreç-içi değil süreç-dışı.
+- `gui-launcher/` — Windows crate'indeki `gui.rs`'in macOS karşılığı olan
+  native bir eşleştirme penceresi, *ayrı* küçük bir binary olarak
+  (paylaşılan sunucu crate'ine `#[cfg(target_os = "macos")]` bir GUI
+  modülü eklemek yerine — Windows GUI'si `main.rs`/`run_session` içine
+  oldukça karmaşık şekilde örülmüş, bkz. `gui.rs`'in kendi modül yorumu,
+  ve o örgüyü tekrarlamak çalışan Windows yolunu incelikli şekilde bozma
+  riskine değmezdi). Bir PIN girildiğinde gerçek `bacak-remote-server
+  --pin <n> --no-gui`'yi süreç olarak çalıştırıyor — Windows GUI'sinin
+  `run_session` ile ilişkisiyle aynı, sadece süreç-içi değil süreç-dışı.
+  **Gerçek Mac'te inşa edildi, derlendi ve çalıştırıldı, 2026-09-15** —
+  aşağıya bak.
 
 ## `packaging/build_mac.sh` — gerçek Mac'te doğrulandı, 2026-09-15
 
@@ -75,20 +75,53 @@ tıklayarak kullanılamıyor, sadece bir terminalden `--pin <n> --no-gui`
 ile başlatılırsa çalışıyor (paylaşılan crate'in yukarıdaki kendi
 doğrulaması buna göre).
 
-## Bilinen eksik — bu dizinin kendi parçaları hâlâ doğrulanmadı
+## `gui-launcher/` — gerçek Mac'te inşa edildi, derlendi, çalıştırıldı, 2026-09-15
 
-- `gui-launcher/`, `cargo check --target aarch64-apple-darwin` /
-  `--target x86_64-apple-darwin` ile temiz geçiyor (`objc2`/
-  `objc2-app-kit` saf Rust bağlayıcıları — `check` için C derleyici ya da
-  Apple framework'leri gerekmiyor, sadece hedefin `std`'si). Bu, kodun
-  *şeklinin* tip kontrolünden geçtiğine dair gerçek bir sinyal, ama
-  `main()` düz bir `todo!()` — hiçbir şey linklenmedi (gerçek
-  framework'ler gerekir) ya da çalıştırılmadı (gerçek bir Mac gerekir).
-  Bunu inşa edip bağlamak artık çift-tıkla-çalışır bir `.app` için
-  varsayımsal bir "olsa iyi olur" değil, somut bir blokaj (yukarıya bak).
+`objc2`/`objc2-app-kit` 0.6/0.3, delegate nesnesi için (app delegate +
+pencere delegate + üç düğme aksiyonu) `define_class!` — `objc2`'nin kendi
+`hello_world_app.rs` örneğindeki desenle. Temiz derlendi (`cargo build
+--release`, derleyicinin işaretlediği bir avuç gereksiz `unsafe` bloğunu
+kaldırdıktan sonra sıfır uyarı) ve gerçek Mac'te `open` ile çalıştırıldı:
+
+- Pencere gerçekten görünüyor (başlık, PIN alanı, "Eşleştir"/
+  "Eşleşmeyi Bitir"/"Kapat" düğmeleri, durum etiketi) — Mac'in gerçek
+  ekranındaki kişi tarafından görsel olarak doğrulandı (bu ortam SSH
+  üzerinden ekran görüntüsü alamıyor, bu belgedeki her yerdeki aynı Ekran
+  Kaydı/TCC hikayesi).
+- PIN göndermek gerçek `bacak-remote-server --pin <n> --no-gui`'yi bir alt
+  süreç olarak başlatıyor (`find_server_binary()` önce kendi yanına bakıyor,
+  sonra test edilen geliştirme kopyası yoluna düşüyor) ve bu süreç
+  gerçekten BacakOS ile eşleşip video/girdi akıtıyor — tam oturum bu
+  launcher üzerinden uçtan uca doğrulandı, sadece çıplak bir terminal
+  çağrısıyla değil.
+- Yol boyunca gerçek bir tuzak (ama `gui-launcher`'ın hatası değil): daha
+  önceki manuel testten kalan eski bir `bacak-remote-server` süreci hâlâ
+  UDP portlarını tutuyordu, bu yüzden BacakOS'un `PairRequest`'i taze
+  başlatılan yerine *o* eski sürece (eski PIN'iyle) çarpıyordu — reddedilme
+  gibi görünüyordu, aslında bir port işgaliydi. Bunu tekrar test ederken
+  akılda tut: her denemeden önce `pkill -f bacak-remote-server` (ya da
+  tam yeniden başlatma), doğru görünen bir PIN reddedilirse.
+
+Henüz yapılmayan: gerçek eşleşme durumu için alt sürecin çıktısını takip
+etmek (bu dosyanın kendi modül yorumuna bak — henüz süreç sınırı boyunca
+bir kanal yok, bu yüzden pencere sadece "PIN gönderildi…" gösteriyor,
+"eşleşti"/"reddedildi" hiç değil), ve bunun inşa edilme amacı olan
+Finder'dan çift tıklama yolu (hâlâ `build_mac.sh`'ın `.app`'ına sunucuyla
+birlikte paketlenmesi gerekiyor — bu geçişte yapılmadı, launcher kendi
+`target/release/`'inden doğrudan çalıştırıldı).
+
+## Bilinen eksik
+
+- `build_mac.sh`'ın ürettiği `.app` hâlâ sadece `bacak-remote-server`
+  içeriyor, `gui-launcher` değil — Finder'dan çift tıklamak hâlâ yukarıda
+  anlatılan `prompt_pin()`/`stdin` yok hatasına düşüyor;
+  `gui-launcher` kendi başına bağımsız bir binary olarak doğrulandı, o
+  `.app` üzerinden değil. İki binary'yi birlikte paketlemek (ve
+  `gui-launcher`'ı paketlenmiş kardeşine yönlendirmek —
+  `find_server_binary()` zaten önce oraya bakıyor) gerçek bir çift-tıklama
+  deneyimi için kalan adım.
 - Ekran Kaydı (TCC) izninin "başlatma bağlamları arasında taşınmama"
-  davranışı (bağlantılı yazıya bak) `build_mac.sh`'ın kendi TODO'sunu
-  gerçek ve çözülmemiş bırakıyor: `open`/Finder ile başlatma, şimdiye
-  kadar test edilen SSH ya da Terminal.app bağlamlarından apaçık farklı,
-  üçüncü bir başlatma bağlamı — `gui-launcher` `.app`'ın ekranı yakalamayı
-  gerçekten denemesine izin verdiğinde kontrol edilmeye değer.
+  davranışı (bağlantılı yazıya bak) bir `open`/Finder ile başlatılan
+  `.app` için özellikle henüz yeniden kontrol edilmedi (sadece çıplak
+  binary'nin SSH'a karşı Terminal.app başlatmaları için kontrol edildi)
+  — yukarıdaki paketleme yapıldığında kontrol edilmeye değer.

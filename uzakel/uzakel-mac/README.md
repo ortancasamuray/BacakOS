@@ -36,17 +36,18 @@ shared, cross-platform crate:
 - `packaging/build_mac.sh` — cross-compiles the shared server for
   `aarch64-apple-darwin`/`x86_64-apple-darwin` and bundles it into a minimal
   `.app` (skeleton/untested — see the script's own header).
-- `gui-launcher/` — a **skeleton, not a working implementation** for a
-  native macOS pairing window equivalent to the Windows crate's `gui.rs`,
-  built as a *separate* small binary rather than by adding a
-  `#[cfg(target_os = "macos")]` GUI module to the shared server crate (the
-  Windows GUI is already threaded through `main.rs`/`run_session` in a
-  fairly involved way — see `gui.rs`'s own module doc — and duplicating
-  that wiring for a platform nobody can build or test here yet isn't worth
-  the risk of subtly breaking the working Windows path). It's meant to
-  `exec`/spawn the real `bacak-remote-server --pin <n> --no-gui` once a PIN
-  is submitted, the same relationship the Windows GUI has with `run_session`
-  — just out-of-process instead of in-process.
+- `gui-launcher/` — a native macOS pairing window equivalent to the
+  Windows crate's `gui.rs`, built as a *separate* small binary rather than
+  by adding a `#[cfg(target_os = "macos")]` GUI module to the shared
+  server crate (the Windows GUI is already threaded through
+  `main.rs`/`run_session` in a fairly involved way — see `gui.rs`'s own
+  module doc — and duplicating that wiring risked subtly breaking the
+  working Windows path for no real benefit). It spawns the real
+  `bacak-remote-server --pin <n> --no-gui` as a subprocess once a PIN is
+  submitted, the same relationship the Windows GUI has with
+  `run_session` — just out-of-process instead of in-process. **Built,
+  compiled, and run successfully on the real Mac, 2026-09-15** — see
+  below.
 
 ## `packaging/build_mac.sh` — verified on the real Mac, 2026-09-15
 
@@ -73,20 +74,53 @@ double-click-usable, only useful launched with `--pin <n> --no-gui`
 from a terminal (which does work — see the shared crate's own
 verification above).
 
-## Known gap — this directory's own pieces are still unverified
+## `gui-launcher/` — built, compiled, and run on the real Mac, 2026-09-15
 
-- `gui-launcher/` does `cargo check --target aarch64-apple-darwin` /
-  `--target x86_64-apple-darwin` clean (`objc2`/`objc2-app-kit` are pure
-  Rust bindings — `check` needs no C compiler or Apple frameworks, just
-  the target's `std`). That's real signal the *shape* of the code
-  type-checks, but its `main()` is a bare `todo!()`: nothing has been
-  linked (needs the real frameworks) or run (needs a real Mac). Building
-  and wiring this in is now the concrete blocker for a double-click-
-  usable `.app` (see directly above), not a hypothetical nice-to-have.
+`objc2`/`objc2-app-kit` 0.6/0.3, `define_class!` for the delegate object
+(app delegate + window delegate + the three button actions), following
+the pattern in `objc2`'s own `hello_world_app.rs` example. Compiled clean
+(`cargo build --release`, zero warnings after removing a handful of
+now-unneeded `unsafe` blocks the compiler flagged) and run via `open` on
+the real Mac:
+
+- The window renders (title, PIN field, "Eşleştir"/"Eşleşmeyi Bitir"/
+  "Kapat" buttons, status label) — confirmed visually by the person at
+  the Mac's actual screen (this environment can't screenshot over SSH,
+  same Screen Recording/TCC story as everywhere else in this doc).
+- Submitting a PIN spawns the real `bacak-remote-server --pin <n>
+  --no-gui` as a child process (`find_server_binary()` looks next to
+  itself first, then falls back to the dev-checkout path this was tested
+  against) and it genuinely pairs with BacakOS and streams video/input —
+  full session confirmed end-to-end through this launcher, not just
+  through a bare terminal invocation.
+- One real snag along the way, not a `gui-launcher` bug: a stale
+  `bacak-remote-server` process from earlier manual testing was still
+  holding the UDP ports, so BacakOS's `PairRequest` kept hitting *that*
+  process (with its old PIN) instead of the freshly-spawned one — looked
+  like a rejection, was actually a port squatter. Worth remembering when
+  testing this repeatedly: `pkill -f bacak-remote-server` (or a full
+  reboot) before each attempt if pairing rejects a PIN that looks right.
+
+Not yet done: tailing the child's output for real pairing status (see
+this file's own module doc for why — no channel across a process
+boundary yet, so the window only ever shows "PIN gönderildi…", never
+"eşleşti"/"reddedildi"), and the double-click-from-Finder path this was
+built to enable (still needs bundling *into* `build_mac.sh`'s `.app`
+alongside the server — not done in this pass, which ran the launcher
+directly from its own `target/release/`).
+
+## Known gap
+
+- The `.app` `build_mac.sh` produces still only contains
+  `bacak-remote-server`, not `gui-launcher` — double-clicking it from
+  Finder is therefore still the `prompt_pin()`/no-`stdin` failure
+  described above; `gui-launcher` was verified as its own standalone
+  binary, launched directly, not through that `.app`. Bundling both
+  binaries together (and pointing `gui-launcher` at its bundled sibling
+  — `find_server_binary()` already looks there first) is the remaining
+  step for a real double-click experience.
 - Screen Recording (TCC) permission and its "doesn't carry over between
-  launch contexts" behavior (see the linked writeup) means `build_mac.sh`'s
-  own TODO about it is real and unresolved: a launch via `open`/Finder is
-  yet another launch context, not obviously the same as the SSH or
-  Terminal.app contexts already tested — worth checking once
-  `gui-launcher` makes the `.app` actually reach the point of trying to
-  capture the screen at all.
+  launch contexts" behavior (see the linked writeup) hasn't been
+  re-checked for an `open`/Finder-launched `.app` specifically (only for
+  bare-binary SSH vs. Terminal.app launches) — worth checking once the
+  bundling above is done.
