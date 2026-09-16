@@ -19,7 +19,6 @@ Resmi site: [www.anadolupanteri.org.tr](https://www.anadolupanteri.org.tr)
 | [`tahta/`](tahta) | GPU hızlandırmalı dijital tahta motoru |
 | [`kur/`](kur) | Sistem yükleyici |
 | [`uzakel/`](uzakel) | Uzak masaüstü: Android/Windows/macOS istemcileri ve BacakOS tarafındaki daemon |
-| [`Buildeba/`](Buildeba) | Kurulabilir ISO'yu üretmek için kullanılan live-build yapılandırması |
 | [`kilavuz/`](kilavuz) | Kullanım kılavuzu (HTML) |
 
 Her bileşen dizininin kendi README'i, derleme ve mimari detaylarını içerir.
@@ -31,13 +30,6 @@ Tüm bileşenler için `.deb` paketlerini derle:
 ```bash
 sudo bash setup-deps.sh   # bir kez: derleme + çalışma zamanı bağımlılıkları
 bash build-debs.sh        # dist/*.deb üretir
-```
-
-Kurulabilir ISO'yu derle (root gerektirir, `dist/*.deb`'i
-`Buildeba/config/packages.chroot` üzerinden kullanır):
-
-```bash
-sudo ./Buildeba/APbuild iso
 ```
 
 ## Lisans
