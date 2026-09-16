@@ -1,0 +1,41 @@
+# Bacak Display Manager (BDM) — Cargo workspace
+#
+# The workspace is split so that the privilege-free, dependency-light core
+# (`bacak-common`) builds and tests on any machine, while the crates that link
+# against system libraries (PAM, libsystemd, Wayland) live in their own crates
+# and can be built where those `-dev` packages are installed.
+[workspace]
+resolver = "2"
+members = [
+    "crates/bacak-common",
+    "crates/bacak-pam",
+    "crates/bacak-display-manager",
+    "crates/bacak-greeter",
+    "crates/bacak-session-launcher",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "GPL-3.0-or-later"
+authors = ["Bacak Desktop Project"]
+repository = "https://example.org/bacak/bacak-display-manager"
+
+[workspace.dependencies]
+bacak-common = { path = "crates/bacak-common" }
+bacak-pam = { path = "crates/bacak-pam" }
+
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+thiserror = "1"
+log = "0.4"
+env_logger = "0.11"
+nix = { version = "0.29", features = ["user", "process", "fs", "signal"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

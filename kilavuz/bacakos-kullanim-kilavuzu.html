@@ -1,0 +1,943 @@
+<title>BacakOS Kullanım Kılavuzu</title>
+<style>
+  :root {
+    --bg: #f6f5f2;
+    --bg-raised: #ffffff;
+    --bg-sunken: #edece7;
+    --ink: #1c1e21;
+    --muted: #6b6f76;
+    --line: #e1dfd8;
+    --accent: #3b82f6;
+    --accent-ink: #0b3e91;
+    --accent-soft: #e8f0fe;
+    --kbd-bg: #ffffff;
+    --kbd-border: #d3d1c9;
+    --kbd-shadow: #c9c7bd;
+    --shadow: 0 16px 40px -18px rgba(20,20,25,.28);
+    --display: "Manrope", "Segoe UI", system-ui, sans-serif;
+    --body-font: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0d0f12;
+      --bg-raised: #16181c;
+      --bg-sunken: #101216;
+      --ink: #e7e9ec;
+      --muted: #969ba3;
+      --line: #262a30;
+      --accent-ink: #bcd6ff;
+      --accent-soft: #16233a;
+      --kbd-bg: #1c1f24;
+      --kbd-border: #33383f;
+      --kbd-shadow: #050607;
+      --shadow: 0 16px 40px -18px rgba(0,0,0,.6);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0d0f12;
+    --bg-raised: #16181c;
+    --bg-sunken: #101216;
+    --ink: #e7e9ec;
+    --muted: #969ba3;
+    --line: #262a30;
+    --accent-ink: #bcd6ff;
+    --accent-soft: #16233a;
+    --kbd-bg: #1c1f24;
+    --kbd-border: #33383f;
+    --kbd-shadow: #050607;
+    --shadow: 0 16px 40px -18px rgba(0,0,0,.6);
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--body-font);
+    font-size: 15.5px;
+    line-height: 1.65;
+  }
+  a { color: var(--accent-ink); }
+
+  .shell {
+    display: grid;
+    grid-template-columns: 264px minmax(0,1fr);
+    max-width: 1180px;
+    margin: 0 auto;
+    min-height: 100vh;
+  }
+  @media (max-width: 880px) {
+    .shell { grid-template-columns: 1fr; }
+    nav.toc { display: none; }
+  }
+
+  nav.toc {
+    position: sticky;
+    top: 0;
+    align-self: start;
+    height: 100vh;
+    overflow-y: auto;
+    padding: 34px 22px 34px 28px;
+    border-right: 1px solid var(--line);
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .brand .mark {
+    width: 30px; height: 30px;
+    background: var(--accent);
+    -webkit-mask: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/></svg>') center/contain no-repeat;
+    mask: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/></svg>') center/contain no-repeat;
+    border-radius: 8px;
+  }
+  .brand .name { font-family: var(--display); font-weight: 800; font-size: 16.5px; letter-spacing: -0.01em; }
+  .brand .sub { font-family: var(--mono); font-size: 10.5px; color: var(--muted); letter-spacing: 0.06em; }
+
+  nav.toc .group { display: flex; flex-direction: column; gap: 2px; }
+  nav.toc .group-label {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.09em; text-transform: uppercase;
+    color: var(--muted); padding: 10px 10px 6px;
+  }
+  nav.toc a {
+    text-decoration: none; color: var(--ink); font-size: 13.6px; font-weight: 500;
+    padding: 7px 10px; border-radius: 7px; opacity: 0.82;
+  }
+  nav.toc a:hover { background: var(--bg-sunken); opacity: 1; }
+
+  main { padding: 40px clamp(20px, 4vw, 56px) 90px; min-width: 0; }
+
+  header.hero {
+    display: flex; flex-direction: column; gap: 12px;
+    padding-bottom: 30px; margin-bottom: 34px; border-bottom: 1px solid var(--line);
+  }
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0.13em; text-transform: uppercase;
+    color: var(--accent); font-weight: 500;
+  }
+  h1 {
+    font-family: var(--display); font-weight: 800; font-size: clamp(30px, 4vw, 42px);
+    letter-spacing: -0.02em; margin: 0; text-wrap: balance;
+  }
+  .hero p { max-width: 68ch; color: var(--muted); font-size: 16px; margin: 0; }
+  .hero-meta { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 4px; }
+  .hero-meta .chip {
+    font-family: var(--mono); font-size: 11.5px; color: var(--muted);
+    border: 1px solid var(--line); border-radius: 999px; padding: 5px 12px;
+  }
+
+  section { margin-bottom: 56px; scroll-margin-top: 24px; }
+  section h2 {
+    font-family: var(--display); font-weight: 800; font-size: 23px; letter-spacing: -0.01em;
+    margin: 0 0 6px; display: flex; align-items: baseline; gap: 10px;
+  }
+  section h2 .num { font-family: var(--mono); font-size: 13px; color: var(--accent); font-weight: 600; }
+  section > .lede { color: var(--muted); margin: 0 0 22px; max-width: 72ch; }
+  h3 {
+    font-family: var(--display); font-weight: 700; font-size: 15.5px; letter-spacing: -0.005em;
+    margin: 26px 0 10px;
+  }
+  p { margin: 0 0 14px; max-width: 72ch; }
+  ul, ol { margin: 0 0 14px; padding-left: 22px; max-width: 70ch; }
+  li { margin-bottom: 6px; }
+
+  kbd {
+    font-family: var(--mono); font-size: 12px; background: var(--kbd-bg);
+    border: 1px solid var(--kbd-border); border-bottom: 2px solid var(--kbd-shadow);
+    border-radius: 6px; padding: 2px 7px; white-space: nowrap;
+  }
+
+  .card {
+    background: var(--bg-raised); border: 1px solid var(--line); border-radius: 12px;
+    padding: 18px 20px; margin-bottom: 14px;
+  }
+  .card h4 {
+    font-family: var(--display); font-size: 14px; font-weight: 700; margin: 0 0 6px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .card p { margin: 0; color: var(--muted); font-size: 14px; }
+  .card-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 620px) { .card-grid { grid-template-columns: 1fr; } }
+
+  table.kv { width: 100%; border-collapse: collapse; margin: 0 0 18px; font-size: 14px; }
+  table.kv th {
+    text-align: left; font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--muted); font-weight: 500;
+    padding: 0 12px 8px 0; border-bottom: 1px solid var(--line);
+  }
+  table.kv td { padding: 10px 12px 10px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  table.kv tr:last-child td { border-bottom: none; }
+  table.kv td.k { white-space: nowrap; width: 1%; }
+  table.kv td.d { color: var(--muted); }
+
+  ol.steps { list-style: none; padding: 0; margin: 0 0 18px; counter-reset: step; }
+  ol.steps > li {
+    counter-increment: step; position: relative; padding: 4px 0 4px 40px; margin-bottom: 16px;
+  }
+  ol.steps > li::before {
+    content: counter(step);
+    position: absolute; left: 0; top: 2px;
+    width: 26px; height: 26px; border-radius: 50%;
+    background: var(--accent-soft); color: var(--accent-ink);
+    font-family: var(--mono); font-weight: 600; font-size: 12.5px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  ol.steps > li strong { display: block; font-family: var(--display); font-size: 14.5px; margin-bottom: 3px; }
+  ol.steps > li p, ol.steps > li ul { margin: 0; color: var(--muted); font-size: 14px; }
+
+  .note {
+    border-left: 3px solid var(--accent); background: var(--accent-soft);
+    border-radius: 0 10px 10px 0; padding: 12px 16px; margin: 0 0 18px;
+    font-size: 13.8px; color: var(--ink);
+  }
+  .note strong { color: var(--accent-ink); }
+
+  .app-list { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+  @media (max-width: 620px) { .app-list { grid-template-columns: 1fr; } }
+  .app-list .card { display: flex; gap: 12px; align-items: flex-start; }
+  .app-icon {
+    flex: none; width: 34px; height: 34px; border-radius: 9px;
+    background: var(--accent-soft); color: var(--accent-ink);
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--display); font-weight: 800; font-size: 14px;
+  }
+
+  .demo-frame {
+    border-radius: 16px;
+    padding: 12px;
+    background: linear-gradient(180deg, #1c1f24, #101215);
+    box-shadow: var(--shadow);
+    margin-bottom: 14px;
+  }
+  .demo-frame canvas {
+    display: block;
+    width: 100%;
+    height: auto;
+    border-radius: 8px;
+    background: #05070a;
+  }
+  .demo-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 10px;
+  }
+  .demo-btn {
+    font-family: var(--body-font);
+    font-weight: 600;
+    font-size: 13.5px;
+    color: var(--ink);
+    background: var(--bg-raised);
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    padding: 9px 16px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .demo-btn:hover { border-color: var(--accent); }
+  .demo-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .demo-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .demo-btn.primary:hover { filter: brightness(1.06); }
+  .demo-btn:disabled { opacity: 0.5; cursor: default; }
+  .rec-dot {
+    width: 9px; height: 9px; border-radius: 50%; background: #ef4444;
+    animation: recpulse 1s ease-in-out infinite;
+  }
+  @keyframes recpulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+  .demo-status {
+    font-family: var(--mono); font-size: 12.5px; color: var(--muted); min-height: 18px;
+  }
+  .phase-legend {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 6px;
+  }
+  @media (max-width: 720px) { .phase-legend { grid-template-columns: repeat(2, 1fr); } }
+  .phase-legend .step {
+    font-size: 12.5px; color: var(--muted); border-left: 2px solid var(--line); padding-left: 10px;
+    transition: border-color .2s, color .2s;
+  }
+  .phase-legend .step.active { border-color: var(--accent); color: var(--ink); }
+  .phase-legend .step b { display: block; color: inherit; font-family: var(--display); font-size: 12.5px; }
+
+  footer {
+    border-top: 1px solid var(--line); padding-top: 20px; margin-top: 40px;
+    font-family: var(--mono); font-size: 11.5px; color: var(--muted);
+    display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px;
+  }
+</style>
+
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+
+<div class="shell">
+  <nav class="toc">
+    <div class="brand">
+      <span class="mark" aria-hidden="true"></span>
+      <div>
+        <div class="name">BacakOS</div>
+        <div class="sub">KULLANIM KILAVUZU</div>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="group-label">Başlarken</div>
+      <a href="#genel-bakis">Genel Bakış</a>
+      <a href="#kurulum">Kurulum</a>
+      <a href="#ilk-acilis">İlk Açılış &amp; Giriş Ekranı</a>
+    </div>
+    <div class="group">
+      <div class="group-label">Masaüstü</div>
+      <a href="#masaustu-temelleri">Masaüstü Temelleri</a>
+      <a href="#klavye-kisayollari">Klavye Kısayolları</a>
+      <a href="#jestler">Fare &amp; Dokunmatik Jestler</a>
+      <a href="#kontrol-merkezi">Kontrol Merkezi</a>
+      <a href="#masaustu-ayarlari">Masaüstü Ayarları</a>
+      <a href="#uzak-masaustu">Uzak Masaüstü</a>
+    </div>
+    <div class="group">
+      <div class="group-label">Uygulamalı</div>
+      <a href="#etkilesimli-senaryo">Jest Senaryosu (canlı demo)</a>
+    </div>
+    <div class="group">
+      <div class="group-label">Uygulamalar</div>
+      <a href="#dosya-yoneticisi">Dosya Yöneticisi — altay</a>
+      <a href="#belge-goruntuleyici">Belge Görüntüleyici</a>
+      <a href="#tahta">Dijital Tahta — tahta</a>
+      <a href="#varsayilan-uygulamalar">Varsayılan Uygulamalar</a>
+    </div>
+    <div class="group">
+      <div class="group-label">Yardım</div>
+      <a href="#sorun-giderme">Sorun Giderme</a>
+    </div>
+  </nav>
+
+  <main>
+    <header class="hero" id="genel-bakis">
+      <span class="eyebrow">Sürüm 0.1 &middot; Debian 13 (Trixie) tabanlı</span>
+      <h1>BacakOS Kullanım Kılavuzu</h1>
+      <p>
+        BacakOS, sıfırdan yazılmış bir Wayland masaüstü ortamıdır — Smithay
+        tabanlı kendi bileşicisi (compositor), kendi giriş ekranı, kendi
+        dosya yöneticisi ve kendi belge görüntüleyicisiyle gelir. Wi-Fi,
+        Bluetooth, ses ve masaüstü ayarları için ayrı uygulamalar yerine,
+        hepsi doğrudan masaüstünün içine gömülüdür.
+      </p>
+      <div class="hero-meta">
+        <span class="chip">Smithay / Wayland</span>
+        <span class="chip">Slint arayüz</span>
+        <span class="chip">Rust</span>
+      </div>
+    </header>
+
+    <section id="kurulum">
+      <h2><span class="num">01</span> Kurulum</h2>
+      <p class="lede">BacakOS, canlı ortamdan <strong>kur</strong> adlı grafik yükleyiciyle kurulur. Sihirbaz beş adımdan oluşur.</p>
+
+      <ol class="steps">
+        <li>
+          <strong>Dil ve Klavye</strong>
+          <p>Sistem dilini ve klavye düzenini seçersiniz.</p>
+        </li>
+        <li>
+          <strong>Saat Dilimi</strong>
+          <p>Haritadan veya listeden saat diliminizi seçersiniz.</p>
+        </li>
+        <li>
+          <strong>Disk Bölümleme</strong>
+          <p>Kurulum yapılacak diski seçersiniz (canlı ortamın kendi USB/DVD'si listeden hariç tutulur). İki mod vardır:</p>
+          <ul>
+            <li><strong>Otomatik:</strong> seçilen diskin tamamı silinir; GPT tablo, EFI sistem bölümü ve ext4 kök bölümü otomatik oluşturulur.</li>
+            <li><strong>Elle:</strong> var olan bölümlere rol atayabilir, gerekirse bölüm silip yenisini oluşturabilirsiniz — hangi bölümlerin biçimleneceğini tek tek işaretlersiniz.</li>
+          </ul>
+        </li>
+        <li>
+          <strong>Kullanıcı ve Sistem</strong>
+          <p>Bilgisayar adı, kullanıcı adı ve parola (canlı güç göstergesiyle) girilir. "Root parolası kullanıcı parolasıyla aynı olsun" seçeneği isteğe bağlıdır.</p>
+        </li>
+        <li>
+          <strong>Özet &rarr; Kuruluyor &rarr; Tamamlandı</strong>
+          <p>Seçimleriniz özetlenir; onayladıktan sonra ilerleme çubuğu ve aşama etiketiyle kurulum başlar. Bitince yeniden başlatma istenir.</p>
+        </li>
+      </ol>
+
+      <div class="note">
+        <strong>Not:</strong> Otomatik bölümleme seçili diskin <em>tamamını</em> siler. Diskte başka bir işletim sistemi veya veri varsa Elle mod ile mevcut bölümleri koruyun.
+      </div>
+    </section>
+
+    <section id="ilk-acilis">
+      <h2><span class="num">02</span> İlk Açılış &amp; Giriş Ekranı</h2>
+      <p class="lede">Açılışta koyu temalı, akışkan bir giriş ekranı karşılar — bu ekranı <strong>BDM</strong> (Bacak Display Manager) yönetir.</p>
+      <ul>
+        <li>Kullanıcı listesinden hesabınızı seçip parolanızı yazarsınız; son kullanılan kullanıcı ve oturum hatırlanır.</li>
+        <li>Sağ alttaki oturum seçicisinden farklı bir masaüstü oturumu seçebilirsiniz (varsayılan: <strong>bacak</strong>).</li>
+        <li>Güç düğmesinden kapat / yeniden başlat / uyku seçenekleri sunulur.</li>
+        <li>Erişilebilirlik: ekran ölçeği büyütme, büyük yazı tipi ve yüksek kontrast; dokunmatik ekranlarda ekran klavyesi alan odaklanınca otomatik açılır.</li>
+      </ul>
+    </section>
+
+    <section id="masaustu-temelleri">
+      <h2><span class="num">03</span> Masaüstü Temelleri</h2>
+
+      <h3>Dock (uygulama çubuğu)</h3>
+      <p>
+        Ekranın altında sabitlenmiş uygulamaları ve açık pencereleri gösteren bir çubuktur.
+        Boş masaüstünde <kbd>Super</kbd> tuşuna kısaca basıp bırakmak dock'u açar/kapatır.
+      </p>
+      <ul>
+        <li>Bir uygulamayı sabitlemek/çıkarmak veya kapatmak için simgesine sağ tıklayın.</li>
+        <li>Sabitlenmiş bir simgeyi sürükleyerek sırasını değiştirebilir, çubuğun dışına sürükleyip bırakarak sabitlemeden çıkarabilirsiniz.</li>
+      </ul>
+
+      <h3>Pencere yerleştirme (snapping)</h3>
+      <p>Bir pencereyi başlık çubuğundan tutup ekran kenarına sürükleyin:</p>
+      <table class="kv">
+        <tr><th>Bırakılan yer</th><th>Sonuç</th></tr>
+        <tr><td class="k">Üst kenar</td><td class="d">Pencereyi tam ekran yapar</td></tr>
+        <tr><td class="k">Alt kenar</td><td class="d">Ekranın alt yarısına yerleştirir</td></tr>
+        <tr><td class="k">Sol / Sağ kenar</td><td class="d">Ekranın o yarısına yerleştirir</td></tr>
+        <tr><td class="k">Bir köşe</td><td class="d">Ekranın o çeyreğine yerleştirir</td></tr>
+      </table>
+
+      <h3>Çalışma alanları (workspaces)</h3>
+      <p>
+        10 çalışma alanı arasında <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>←/→</kbd> ile sırayla,
+        veya <kbd>Super</kbd>+<kbd>1-9,0</kbd> ile doğrudan numarayla geçebilirsiniz.
+        Dokunmatikte üç parmakla yatay kaydırma aynı işi yapar.
+      </p>
+    </section>
+
+    <section id="klavye-kisayollari">
+      <h2><span class="num">04</span> Klavye Kısayolları</h2>
+      <table class="kv">
+        <tr><th>Kısayol</th><th>İşlev</th></tr>
+        <tr><td class="k"><kbd>Super</kbd> <span style="color:var(--muted);font-size:12px">(tek başına, kısa basış)</span></td><td class="d">Dock'u aç/kapat</td></tr>
+        <tr><td class="k"><kbd>Alt</kbd>+<kbd>Tab</kbd></td><td class="d">Pencereler arası geçiş (basılı tutup <kbd>Tab</kbd>'a tekrar basarak ilerleyin)</td></tr>
+        <tr><td class="k"><kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>Tab</kbd></td><td class="d">Pencereler arası ters yönde geçiş</td></tr>
+        <tr><td class="k"><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>←</kbd> / <kbd>→</kbd></td><td class="d">Önceki / sonraki çalışma alanı</td></tr>
+        <tr><td class="k"><kbd>Super</kbd>+<kbd>1</kbd>…<kbd>9</kbd>,<kbd>0</kbd></td><td class="d">1–10 numaralı çalışma alanına geç</td></tr>
+        <tr><td class="k"><kbd>Super</kbd>+<kbd>Shift</kbd>+<kbd>1</kbd>…<kbd>9</kbd>,<kbd>0</kbd></td><td class="d">Etkin pencereyi o çalışma alanına taşı</td></tr>
+        <tr><td class="k"><kbd>Super</kbd>+<kbd>Alt</kbd>+<kbd>1</kbd>…<kbd>9</kbd>,<kbd>0</kbd></td><td class="d">Dock'taki o sıradaki uygulamayı başlat/aktifleştir</td></tr>
+        <tr><td class="k"><kbd>Super</kbd>+<kbd>H</kbd></td><td class="d">İmlecin altındaki pencereyi küçült (boş masaüstündeyse en son küçültüleni geri getirir)</td></tr>
+        <tr><td class="k"><kbd>PrintScreen</kbd></td><td class="d">Tüm ekranın görüntüsünü al, <em>Resimler</em> klasörüne kaydet</td></tr>
+        <tr><td class="k"><kbd>Shift</kbd>+<kbd>PrintScreen</kbd></td><td class="d">Fare ile bölge seçerek ekran görüntüsü al</td></tr>
+        <tr><td class="k"><kbd>Alt</kbd>+<kbd>PrintScreen</kbd></td><td class="d">Tıklanan tek bir pencerenin görüntüsünü al</td></tr>
+        <tr><td class="k"><kbd>Esc</kbd></td><td class="d">Açık menüyü/paneli kapatır veya Alt-Tab geçişini iptal eder</td></tr>
+      </table>
+    </section>
+
+    <section id="jestler">
+      <h2><span class="num">05</span> Fare &amp; Dokunmatik Jestler</h2>
+
+      <h3>Fare</h3>
+      <div class="card">
+        <h4>Terminal açma jesti</h4>
+        <p>Sol ve sağ fare tuşlarına aynı anda basıp bırakın, 400 ms içinde bunu bir kez daha tekrarlayın — varsayılan terminal açılır. Elleriniz klavyeden uzakken hızlı bir terminal açma yoludur.</p>
+      </div>
+
+      <h3>Dokunmatik ekran / touchpad</h3>
+      <div class="card-grid">
+        <div class="card"><h4>1 parmak, çift dokunma</h4><p>Kelime seçer (üçlü dokunma: paragraf seçer)</p></div>
+        <div class="card"><h4>1 parmak, basılı tut (~0.5 sn)</h4><p>Seçim menüsünü açar</p></div>
+        <div class="card"><h4>2 parmak sürükleme</h4><p>Pencereyi taşır</p></div>
+        <div class="card"><h4>2 parmak çift dokunma</h4><p>Pencereyi tam ekran yapar / eski haline döndürür</p></div>
+        <div class="card"><h4>2 parmak, art arda 4 hızlı dokunma</h4><p>Terminal açar (fare jestinin dokunmatik karşılığı)</p></div>
+        <div class="card"><h4>3 parmak yatay kaydırma</h4><p>Önceki/sonraki çalışma alanına geçer</p></div>
+        <div class="card"><h4>3 parmak yukarı kaydırma</h4><p>Son kullanılan uygulamalar görünümünü açar</p></div>
+        <div class="card"><h4>Sıkıştırma (pinch)</h4><p>Uygulamaya iletilir — desteklenen uygulamalarda yakınlaştırır (ör. altay, bacak-belge)</p></div>
+      </div>
+    </section>
+
+    <section id="etkilesimli-senaryo">
+      <h2><span class="num">★</span> Jest Senaryosu — canlı demo</h2>
+      <p class="lede">
+        Yukarıdaki dört dokunmatik jestin gerçek bir masaüstünde art arda nasıl
+        göründüğünü gösteren küçük bir canlandırma. İsterseniz bu canlandırmayı
+        video olarak kaydedip indirebilirsiniz.
+      </p>
+
+      <div class="demo-frame">
+        <canvas id="gestureCanvas" width="960" height="540" role="img"
+          aria-label="Dokunmatik jestleri sırayla gösteren canlandırma: tek parmak sürükleme, iki parmak çift dokunma, üç parmak kaydırma, iki parmakla dört hızlı dokunuş"></canvas>
+      </div>
+
+      <div class="demo-controls">
+        <button class="demo-btn" id="toggleBtn" type="button">Duraklat</button>
+        <button class="demo-btn primary" id="recordBtn" type="button">Videoyu kaydet ve indir</button>
+        <span class="demo-status" id="demoStatus"></span>
+      </div>
+
+      <div class="phase-legend" id="phaseLegend">
+        <div class="step" data-phase="0"><b>1 &middot; Sürükle</b>Tek parmak → pencereyi taşı</div>
+        <div class="step" data-phase="1"><b>2 &middot; Çift dokun</b>İki parmak → tam ekran</div>
+        <div class="step" data-phase="2"><b>3 &middot; Kaydır</b>Üç parmak → çalışma alanı</div>
+        <div class="step" data-phase="3"><b>4 &middot; Hızlı dokun</b>İki parmak × 4 → terminal</div>
+      </div>
+    </section>
+
+    <section id="kontrol-merkezi">
+      <h2><span class="num">06</span> Kontrol Merkezi</h2>
+      <p class="lede">Dock üzerindeki dişli simgesinden açılan hızlı ayarlar paneli.</p>
+      <ul>
+        <li><strong>Saat / tarih:</strong> panelin üst kısmında "SS:DD · Gün, GG Ay" biçiminde, Türkçe gün ve ay adlarıyla gösterilir.</li>
+        <li><strong>Wi-Fi:</strong> aç/kapat anahtarı + ağ listesi; şifre girme, statik IP/DHCP ayarı, otomatik yeniden bağlanma, MAC/IPv4/IPv6 bilgisi.</li>
+        <li><strong>Bluetooth:</strong> aç/kapat anahtarı (cihaz eşleştirme ve dosya gönderme için genişletilmiş panel).</li>
+        <li><strong>Kablolu ağ:</strong> bağlantıyı aç/kapat, DHCP veya statik IP.</li>
+        <li><strong>Ses:</strong> çıkış seviyesi kaydırıcısı + çıkış cihazı seçimi, mikrofon seviyesi + giriş cihazı seçimi.</li>
+        <li><strong>Parlaklık</strong> kaydırıcısı.</li>
+        <li><strong>Koyu mod</strong> anahtarı.</li>
+        <li>Ekran görüntüsü alma, ve <strong>Kapat / Yeniden Başlat / Oturumu Kapat</strong> düğmeleri.</li>
+        <li>"Masaüstü Ayarları" bağlantısı — aşağıdaki genişletilmiş panele götürür.</li>
+      </ul>
+    </section>
+
+    <section id="masaustu-ayarlari">
+      <h2><span class="num">07</span> Masaüstü Ayarları</h2>
+      <table class="kv">
+        <tr><th>Ayar</th><th>Seçenekler</th></tr>
+        <tr><td class="k">Koyu mod</td><td class="d">Aç/kapat</td></tr>
+        <tr><td class="k">Duvar kağıdı</td><td class="d">8 hazır renk (Gece Mavisi, Okyanus Mavisi, Çam Yeşili, Mor, Bordo, Kehribar, Kurşun Grisi, Açık Krem) veya dosya tarayıcısıyla kendi görseliniz (PNG/JPG/WEBP)</td></tr>
+        <tr><td class="k">Ekran çözünürlüğü</td><td class="d">Bağlı her çıkış için desteklenen mod listesi, veya "Otomatik" (en yüksek modu seçer)</td></tr>
+        <tr><td class="k">Yazı tipi</td><td class="d">Sistemde bulunan yazı tiplerinden seçim, veya "Otomatik"</td></tr>
+        <tr><td class="k">İkon teması</td><td class="d">Kurulu ikon temalarından seçim, veya "Otomatik"</td></tr>
+      </table>
+      <div class="note">
+        <strong>Parola gerektiren işlemler:</strong> bilgisayar adını değiştirme, otomatik girişi aç/kapat, kullanıcı parolasını değiştirme — bu üçü sistem yetkisi istediği için işlem öncesi parolanızı sorar.
+      </div>
+    </section>
+
+    <section id="uzak-masaustu">
+      <h2><span class="num">08</span> Uzak Masaüstü</h2>
+      <p class="lede">Kontrol Merkezi'ndeki "🖥 Uzak Masaüstü" döşemesinden açılır — bir Windows veya macOS bilgisayarın ekranını BacakOS panelinin içinde izleyip fare/dokunmatik ile kontrol edin.</p>
+
+      <h3>Karşı taraftaki bilgisayarda</h3>
+      <p>Kontrol edilecek Windows veya macOS bilgisayara <code>bacak-remote-server</code> kurulur ve çalıştırılır:</p>
+      <ul>
+        <li><strong>Windows:</strong> kurulum paketiyle (<code>.exe</code>) kurulur; masaüstü/Başlat Menüsü kısayolundan çift tıklanır, açılan pencerede BacakOS ekranında gösterilen PIN girilip "Eşleştir"e basılır. Uygun donanımda (Intel/NVIDIA/AMD) donanım hızlandırmalı H.264 kodlama otomatik denenir, yoksa yazılım koduna düşer.</li>
+        <li><strong>macOS:</strong> <code>.app</code> paketiyle kurulur; ilk açılışta Gatekeeper uygulamayı engeller — Sistem Ayarları → Gizlilik ve Güvenlik → aşağı kaydırıp "Yine de Aç"a basmak gerekir. Ardından aynı pencereden PIN girilir. macOS ayrıca ekran yakalama ve fare/dokunmatik kontrolü için <strong>Ekran Kaydı</strong> ve <strong>Erişilebilirlik</strong> izinlerini (Sistem Ayarları → Gizlilik ve Güvenlik) ayrı ayrı ister — her ikisi de verilmeden görüntü veya girdi çalışmaz.</li>
+      </ul>
+
+      <h3>BacakOS tarafında</h3>
+      <p>PIN, karşı tarafa girilmeden önce <strong>BacakOS'ta üretilir</strong> — panel açıldığı anda ekranda büyük şekilde gösterilir; operatör bu PIN'i okuyup karşı bilgisayardaki pencereye kendisi yazar. Panel, hangi bilgisayara bağlanacağını <code>~/.config/bacak-remote/pair.json</code> dosyasındaki IP adresinden öğrenir:</p>
+      <pre><code>{"ip": "192.168.1.42"}</code></pre>
+      <div class="note">
+        <strong>v1 sınırı:</strong> Bu IP adresi şu an elle düzenlenen bir yapılandırma dosyasından okunuyor — panelde ekrana IP yazmak için bir metin girişi henüz yok. Karşı bilgisayarın IP'si değiştiğinde bu dosyayı güncellemeniz gerekir; unutulursa panel sessizce eski adrese bağlanmaya çalışır ve "sunucu PIN'i reddetti" gibi kafa karıştırıcı bir hataya yol açar.
+      </div>
+
+      <h3>Kullanım</h3>
+      <p>Eşleşme tamamlanınca karşı bilgisayarın ekranı panelin içinde tam boyutta görünür; tek parmak/tek fare tıklaması gerçek bir dokunuşa/tıklamaya, sürükleme ise sürüklemeye dönüşür. Karşı taraftaki pencereden "Eşleşmeyi Bitir"e basılırsa (Windows/macOS) BacakOS panel otomatik kapanır — sizin bir şey yapmanız gerekmez.</p>
+    </section>
+
+    <section id="dosya-yoneticisi">
+      <h2><span class="num">09</span> Dosya Yöneticisi — altay</h2>
+      <p class="lede">Ev dizininizi ve bağlı sürücüleri gezmek için. Sistem dizinlerine erişimi kapalıdır (sandbox).</p>
+
+      <h3>Arşivler</h3>
+      <p>ZIP/JAR/APK, TAR (.gz/.bz2/.xz/.zst), 7z (okuma+yazma), RAR (çok parçalılar dahil), DEB, RPM ve bölünmüş <code>.001/.002…</code> dosyalarını doğrudan klasör gibi açar; şifreli arşivleri şifre sorarak açar.</p>
+
+      <h3>Sürücüler ve ağ</h3>
+      <p>USB/harici disk taktığınızda otomatik listelenir, tek tıkla bağlanır/çıkarılır. Ayarlar &rarr; "Ağ Konumu Ekle" ile SMB, SFTP, FTP, WebDAV veya NFS paylaşımlarına bağlanabilirsiniz; kimlik bilgileri sistem anahtarlığında saklanır.</p>
+
+      <h3>Çöp kutusu</h3>
+      <p>Sil işlemi dosyayı çöp kutusuna taşır; sağ tık menüsünden geri yükleyebilir veya çöp kutusunu boşaltabilirsiniz.</p>
+
+      <h3>Kısayollar</h3>
+      <table class="kv">
+        <tr><td class="k"><kbd>F2</kbd></td><td class="d">Yeniden adlandır</td></tr>
+        <tr><td class="k"><kbd>Ctrl</kbd>+<kbd>A</kbd></td><td class="d">Tümünü seç</td></tr>
+        <tr><td class="k">Uzun basış (dokunmatik) / Sağ tık &rarr; "Birlikte Aç"</td><td class="d">Sistemdeki tüm kurulu uygulamaları listeler (en uygun olanlar üstte); istediğinizi seçip isteğe bağlı olarak o dosya türü için varsayılan yapabilirsiniz</td></tr>
+      </table>
+    </section>
+
+    <section id="belge-goruntuleyici">
+      <h2><span class="num">10</span> Belge Görüntüleyici — bacak-belge</h2>
+      <p class="lede">PDF, EPUB ve resim dosyaları için tek, birleşik görüntüleyici.</p>
+      <ul>
+        <li><strong>PDF:</strong> sayfa sayfa gezinme, %10–%800 arası yakınlaştırma.</li>
+        <li><strong>EPUB:</strong> bölüm/sayfa gezinme, %20–%500 yakınlaştırma.</li>
+        <li><strong>Resimler:</strong> aynı klasördeki diğer resimler arasında ileri/geri gezinme (alfabetik sırayla), %20–%500 yakınlaştırma.</li>
+        <li>Touchpad/dokunmatik ekranda sıkıştırma jestiyle yakınlaştırma tüm formatlarda çalışır.</li>
+      </ul>
+    </section>
+
+    <section id="tahta">
+      <h2><span class="num">11</span> Dijital Tahta — tahta</h2>
+      <p class="lede">
+        Dokunmatik etkileşimli panellerde ders/sunum yapmak için tasarlanmış,
+        wgpu tabanlı tam ekran çizim uygulaması. Açılır açılmaz tam ekrana
+        geçer ve masaüstü çubuğunu (dock) kapanana kadar arka planda tutar —
+        ekranın tamamı derse ayrılır.
+      </p>
+
+      <h3>Çizim araçları</h3>
+      <ul>
+        <li>Kalem, vurgulayıcı (highlighter), silgi ve şekil araçları (çizgi, dikdörtgen, daire).</li>
+        <li>Cetvel, gönye ve pergel — geometrik çizim için gerçek ölçekli yardımcı araçlar.</li>
+        <li>Metin kutusu (gerçek font kerning'i ile), kronometre, zar, spot ışığı ve büyüteç panelleri.</li>
+        <li>Çok dokunuşlu çizim ve iki parmakla sıkıştırarak yakınlaştırma/uzaklaştırma (pinch-zoom).</li>
+      </ul>
+
+      <h3>PDF ve sayfalar</h3>
+      <p>Bir PDF dosyasını (dosya yöneticisinden "Birlikte Aç" &rarr; tahta ile, veya <code>tahta dosya.pdf</code> ile) sayfa sayfa açıp üzerine anotasyon ekleyebilirsiniz. Çalışmanızı PDF olarak dışa aktarabilirsiniz.</p>
+
+      <h3>Gömülü tarayıcı ve EBA</h3>
+      <p>Araç çubuğundaki adres çubuğu bir web sayfası açar; varsayılan anasayfa <strong>www.eba.gov.tr</strong>'dir (Eğitim Bilişim Ağı). Adres çubuğundaki kalem simgesiyle "çizim modu"na geçip, açık olan web sayfasının üzerine doğrudan not alabilirsiniz.</p>
+
+      <h3>Kapatma</h3>
+      <p>Araç çubuğunun sonundaki aşağı-ok simgesi tahta'yı küçültüp masaüstüne döner (uygulama kapanmaz, arka planda açık kalır). Pencereyi tamamen kapattığınızda dock otomatik olarak geri gelir.</p>
+    </section>
+
+    <section id="varsayilan-uygulamalar">
+      <h2><span class="num">12</span> Varsayılan Uygulamalar</h2>
+      <p class="lede">Dock'ta hazır sabitlenmiş gelen uygulamalar:</p>
+      <div class="app-list">
+        <div class="card"><span class="app-icon">A</span><div><h4>altay</h4><p>Dosya yöneticisi</p></div></div>
+        <div class="card"><span class="app-icon">F</span><div><h4>Firefox ESR</h4><p>Web tarayıcı — anasayfa varsayılanı www.eba.gov.tr</p></div></div>
+        <div class="card"><span class="app-icon">L</span><div><h4>LibreOffice</h4><p>Ofis paketi başlangıç merkezi</p></div></div>
+        <div class="card"><span class="app-icon">B</span><div><h4>bacak-belge</h4><p>PDF / EPUB / resim görüntüleyici</p></div></div>
+        <div class="card"><span class="app-icon">T</span><div><h4>tahta</h4><p>Dokunmatik panel için dijital tahta</p></div></div>
+      </div>
+    </section>
+
+    <section id="sorun-giderme">
+      <h2><span class="num">13</span> Sorun Giderme</h2>
+
+      <h3>Açılışta ekran siyah kalıyor / sürekli yanıp sönen imleç</h3>
+      <p>Ctrl+Alt+F2 ile bir metin konsoluna geçip <code>systemctl status bacak-display-manager</code> ve <code>journalctl -u bacak-display-manager</code> ile hata mesajına bakın. Genellikle giriş ekranı servisinin bir önceki oturumu düzgün kapatamamasından kaynaklanır; <code>sudo systemctl restart bacak-display-manager</code> çoğu zaman yeterlidir.</p>
+
+      <h3>Bir jest veya kısayol beklediğim gibi çalışmıyor</h3>
+      <p>Jest eşikleri (dokunma süresi, sürükleme mesafesi) şu an kullanıcı ayarlarından değiştirilemiyor — sabit değerlerdir. Beklenmedik davranış görüyorsanız dokunmatik yüzeyinizin sürücü ayarlarını (varsa) kontrol edin.</p>
+
+      <h3>Bir dosya türü yanlış uygulamayla açılıyor</h3>
+      <p>altay'da dosyaya uzun basıp (veya sağ tıklayıp) "Birlikte Aç" &rarr; istediğiniz uygulamayı seçip "Varsayılan yap" işaretleyin.</p>
+    </section>
+
+    <footer>
+      <span>BacakOS &middot; bacak-compositor / turan / altay / bacak-belge / tahta / kur</span>
+      <span>Bu kılavuz kod tabanından derlenmiştir, sürüm ilerledikçe güncellenmelidir</span>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  const canvas = document.getElementById("gestureCanvas");
+  const ctx = canvas.getContext("2d");
+  const toggleBtn = document.getElementById("toggleBtn");
+  const recordBtn = document.getElementById("recordBtn");
+  const statusEl = document.getElementById("demoStatus");
+  const legendSteps = Array.from(document.querySelectorAll("#phaseLegend .step"));
+
+  const W = canvas.width, H = canvas.height;
+  const ACCENT = "59,130,246";
+
+  const PHASE_DUR = 4.0;
+  const TOTAL = PHASE_DUR * 4;
+
+  const WIN_START = { x: 70, y: 150, w: 380, h: 232 };
+  const WIN_END   = { x: 470, y: 150, w: 380, h: 232 };
+  const WIN_FULL  = { x: 26, y: 66, w: 908, h: 418 };
+  const TERM      = { x: 560, y: 112, w: 330, h: 250 };
+
+  function ease(t) { return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; }
+  function lerp(a, b, t) { return a + (b - a) * t; }
+  function clamp01(x) { return Math.max(0, Math.min(1, x)); }
+  function lerpRect(a, b, t) {
+    return { x: lerp(a.x, b.x, t), y: lerp(a.y, b.y, t), w: lerp(a.w, b.w, t), h: lerp(a.h, b.h, t) };
+  }
+
+  function rr(c, x, y, w, h, r) {
+    c.beginPath();
+    c.moveTo(x + r, y);
+    c.lineTo(x + w - r, y);
+    c.arcTo(x + w, y, x + w, y + r, r);
+    c.lineTo(x + w, y + h - r);
+    c.arcTo(x + w, y + h, x + w - r, y + h, r);
+    c.lineTo(x + r, y + h);
+    c.arcTo(x, y + h, x, y + h - r, r);
+    c.lineTo(x, y + r);
+    c.arcTo(x, y, x + r, y, r);
+    c.closePath();
+  }
+
+  function drawBackground() {
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, "#0b0e12");
+    g.addColorStop(1, "#05070a");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  function drawDock() {
+    const dw = 360, dh = 40, dx = W / 2 - dw / 2, dy = H - 62;
+    ctx.fillStyle = "rgba(255,255,255,0.06)";
+    rr(ctx, dx, dy, dw, dh, 16); ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,0.09)"; ctx.lineWidth = 1;
+    rr(ctx, dx, dy, dw, dh, 16); ctx.stroke();
+    const n = 4, pad = 14, size = 26, gap = (dw - pad * 2 - size * n) / (n - 1);
+    for (let i = 0; i < n; i++) {
+      const ix = dx + pad + i * (size + gap), iy = dy + (dh - size) / 2;
+      ctx.fillStyle = i === 0 ? `rgba(${ACCENT},0.85)` : "rgba(255,255,255,0.16)";
+      rr(ctx, ix, iy, size, size, 7); ctx.fill();
+    }
+  }
+
+  function drawWorkspaceDots(activeIndex) {
+    const cx0 = 862, y = 34, gap = 16, r = 4;
+    for (let i = 0; i < 3; i++) {
+      const cx = cx0 + i * gap;
+      ctx.beginPath();
+      ctx.arc(cx, y, r, 0, Math.PI * 2);
+      if (i === activeIndex) { ctx.fillStyle = `rgb(${ACCENT})`; ctx.fill(); }
+      else { ctx.strokeStyle = "rgba(255,255,255,0.35)"; ctx.lineWidth = 1.4; ctx.stroke(); }
+    }
+  }
+
+  function drawAppWindow(rect, alpha) {
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.shadowColor = "rgba(0,0,0,0.45)";
+    ctx.shadowBlur = 24;
+    ctx.shadowOffsetY = 10;
+    ctx.fillStyle = "#e9ebef";
+    rr(ctx, rect.x, rect.y, rect.w, rect.h, 12); ctx.fill();
+    ctx.shadowColor = "transparent";
+    const barH = 30;
+    ctx.fillStyle = `rgb(${ACCENT})`;
+    rr(ctx, rect.x, rect.y, rect.w, barH, 12);
+    ctx.fillRect(rect.x, rect.y + barH - 12, rect.w, 12);
+    ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,0.9)";
+    ctx.font = "600 12px 'IBM Plex Mono', monospace";
+    ctx.textBaseline = "middle";
+    ctx.fillText("altay — Belgeler", rect.x + 12, rect.y + barH / 2 + 1);
+    const lines = 4;
+    for (let i = 0; i < lines; i++) {
+      const lw = rect.w - 40 - (i === lines - 1 ? rect.w * 0.35 : 0);
+      ctx.fillStyle = "rgba(20,24,30,0.10)";
+      rr(ctx, rect.x + 20, rect.y + barH + 24 + i * 30, lw, 14, 4); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function drawTerminal(rect, alpha, scale) {
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    const cx = rect.x + rect.w / 2, cy = rect.y + rect.h / 2;
+    ctx.translate(cx, cy); ctx.scale(scale, scale); ctx.translate(-cx, -cy);
+    ctx.shadowColor = "rgba(0,0,0,0.5)";
+    ctx.shadowBlur = 26; ctx.shadowOffsetY = 12;
+    ctx.fillStyle = "#0d1013";
+    rr(ctx, rect.x, rect.y, rect.w, rect.h, 12); ctx.fill();
+    ctx.shadowColor = "transparent";
+    ctx.strokeStyle = "rgba(255,255,255,0.08)"; ctx.lineWidth = 1;
+    rr(ctx, rect.x, rect.y, rect.w, rect.h, 12); ctx.stroke();
+    ctx.fillStyle = "rgba(255,255,255,0.85)";
+    ctx.font = "12px 'IBM Plex Mono', monospace";
+    ctx.textBaseline = "top";
+    const lines = ["os5@bacakos:~$ ls", "Belgeler  Indirilenler  Masaustu", "os5@bacakos:~$ _"];
+    lines.forEach((l, i) => ctx.fillText(l, rect.x + 16, rect.y + 20 + i * 20));
+    ctx.restore();
+  }
+
+  function drawFinger(x, y, pulse, label) {
+    ctx.save();
+    ctx.globalAlpha = clamp01(pulse);
+    const r = 15 + 6 * clamp01(pulse);
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r * 1.8);
+    g.addColorStop(0, `rgba(${ACCENT},0.55)`);
+    g.addColorStop(1, `rgba(${ACCENT},0)`);
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(x, y, r * 1.8, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,0.92)";
+    ctx.beginPath(); ctx.arc(x, y, 9, 0, Math.PI * 2); ctx.fill();
+    if (label) {
+      ctx.fillStyle = `rgb(${ACCENT})`;
+      ctx.font = "700 10px 'IBM Plex Mono', monospace";
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(label, x, y);
+    }
+    ctx.restore();
+  }
+
+  function pulseEnvelope(t, center, width) {
+    // 0 -> 1 -> 0 bump centered at `center`, `width` seconds wide
+    const d = Math.abs(t - center);
+    if (d > width) return 0;
+    return 1 - ease(d / width);
+  }
+
+  function caption(text) {
+    ctx.save();
+    ctx.font = "600 15px 'IBM Plex Mono', monospace";
+    ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
+    ctx.fillStyle = "rgba(0,0,0,0.35)";
+    ctx.fillText(text, W / 2 + 1, H - 24 + 1);
+    ctx.fillStyle = "rgba(255,255,255,0.86)";
+    ctx.fillText(text, W / 2, H - 24);
+    ctx.restore();
+  }
+
+  function draw(t) {
+    const phase = Math.floor(t / PHASE_DUR) % 4;
+    const lt = t - Math.floor(t / PHASE_DUR) * PHASE_DUR;
+
+    drawBackground();
+
+    let winRect = WIN_END, winAlpha = 1, wsActive = phase >= 2 && (phase > 2 || lt > 2.0) ? 1 : 0;
+    let termAlpha = 0, termScale = 0.7;
+    const fingers = [];
+    let cap = "";
+
+    if (phase === 0) {
+      cap = "Tek parmak sürükle → pencereyi taşı";
+      const dragT = clamp01((lt - 0.6) / 2.4);
+      winRect = lerpRect(WIN_START, WIN_END, ease(dragT));
+      const fingerAlpha = lt < 0.4 ? ease(lt / 0.4) : (lt > 3.4 ? 1 - ease((lt - 3.4) / 0.4) : 1);
+      const fx = winRect.x + 60, fy = winRect.y + 15;
+      fingers.push({ x: fx, y: fy, a: fingerAlpha });
+    } else if (phase === 1) {
+      cap = "İki parmak çift dokun → tam ekran";
+      const growT = clamp01((lt - 1.0) / 1.0);
+      const shrinkT = clamp01((lt - 3.0) / 0.8);
+      winRect = shrinkT > 0 ? lerpRect(WIN_FULL, WIN_END, ease(shrinkT)) : lerpRect(WIN_END, WIN_FULL, ease(growT));
+      const cxp = WIN_END.x + WIN_END.w / 2, cyp = WIN_END.y + WIN_END.h / 2;
+      const p1 = pulseEnvelope(lt, 0.45, 0.22), p2 = pulseEnvelope(lt, 0.8, 0.22);
+      if (p1 > 0.02) fingers.push({ x: cxp - 16, y: cyp, a: p1 });
+      if (p2 > 0.02) fingers.push({ x: cxp - 16, y: cyp, a: p2 });
+    } else if (phase === 2) {
+      cap = "Üç parmak kaydır → çalışma alanı değiştir";
+      winAlpha = 0.55;
+      const swipeT = clamp01((lt - 0.5) / 1.5);
+      const dx = lerp(0, -220, ease(swipeT));
+      const baseX = 560, baseY = 420;
+      const a = lt < 0.5 ? ease(lt / 0.5) : (lt > 2.0 ? clamp01(1 - (lt - 2.0) / 0.4) : 1);
+      [-40, 0, 40].forEach(off => fingers.push({ x: baseX + off + dx, y: baseY, a }));
+    } else {
+      cap = "İki parmakla 4 hızlı dokunuş → terminal aç";
+      const cxp = TERM.x + TERM.w / 2, cyp = TERM.y + TERM.h + 60;
+      [0.35, 0.55, 0.75, 0.95].forEach(c => {
+        const p = pulseEnvelope(lt, c, 0.14);
+        if (p > 0.02) { fingers.push({ x: cxp - 14, y: cyp, a: p }); fingers.push({ x: cxp + 14, y: cyp, a: p }); }
+      });
+      const openT = clamp01((lt - 1.1) / 0.5);
+      const closeT = clamp01((lt - 3.4) / 0.5);
+      termScale = closeT > 0 ? lerp(1, 0.7, ease(closeT)) : lerp(0.7, 1, ease(openT));
+      termAlpha = closeT > 0 ? 1 - ease(closeT) : ease(openT);
+    }
+
+    drawWorkspaceDots(wsActive);
+    drawAppWindow(winRect, winAlpha);
+    if (termAlpha > 0.01) drawTerminal(TERM, termAlpha, termScale);
+    drawDock();
+    fingers.forEach(f => { if (f.a > 0.02) drawFinger(f.x, f.y, f.a); });
+    caption(cap);
+
+    legendSteps.forEach(el => el.classList.toggle("active", Number(el.dataset.phase) === phase));
+  }
+
+  let playing = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  toggleBtn.textContent = playing ? "Duraklat" : "Oynat";
+  let elapsed = 0, lastTs = null, raf = null;
+
+  function tick(ts) {
+    if (playing) {
+      if (lastTs != null) elapsed += (ts - lastTs) / 1000;
+      lastTs = ts;
+    } else {
+      lastTs = ts;
+    }
+    draw(elapsed % TOTAL);
+    raf = requestAnimationFrame(tick);
+  }
+
+  function start() {
+    draw(0);
+    raf = requestAnimationFrame(tick);
+  }
+  if (document.fonts && document.fonts.load) {
+    Promise.all([
+      document.fonts.load("600 15px 'IBM Plex Mono'"),
+      document.fonts.load("700 10px 'IBM Plex Mono'"),
+    ]).catch(function () {}).then(start);
+  } else {
+    start();
+  }
+
+  toggleBtn.addEventListener("click", function () {
+    playing = !playing;
+    toggleBtn.textContent = playing ? "Duraklat" : "Oynat";
+  });
+
+  recordBtn.addEventListener("click", async function () {
+    if (recordBtn.disabled) return;
+    if (!window.claude || typeof window.claude.use !== "function") {
+      statusEl.textContent = "Bu görünümde video indirme desteklenmiyor.";
+      return;
+    }
+    const downloads = await window.claude.use("downloads");
+    if (!downloads) {
+      statusEl.textContent = "Bu görünümde video indirme desteklenmiyor.";
+      return;
+    }
+    if (typeof canvas.captureStream !== "function" || typeof window.MediaRecorder === "undefined") {
+      statusEl.textContent = "Bu tarayıcı video kaydını desteklemiyor.";
+      return;
+    }
+
+    const wasPlaying = playing;
+    playing = true;
+    elapsed = 0; lastTs = null;
+    recordBtn.disabled = true;
+    toggleBtn.disabled = true;
+
+    let mimeType = "video/webm;codecs=vp9";
+    if (!MediaRecorder.isTypeSupported(mimeType)) mimeType = "video/webm";
+
+    const stream = canvas.captureStream(30);
+    const rec = new MediaRecorder(stream, { mimeType: mimeType });
+    const chunks = [];
+    rec.ondataavailable = function (e) { if (e.data && e.data.size) chunks.push(e.data); };
+    rec.onstop = async function () {
+      const blob = new Blob(chunks, { type: "video/webm" });
+      statusEl.textContent = "Kaydediliyor…";
+      try {
+        await downloads.save({ filename: "bacakos-jest-senaryosu.webm", data: blob });
+        statusEl.textContent = "Video indirildi.";
+      } catch (err) {
+        const messages = {
+          declined: "Kaydetme iptal edildi.",
+          too_large: "Dosya çok büyük.",
+          rate_limited: "Çok fazla istek geldi, birazdan tekrar deneyin.",
+          unavailable: "Bu görünümde kaydetme kullanılamıyor.",
+        };
+        statusEl.textContent = (err && messages[err.code]) || "Video kaydedilemedi.";
+      }
+      recordBtn.disabled = false;
+      toggleBtn.disabled = false;
+      playing = wasPlaying;
+    };
+
+    let secondsLeft = Math.ceil(TOTAL);
+    statusEl.innerHTML = '<span class="rec-dot"></span> Kaydediliyor — ' + secondsLeft + " sn";
+    const tickTimer = setInterval(function () {
+      secondsLeft -= 1;
+      if (secondsLeft > 0) statusEl.innerHTML = '<span class="rec-dot"></span> Kaydediliyor — ' + secondsLeft + " sn";
+    }, 1000);
+
+    rec.start();
+    setTimeout(function () {
+      clearInterval(tickTimer);
+      rec.stop();
+    }, TOTAL * 1000 + 200);
+  });
+})();
+</script>

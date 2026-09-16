@@ -1,0 +1,31 @@
+#!/bin/sh
+# Bacak desktop session: start audio services, set Wayland IM env, exec compositor.
+export GTK_IM_MODULE=wayland
+export QT_IM_MODULE=wayland
+export XMODIFIERS=@im=none
+
+# Start PipeWire audio stack as user services if not already running.
+systemctl --user is-active --quiet pipewire || \
+    systemctl --user start pipewire wireplumber pipewire-pulse
+
+# Start a polkit authentication agent. Without one, `pkexec` (kur-baslat,
+# and anything else needing root — package management, etc.) has nowhere to
+# show its auth prompt and fails silently. lxpolkit is a standalone GTK
+# agent with no LXQt/MATE/KDE session dependency, so it fits a bare compositor.
+#
+# It cannot start yet: `exec` below replaces this process with the compositor,
+# which is what actually creates the Wayland socket. Starting lxpolkit first
+# gives it nothing to render into — it exits (crashes) instantly. So this
+# waits for the socket in a backgrounded subshell, which survives the `exec`
+# below since it is a separate process, not this one.
+(
+    for _ in $(seq 1 50); do
+        ls "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"/wayland-* >/dev/null 2>&1 && break
+        sleep 0.2
+    done
+    if command -v lxpolkit >/dev/null 2>&1 && ! pgrep -x lxpolkit >/dev/null 2>&1; then
+        lxpolkit &
+    fi
+) &
+
+exec /usr/bin/bacak-compositor "$@"

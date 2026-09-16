@@ -1,0 +1,32 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Anadolu Panteri <bilgi@anadolupanteri.org.tr>
+#
+# kur-baslat — kullanıcı tarafındaki başlatıcı. Menüden çalıştırılan budur.
+#
+# `kur` diskleri bölümlediği için root gerektirir. `pkexec` kullanmıyoruz:
+# polkit'in `auth_admin` politikası PAM üzerinden gerçek bir parola ister, ama
+# `kur` yalnızca canlı ortamdan çalışır ve o oturumun kullanıcısının hiçbir
+# zaman gerçek bir parolası yoktur (autologin) — `pkexec` bu yüzden "pam_
+# authenticate failed" ile daima başarısız olur. Canlı oturum kullanıcısı zaten
+# parolasız `sudo` yetkisine sahiptir (live-boot'un standart kurulumu; fiziksel
+# olarak ortamı önyükleyen kişi zaten tam yetkilidir), o yüzden `sudo` üzerinden
+# geçiyoruz. `sudo` da ortam değişkenlerini sıfırlar; bu yüzden bu betik
+# WAYLAND_DISPLAY/XDG_RUNTIME_DIR/DISPLAY'i argüman olarak geçirir ve root
+# tarafındaki /usr/libexec/kur-root onları geri kurar.
+set -eu
+
+# Canlı ortamda oturum zaten root olabilir; o zaman sudo'ya gerek yok.
+if [ "$(id -u)" -eq 0 ]; then
+    exec /usr/bin/kur "$@"
+fi
+
+if ! command -v sudo >/dev/null 2>&1; then
+    echo "kur: sudo bulunamadı — 'sudo kur' olarak çalıştırın." >&2
+    exit 1
+fi
+
+exec sudo /usr/libexec/kur-root \
+    "${WAYLAND_DISPLAY-}" \
+    "${XDG_RUNTIME_DIR-}" \
+    "${DISPLAY-}"

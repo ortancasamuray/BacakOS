@@ -1,0 +1,178 @@
+# bacakos.script — BacakOS Plymouth boot splash (script plugin)
+#
+# Dark gradient background, a centered logo with a slow breathing-opacity
+# animation, a rotating comet-trail glow ring behind it, and a thin
+# accent-coloured progress bar. Deliberately much smaller than the stock
+# Debian "anadolupanteri" theme this replaces: no multi-device fsck queue —
+# a single boot target (one root filesystem) never needs that machinery,
+# and the extra state only made the script harder to change.
+
+# ---- Palette (accent matches bacak-display-manager's default accent) ----
+BG_TOP.r    = 0.043; BG_TOP.g    = 0.055; BG_TOP.b    = 0.071;  # #0b0e12
+BG_BOTTOM.r = 0.020; BG_BOTTOM.g = 0.027; BG_BOTTOM.b = 0.035;  # #05070a
+ACCENT.r = 0.231; ACCENT.g = 0.510; ACCENT.b = 0.965;           # #3b82f6
+TEXT.r = 1.0; TEXT.g = 1.0; TEXT.b = 1.0;
+
+Window.SetBackgroundTopColor (BG_TOP.r, BG_TOP.g, BG_TOP.b);
+Window.SetBackgroundBottomColor (BG_BOTTOM.r, BG_BOTTOM.g, BG_BOTTOM.b);
+
+screen.width  = Window.GetWidth ();
+screen.height = Window.GetHeight ();
+small_dim = Math.Min (screen.width, screen.height);
+
+# ---- Logo (breathing opacity) --------------------------------------------
+logo_center.x = screen.width / 2;
+logo_center.y = screen.height * 0.44;
+
+logo_size = small_dim * 0.16;
+logo = Image ("logo.png");
+logo = logo.Scale (logo_size, logo_size * logo.GetHeight () / logo.GetWidth ());
+
+logo_sprite = Sprite (logo);
+logo_sprite.SetPosition (logo_center.x - logo.GetWidth () / 2,
+                          logo_center.y - logo.GetHeight () / 2,
+                          10);
+
+# ---- Rotating glow ring behind the logo -------------------------------
+# Rotated frames are precomputed once (cheap: the source image is small)
+# and cycled by elapsed time, the same on-demand-cache trick the old
+# theme used for its swirl — just with a single ring sprite instead of a
+# whole second logo layer.
+GLOW_ROTATION_STEPS = 60;
+GLOW_PERIOD_SECONDS = 3.0;
+
+glow_size = logo_size * 1.55;
+glow_source = Image ("logo_glow.png");
+glow_source = glow_source.Scale (glow_size, glow_size);
+
+glow_sprite = Sprite (glow_source);
+glow_sprite.SetPosition (logo_center.x - glow_size / 2,
+                          logo_center.y - glow_size / 2,
+                          9);
+
+elapsed = 0;
+fun refresh_animations () {
+    elapsed += 0.02;  # refresh runs ~50/s
+
+    breath = 0.72 + 0.28 * (0.5 + 0.5 * Math.Sin (elapsed * 1.6));
+    logo_sprite.SetOpacity (breath);
+
+    step = Math.Int (elapsed / GLOW_PERIOD_SECONDS * GLOW_ROTATION_STEPS) % GLOW_ROTATION_STEPS;
+    frame = glow_frames[step];
+    if (frame == NULL) {
+        angle = step * 2 * Math.Pi / GLOW_ROTATION_STEPS;
+        frame = glow_source.Rotate (angle);
+        glow_frames[step] = frame;
+    }
+    glow_sprite.SetImage (frame);
+}
+
+# ---- Progress bar -----------------------------------------------------
+bar_width  = screen.width * 0.22;
+bar.y = screen.height * 0.44 + logo.GetHeight () / 2 + small_dim * 0.06;
+
+track = Image ("progress_track.png");
+track = track.Scale (bar_width, track.GetHeight ());
+track_sprite = Sprite (track);
+track_sprite.SetPosition (screen.width / 2 - bar_width / 2, bar.y, 10);
+
+fill_source = Image ("progress_fill.png");
+fill_sprite = Sprite ();
+fill_sprite.SetPosition (screen.width / 2 - bar_width / 2, bar.y, 11);
+
+fun progress_callback (duration, progress) {
+    fill_width = Math.Int (bar_width * progress);
+    if (fill_width < 1) fill_width = 1;
+    fill = fill_source.Scale (fill_width, fill_source.GetHeight ());
+    fill_sprite.SetImage (fill);
+}
+
+Plymouth.SetBootProgressFunction (progress_callback);
+Plymouth.SetRefreshFunction (refresh_animations);
+
+# ---- Status line (fsck / systemd messages) --------------------------
+status_sprite = Sprite ();
+status_sprite.SetZ (10);
+
+fun set_status_text (text) {
+    if (text == NULL || text == "")
+        status_sprite.SetOpacity (0);
+    else {
+        image = Image.Text (text, TEXT.r, TEXT.g, TEXT.b);
+        status_sprite.SetImage (image);
+        status_sprite.SetX (screen.width / 2 - image.GetWidth () / 2);
+        status_sprite.SetY (bar.y + track.GetHeight () + 14);
+        status_sprite.SetOpacity (0.75);
+    }
+}
+
+Plymouth.SetMessageFunction (set_status_text);
+
+fun update_status_callback (status) {
+    # systemd-fsckd sends "fsckd:<n_devices>:<progress>:<label>"; anything
+    # else (or n_devices == 0) just clears the line.
+    if (status && String (status).CharAt (0) == "f")
+        set_status_text ("Dosya sistemi kontrol ediliyor…");
+    else
+        set_status_text (NULL);
+}
+Plymouth.SetUpdateStatusFunction (update_status_callback);
+
+# ---- Password prompt (LUKS unlock etc.) ------------------------------
+password.field_image = Image ("password_field.png");
+password.dot_image   = Image ("password_dot.png");
+password.sprite       = Sprite ();
+password.label_sprite = Sprite ();
+password.dots         = NULL;
+password.active       = 0;
+
+fun display_password_callback (prompt, bullets) {
+    password.active = 1;
+
+    password.sprite.SetImage (password.field_image);
+    field.x = screen.width  / 2 - password.field_image.GetWidth ()  / 2;
+    field.y = bar.y + track.GetHeight () + 40;
+    password.sprite.SetPosition (field.x, field.y, 20);
+    password.sprite.SetOpacity (1);
+
+    if (prompt && prompt != "") {
+        label_image = Image.Text (prompt, TEXT.r, TEXT.g, TEXT.b);
+        password.label_sprite.SetImage (label_image);
+        password.label_sprite.SetPosition (screen.width / 2 - label_image.GetWidth () / 2,
+                                            field.y - label_image.GetHeight () - 10, 20);
+        password.label_sprite.SetOpacity (0.85);
+    }
+
+    dot_gap = password.dot_image.GetWidth () * 1.4;
+    dots_shown = bullets;
+    max_dots = Math.Int ((password.field_image.GetWidth () - 24) / dot_gap);
+    if (dots_shown > max_dots) dots_shown = max_dots;
+
+    for (i = 0; password.dots[i] || i < dots_shown; i++) {
+        if (!password.dots[i]) password.dots[i] = Sprite (password.dot_image);
+        if (i < dots_shown) {
+            password.dots[i].SetPosition (field.x + 12 + i * dot_gap,
+                                           field.y + password.field_image.GetHeight () / 2
+                                               - password.dot_image.GetHeight () / 2,
+                                           21);
+            password.dots[i].SetOpacity (1);
+        } else {
+            password.dots[i].SetOpacity (0);
+        }
+    }
+}
+Plymouth.SetDisplayPasswordFunction (display_password_callback);
+
+fun display_normal_callback () {
+    if (password.active) {
+        password.sprite.SetOpacity (0);
+        password.label_sprite.SetOpacity (0);
+        for (i = 0; password.dots[i]; i++) password.dots[i].SetOpacity (0);
+        password.active = 0;
+    }
+}
+Plymouth.SetDisplayNormalFunction (display_normal_callback);
+
+fun quit_callback () {
+}
+Plymouth.SetQuitFunction (quit_callback);

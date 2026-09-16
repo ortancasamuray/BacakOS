@@ -1,0 +1,66 @@
+.TH KUR 1 "2026-07-10" "kur 0.1.0" "BacakOS"
+.SH NAME
+kur \- BacakOS sistem yükleyicisi
+.SH SYNOPSIS
+.B kur-baslat
+.br
+.B sudo kur
+.SH DESCRIPTION
+.B kur
+Debian 13 (Trixie) tabanlı BacakOS'u bir sabit diske kuran grafik yükleyicidir.
+Kurulum beş adımdan oluşur: dil ve klavye, saat dilimi, disk bölümleme,
+kullanıcı hesabı ve kurulum.
+.PP
+Bölümleme iki kipte çalışır. Otomatik kipte seçili disk tamamen silinir ve
+GPT bölüm tablosu ile bir EFI sistem bölümü, isteğe bağlı takas alanı ve
+kalan alanı kaplayan ext4 kök bölümü oluşturulur. Elle kipte var olan bölüm
+tablosu korunur ve yalnızca görev atadığınız bölümler değiştirilir.
+.PP
+Kurulum ortamını taşıyan disk hiçbir kipte hedef olarak seçilemez.
+.SH USAGE
+.B kur
+root yetkisi gerektirir. Masaüstü menüsünden çalıştırıldığında
+.BR kur-baslat (1)
+sarmalayıcısı devreye girer ve yetkiyi
+.BR pkexec (1)
+ile ister. Terminalden doğrudan
+.B sudo kur
+olarak da çalıştırılabilir.
+.SH ENVIRONMENT
+.TP
+.B KUR_DRY_RUN
+.B 1
+olarak ayarlandığında hiçbir komut çalıştırılmaz; her komut yalnızca günlüğe
+yazılır. Yükleyiciyi diski değiştirmeden denemek için kullanın.
+.TP
+.B RUST_LOG
+Günlük ayrıntı düzeyi (\fBerror\fR, \fBwarn\fR, \fBinfo\fR, \fBdebug\fR).
+Öntanımlı: \fBinfo\fR.
+.SH REQUIREMENTS
+Kurulum için çalışan bir internet bağlantısı gereklidir: taban sistem
+.BR debootstrap (8)
+ile Debian deposundan indirilir. Yükleyici, bağlantı doğrulanmadan
+başlamayı reddeder.
+.SH FILES
+.TP
+.I /mnt/kur-target
+Kurulum sırasında hedef dosya sisteminin bağlandığı dizin.
+.TP
+.I /usr/share/bacakos/debs
+Varsa, buradaki
+.I .deb
+paketleri (compositor, görüntü yöneticisi, altay) hedef sisteme kurulur.
+.SH EXIT STATUS
+.TP
+.B 0
+Yükleyici düzgün kapatıldı.
+.TP
+.B 1
+Arayüz başlatılamadı veya ölümcül bir hata oluştu.
+.SH SEE ALSO
+.BR debootstrap (8),
+.BR sfdisk (8),
+.BR lsblk (8),
+.BR pkexec (1)
+.SH AUTHOR
+Anadolu Panteri <bilgi@anadolupanteri.org.tr>

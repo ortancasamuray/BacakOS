@@ -1,0 +1,60 @@
+#!/bin/sh
+# postinst — runtime dirs, systemd registration, DM alternative.
+set -e
+
+case "$1" in
+    configure)
+        # Greeter state dir + per-DM state dir.
+        mkdir -p /var/lib/bacak-greeter
+        chown bacak-greeter:bacak-greeter /var/lib/bacak-greeter
+        chmod 0700 /var/lib/bacak-greeter
+        mkdir -p /var/lib/bacak-display-manager
+        chmod 0755 /var/lib/bacak-display-manager
+
+        # Register with the x-display-manager alternatives system so the admin
+        # can pick BDM among installed display managers.
+        if command -v update-alternatives >/dev/null 2>&1; then
+            update-alternatives --install \
+                /usr/bin/x-display-manager x-display-manager \
+                /usr/bin/bacak-display-manager 60 || true
+        fi
+
+        # Compositor seç: gerçek bacak-compositor yoksa weston sarmalayıcısını kullan.
+        WESTON_WRAPPER="/usr/share/bacak-display-manager/bacak-compositor-weston"
+        CONF="/etc/bacak-display-manager.conf"
+        if ! command -v bacak-compositor >/dev/null 2>&1; then
+            if [ -x "$WESTON_WRAPPER" ] && [ -f "$CONF" ]; then
+                sed -i "s|^compositor[[:space:]]*=.*|compositor   = \"$WESTON_WRAPPER\"|" "$CONF"
+                echo "BDM: bacak-compositor bulunamadı, weston sarmalayıcısı kullanılıyor." >&2
+            fi
+        else
+            if [ -f "$CONF" ]; then
+                sed -i "s|^compositor[[:space:]]*=.*|compositor   = \"/usr/bin/bacak-compositor\"|" "$CONF"
+            fi
+        fi
+
+        # `systemctl enable`/`disable` only edit unit symlinks and work fine
+        # without a running systemd (e.g. inside a live-build chroot during
+        # image creation) — only `daemon-reload`/`start` need a live PID 1.
+        # Gating the whole block behind /run/systemd/system meant images
+        # built offline shipped with BDM installed but never enabled, so the
+        # compositor had to be started by hand after boot.
+
+        # Mevcut aktif display manager'ı devre dışı bırak ve BDM'i etkinleştir.
+        PREV_DM_FILE="/var/lib/bacak-display-manager/previous-dm"
+        current_dm="$(basename "$(readlink -f /etc/systemd/system/display-manager.service 2>/dev/null)" .service 2>/dev/null || true)"
+        if [ -n "$current_dm" ] && [ "$current_dm" != "bacak-display-manager" ]; then
+            echo "$current_dm" > "$PREV_DM_FILE"
+            systemctl disable "$current_dm.service" 2>/dev/null || true
+        fi
+
+        systemctl enable bacak-display-manager.service 2>/dev/null || true
+
+        if [ -d /run/systemd/system ]; then
+            systemctl daemon-reload || true
+            systemctl start bacak-display-manager.service 2>/dev/null || true
+        fi
+        ;;
+esac
+
+exit 0

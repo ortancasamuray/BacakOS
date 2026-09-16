@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Bacak Belge Görüntüleyici
+Name[tr]=Bacak Belge Görüntüleyici
+GenericName=Belge Görüntüleyici
+GenericName[tr]=Belge Görüntüleyici
+Comment=PDF, EPUB ve resim dosyalarını görüntüleyin
+Comment[tr]=PDF, EPUB ve resim dosyalarını görüntüleyin
+Exec=bacak-belge %f
+Icon=bacak-belge
+MimeType=application/pdf;application/epub+zip;image/jpeg;image/png;image/gif;image/webp;image/bmp;image/tiff;image/x-tiff;image/ico;image/x-ico;image/x-icon;image/vnd.microsoft.icon;image/x-portable-bitmap;image/x-portable-graymap;image/x-portable-pixmap;image/x-portable-anymap;image/x-qoi;image/vnd.radiance;
+Categories=Office;Graphics;Viewer;
+StartupNotify=true

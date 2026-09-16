@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# shellcheck source=tui/dialogs.sh
+source tui/dialogs.sh
+
+function summary_toggle_state() {
+  local value="${1:-}"
+
+  case "${value,,}" in
+    true|yes|enabled|on)
+      printf '%s\n' "enabled"
+      ;;
+    false|no|disabled|off|"")
+      printf '%s\n' "disabled"
+      ;;
+    *)
+      printf '%s\n' "$value"
+      ;;
+  esac
+}
+
+export FEATURE_SKILLS_SUMMARY_STATE
+FEATURE_SKILLS_SUMMARY_STATE="$(summary_toggle_state "${FEATURE_SKILLS:-false}")"
+
+export FEATURE_EXTRA_SKILLS_SUMMARY_STATE
+FEATURE_EXTRA_SKILLS_SUMMARY_STATE="$(summary_toggle_state "${FEATURE_EXTRA_SKILLS:-false}")"
+
+export TUNING_SUMMARY_STATE
+TUNING_SUMMARY_STATE="$(summary_toggle_state "${TUNING:-no}")"
+
+while :; do
+  # shellcheck source=tui/locales/en-us/summary.sh
+  source "tui/locales/$LOCALE/summary.sh"
+
+  if tui_whiptail_dialog --yesno --no-button "$BACK_BUTTON" --yes-button "$OK_BUTTON" \
+    --title "$TITLE" "$CONTENT" "$TUI_WINDOW_HEIGHT" "$TUI_WINDOW_WIDTH"; then
+    break
+  fi
+
+  # Go back and allow the user to adjust choices. ESC returns 255 in whiptail,
+  # which we treat as "Back" here.
+  if [[ "${RASPBERRYPI_MODEL:-N/A}" != "N/A" ]]; then
+    source tui/tuning.sh
+  elif [[ "${PROFILE:-}" == "satellite" ]]; then
+    source tui/satellite/main.sh
+  else
+    source tui/features.sh
+  fi
+done

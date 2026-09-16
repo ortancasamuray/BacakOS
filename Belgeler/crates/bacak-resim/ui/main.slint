@@ -1,0 +1,103 @@
+import { Button, HorizontalBox, VerticalBox } from "std-widgets.slint";
+
+export component AppWindow inherits Window {
+    title: "Bacak Resim Gösterici";
+    min-width: 400px;
+    min-height: 300px;
+    background: #111111;
+
+    in property <image>  current-image;
+    in property <string> filename: "";
+    in property <string> info: "";
+    in property <float>  zoom: 1.0;
+    in property <bool>   has-prev: false;
+    in property <bool>   has-next: false;
+
+    callback prev-image();
+    callback next-image();
+    callback zoom-in();
+    callback zoom-out();
+    callback fit-screen();
+
+    VerticalBox {
+        padding: 0px;
+        spacing: 0px;
+
+        // Toolbar
+        Rectangle {
+            height: 44px;
+            background: #1e1e2e;
+
+            HorizontalBox {
+                padding: 6px;
+                spacing: 4px;
+                alignment: center;
+
+                Button {
+                    text: "◀";
+                    enabled: has-prev;
+                    width: 36px;
+                    clicked => { prev-image(); }
+                }
+                Button {
+                    text: "▶";
+                    enabled: has-next;
+                    width: 36px;
+                    clicked => { next-image(); }
+                }
+                Rectangle { width: 8px; }
+                Button {
+                    text: "−";
+                    width: 36px;
+                    clicked => { zoom-out(); }
+                }
+                Button {
+                    text: "+";
+                    width: 36px;
+                    clicked => { zoom-in(); }
+                }
+                Button {
+                    text: "⊞";
+                    width: 36px;
+                    clicked => { fit-screen(); }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                Text {
+                    text: filename;
+                    color: #cccccc;
+                    font-size: 13px;
+                    overflow: elide;
+                }
+                Rectangle { horizontal-stretch: 1; }
+                Text {
+                    text: info;
+                    color: #888888;
+                    font-size: 12px;
+                }
+            }
+        }
+
+        // Image area
+        Rectangle {
+            vertical-stretch: 1;
+            background: #111111;
+            clip: true;
+
+            if current-image.width > 0 && current-image.height > 0: Image {
+                source: current-image;
+                image-fit: contain;
+                width: parent.width * zoom;
+                height: parent.height * zoom;
+                x: (parent.width  - self.width)  / 2;
+                y: (parent.height - self.height) / 2;
+            }
+            if current-image.width == 0: Text {
+                text: "Resim yüklenemedi";
+                color: #666666;
+                font-size: 16px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+    }
+}

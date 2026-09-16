@@ -1,0 +1,17 @@
+#!/bin/sh
+# prerm — stop the service and deregister the DM alternative before removal.
+set -e
+
+case "$1" in
+    remove|deconfigure)
+        if [ -d /run/systemd/system ]; then
+            deb-systemd-invoke stop bacak-display-manager.service >/dev/null 2>&1 || true
+        fi
+        if command -v update-alternatives >/dev/null 2>&1; then
+            update-alternatives --remove x-display-manager \
+                /usr/bin/bacak-display-manager || true
+        fi
+        ;;
+esac
+
+exit 0

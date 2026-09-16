@@ -1,0 +1,157 @@
+[package]
+name        = "bacak-compositor"
+description = "Bacak OS Wayland compositor — window management, input, and the Smithay-driven session host."
+version     = { workspace = true }
+edition     = { workspace = true }
+license     = { workspace = true }
+authors     = { workspace = true }
+repository  = { workspace = true }
+
+[[bin]]
+name = "bacak-compositor"
+path = "src/main.rs"
+
+[dependencies]
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+thiserror   = { workspace = true }
+parking_lot = { workspace = true }
+tracing     = { workspace = true }
+anyhow      = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Smithay runtime — heavy build; enabled via the `runtime` feature so a plain
+# `cargo check` on the workspace stays fast. Flip the feature when you want a
+# real Wayland socket. Anvil-style xdg-shell wiring lives behind the same gate.
+smithay = { version = "0.7", optional = true, default-features = false, features = [
+    "wayland_frontend",
+    "desktop",
+    "backend_winit",
+    "renderer_gl",
+    # XWayland: spawn an Xwayland server + act as its X11 window manager so
+    # legacy X11 clients map as ordinary Bacak windows. Pulls in x11rb +
+    # the x11rb calloop event source. Needs the `Xwayland` binary at runtime.
+    "xwayland",
+] }
+calloop = { version = "0.14", optional = true }
+winit   = { version = "0.30", optional = true }
+
+# Glyph rasteriser for the task-switcher labels. Optional + behind
+# `runtime` so a plain `cargo check` doesn't compile it.
+fontdue = { workspace = true, optional = true }
+
+# Rich text layout/shaping for selectable native text (Tier A selection).
+# Same optional/runtime gating as fontdue.
+cosmic-text = { workspace = true, optional = true }
+
+# AT-SPI2 accessibility bridge (Tier C selection over D-Bus). Runtime-gated.
+zbus = { workspace = true, optional = true }
+
+# PNG decoder for app icons. Same optional/runtime gating as fontdue.
+image   = { workspace = true, optional = true }
+
+# SVG rasteriser for scalable app icons. Same optional/runtime gating.
+resvg   = { workspace = true, optional = true }
+
+# XDG icon-theme resolver (active theme + Inherits + hicolor). Runtime-gated.
+freedesktop-icons = { workspace = true, optional = true }
+
+# Colour-emoji rendering: reads CBDT/CBLC embedded PNG strikes from Noto Color
+# Emoji (fontdue does outlines only). Pinned to 0.21 (already in the lock via
+# resvg/fontdb) to avoid a duplicate copy. Runtime-gated.
+ttf-parser = { version = "0.21", optional = true }
+
+# Config hot-reload (watch compositor.json). Same optional/runtime gate.
+notify  = { workspace = true, optional = true }
+
+# Signal handling for clean-shutdown session flush. Runtime-gated.
+libc    = { workspace = true, optional = true }
+
+# XDG user dirs (~/Pictures, ~/ etc) for the file browser.
+dirs    = { version = "5", optional = true }
+
+# QR code encoding for the Uzakel pairing panel. Same optional/runtime
+# gating as the other rasterisation deps above.
+qrcode  = { workspace = true, optional = true }
+
+# bacak-remote (uzakel/uzakel-windows) wire protocol + PIN/X25519/ChaCha20-Poly1305
+# pairing crypto, reused as-is for the "Uzak Masaüstü" panel's PC-streaming
+# session rather than re-implemented here. Cross-workspace path dependency —
+# see the panel module's doc comment for why this lives in a sibling project
+# instead of under bacak/. Same optional/runtime gating as the rasterisation
+# deps above: only needed when the real renderer exists to draw the stream.
+bacak-remote-proto = { path = "../../../uzakel/uzakel-windows/bacak-remote-proto", optional = true }
+tokio = { workspace = true, features = ["net"], optional = true }
+zstd = { version = "0.13", optional = true }
+
+# H.264 decode for the "Uzak Masaüstü" panel's hardware-encode path (see
+# uzakel/uzakel-windows/HARDWARE_ENCODE_PLAN.md step 5) — native Linux build, so
+# it links the system's libavcodec/libavutil/libswscale via pkg-config
+# (`apt install libavcodec-dev libavutil-dev libswscale-dev`), unlike the
+# server side's cross-compiled, vendored-FFmpeg Windows build.
+ffmpeg-next = { version = "9.0", optional = true, default-features = false, features = ["codec", "software-scaling", "format"] }
+
+# NOTE: the udev backend uses smithay's re-exported `rustix` (see
+# `smithay::reexports::rustix`). Pinning our own copy creates a parallel
+# rustix in the dep graph and the OFlags types stop matching across calls.
+
+[features]
+default = []
+# Enable the live Smithay-based runtime. Pulls in libwayland-server, libinput,
+# libudev, libdrm, libxkbcommon, libgbm, libegl, libseat — system dev headers
+# are required (installed via apt: libegl-dev libseat-dev libsystemd-dev …).
+runtime = ["dep:smithay", "dep:calloop", "dep:winit", "dep:fontdue", "dep:cosmic-text", "dep:zbus", "dep:image", "dep:resvg", "dep:freedesktop-icons", "dep:notify", "dep:libc", "dep:ttf-parser", "dep:dirs", "dep:qrcode", "dep:bacak-remote-proto", "dep:tokio", "dep:zstd", "dep:ffmpeg-next"]
+# Native-session backend: libseat + libudev + libinput + DRM/KMS + GBM + EGL.
+# Pulls every dependency `runtime` does, plus the udev / DRM / session pieces
+# of Smithay. Requires the same headers as `runtime` AND the DRM/KMS stack:
+#   sudo apt install libdrm-dev libgbm-dev libegl-dev libgles2-mesa-dev \
+#                    libinput-dev libudev-dev libseat-dev
+# Activate with: `cargo build -p bacak-compositor --features udev` and select
+# at runtime via `BACAK_BACKEND=udev`.
+udev = [
+    "runtime",
+    "smithay?/backend_udev",
+    "smithay?/backend_drm",
+    "smithay?/backend_gbm",
+    "smithay?/backend_egl",
+    "smithay?/backend_libinput",
+    "smithay?/backend_session_libseat",
+    "smithay?/use_system_lib",
+]
+
+# ---------------------------------------------------------------------------
+# Debian packaging (cargo-deb). Ships the compositor binary.
+# Build with:
+#     cargo build --release -p bacak-compositor --features udev
+#     cargo deb --no-build -p bacak-compositor
+# ---------------------------------------------------------------------------
+[package.metadata.deb]
+maintainer = "Bacak Desktop Project <packages@example.org>"
+copyright = "2026, Bacak Desktop Project"
+section = "x11"
+priority = "optional"
+extended-description = """\
+Bacak OS Wayland compositor — window manager, input handling, and the
+Smithay-driven session host for the Bacak Desktop Environment. Uses the
+udev/DRM/KMS native backend (production). Required by bacak-display-manager
+to host the greeter and user sessions."""
+# $auto resolves libgbm1, libseat1, libinput10, libdrm2, libxkbcommon0,
+# libudev1, libsystemd0, libgudev-1.0-0, libwacom9, libcap2, libevdev2 …
+# libegl1 + libgl1-mesa-dri are dlopen'd by Mesa at runtime (not in ldd).
+# xwayland is spawned by the compositor for X11 application support.
+depends = "$auto, xkb-data, fonts-dejavu-core | fonts-dejavu, libegl1, libgl1-mesa-dri, xwayland, bluez-obexd, python3, python3-dbus, python3-gi"
+# lxpolkit: bacak-session starts it as the session's polkit auth agent.
+# Without it, pkexec (kur-baslat and anything else needing root) has nowhere
+# to show its prompt and fails silently — soft dependency since the session
+# still starts fine without it, just without privileged-action prompts.
+recommends = "bacak-display-manager, lxpolkit"
+# bacak (<= 0.1.0) shipped /usr/bin/bacak-compositor; this package takes it over.
+replaces = "bacak (<= 0.1.0)"
+breaks = "bacak (<= 0.1.0)"
+assets = [
+    ["../../target/release/bacak-compositor", "usr/bin/", "755"],
+    ["../../packaging/bacak-session", "usr/bin/bacak-session", "755"],
+    ["../../packaging/changelog.Debian.gz", "usr/share/doc/bacak-compositor/changelog.Debian.gz", "644"],
+    # Wayland session entry: makes the Bacak session visible in any display manager.
+    ["../../packaging/bacak.desktop", "usr/share/wayland-sessions/bacak.desktop", "644"],
+]

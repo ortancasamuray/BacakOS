@@ -1,0 +1,34 @@
+[workspace]
+
+[package]
+name        = "bacak-epub"
+description = "Bacak OS EPUB e-book reader"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+authors = ["Bacak Desktop Project <packages@example.org>"]
+
+[[bin]]
+name = "bacak-epub"
+path = "src/main.rs"
+
+[dependencies]
+slint  = { version = "1.8", default-features = false, features = ["compat-1-2", "backend-winit", "backend-winit-wayland", "renderer-software", "std"] }
+anyhow = "1"
+epub   = "2"
+zip    = { version = "2", default-features = false, features = ["deflate"] }
+
+[build-dependencies]
+slint-build = "1.8"
+
+[package.metadata.deb]
+maintainer = "Bacak Desktop Project <packages@example.org>"
+copyright  = "2026, Bacak Desktop Project"
+section    = "text"
+priority   = "optional"
+extended-description = "Bacak OS EPUB e-book reader with chapter navigation and font size control."
+depends    = "$auto, libwayland-client0, libwayland-cursor0, libwayland-egl1, libxkbcommon0, libegl1, libgl1"
+assets = [
+    ["../../target/release/bacak-epub", "usr/bin/", "755"],
+    ["../../icons/hicolor/scalable/apps/application-epub.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
+]

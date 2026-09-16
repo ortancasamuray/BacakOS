@@ -1,0 +1,9 @@
+altay (0.1.0-1) unstable; urgency=medium
+
+  * Initial release: sandboxed, touch-friendly Wayland file manager.
+    - Home / removable / network sandbox, never runs as root.
+    - Archives (zip/tar/7z/rar/deb/rpm + split volumes), udisks2 devices,
+      gvfs network shares with keyring, previews, indexed + content search,
+      transfers, drag-and-drop, themes, settings.
+
+ -- Anadolu Panteri <bilgi@anadolupanteri.org.tr>  Sun, 07 Jun 2026 12:00:00 +0000

@@ -1,0 +1,102 @@
+[package]
+name = "kur"
+version = "0.1.0"
+edition = "2021"
+description = "BacakOS system installer for Debian 13 (Trixie)"
+license = "GPL-3.0-or-later"
+homepage = "https://anadolupanteri.org.tr"
+repository = "https://anadolupanteri.org.tr"
+authors = ["Anadolu Panteri <bilgi@anadolupanteri.org.tr>"]
+# 1.82 for `Option::is_none_or`. Trixie ships rustc 1.85, so this costs nothing.
+rust-version = "1.82"
+
+[dependencies]
+# UI. The software renderer is the only one guaranteed to work in a live image
+# with no GPU driver loaded — and an installer is exactly where that happens.
+# It also matches altay, so the two share a compiled Slint dependency.
+slint = { version = "1.8", default-features = false, features = [
+    "compat-1-2",
+    "std",
+    "backend-winit-wayland",  # inside a running bacak-compositor session
+    "renderer-software",
+] }
+
+# Error handling
+anyhow = "1"
+thiserror = "1"
+
+# `lsblk -J` and `localectl` emit JSON; parse it rather than scraping text.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Logging — the installer writes a full transcript to /var/log/kur.log.
+log = "0.4"
+env_logger = "0.11"
+
+[features]
+default = []
+# Run straight on DRM/KMS with no compositor (live ISO, tty target).
+# Build with: cargo build --release --no-default-features --features kms
+kms = ["slint/backend-linuxkms-noseat"]
+
+[build-dependencies]
+slint-build = "1.8"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+
+# `cargo deb` packaging (cargo install cargo-deb && cargo deb)
+[package.metadata.deb]
+maintainer = "Anadolu Panteri <bilgi@anadolupanteri.org.tr>"
+copyright = "2026, Anadolu Panteri <bilgi@anadolupanteri.org.tr>"
+changelog = "debian/changelog"
+section = "admin"
+priority = "optional"
+extended-description = """
+kur is the BacakOS system installer: a five-step graphical wizard (locale, \
+timezone, partitioning, account, install) that unpacks the live ISO's own \
+squashfs onto a disk and installs GRUB. It offers an automatic GPT layout or \
+manual role assignment over existing partitions, refuses the live medium as \
+a target, and validates the whole plan before touching a single sector."""
+
+# `$auto` resolves the directly-linked libraries. The Wayland and xkb libraries
+# are dlopen-ed by winit at runtime, so they are not auto-detected.
+#
+# The command line tools are what the install stages actually execute *on the
+# host* (the running live system), and a missing one fails the install halfway
+# through — with the target disk already wiped. They are therefore hard
+# dependencies, not recommendations:
+#   squashfs-tools  unsquashfs (base system extraction)
+#   util-linux      sfdisk, lsblk, blkid, mkswap, mount, umount
+#   dosfstools      mkfs.vfat (ESP)      e2fsprogs  mkfs.ext4 (root)
+#   coreutils       chroot, ln           udev       udevadm settle
+#   systemd         systemctl reboot     sudo       privilege escalation
+#                                                    (see `kur-baslat`; not
+#                                                    pkexec/polkit — the live
+#                                                    user has no real password
+#                                                    for PAM to check, so
+#                                                    `auth_admin` can never
+#                                                    succeed there)
+#
+# `locale-gen`, `grub-install`, `update-grub`, `useradd`, `chpasswd`,
+# `systemd-machine-id-setup` and `update-initramfs` also run via `chroot`, but
+# *inside* the target — they must exist in the ISO's squashfs (Buildeba's job),
+# not here.
+depends = """$auto, \
+libwayland-client0, libwayland-cursor0, libxkbcommon0, \
+squashfs-tools, util-linux, dosfstools, e2fsprogs, coreutils, udev, systemd, sudo"""
+# kur.desktop's `Icon=kur` only resolves from the BacakOS icon theme
+# (bacak-icons); without it the entry falls back to a blank/generic icon
+# rather than failing, so this is a soft recommendation, not a hard depend.
+recommends = "bacak-icons"
+assets = [
+    ["target/release/kur", "usr/bin/", "755"],
+    ["scripts/kur-baslat", "usr/bin/", "755"],
+    ["scripts/kur-root", "usr/libexec/", "755"],
+    ["kur.desktop", "usr/share/applications/", "644"],
+    ["kur.1", "usr/share/man/man1/", "644"],
+    ["debian/lintian-overrides", "usr/share/lintian/overrides/kur", "644"],
+]

@@ -1,0 +1,222 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Anadolu Panteri <bilgi@anadolupanteri.org.tr>
+//
+// The wizard shell: sidebar, page switcher, action bar. It owns no data of its
+// own — every property here is forwarded to a page in `pages.slint`.
+
+import { Button } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { StepModel, DiskModel, PartitionModel, SegmentModel, GapModel, PlannedCreateModel } from "models.slint";
+import {
+    StepRow, LanguagePage, TimezonePage, DiskPage, UserPage, InstallPage
+} from "pages.slint";
+
+// Re-exported so `slint::include_modules!()` generates the Rust structs and the
+// `Theme` global accessor. Only what the entry file exports reaches Rust.
+export { Theme, StepModel, DiskModel, PartitionModel, SegmentModel, GapModel, PlannedCreateModel }
+
+export component MainWindow inherits Window {
+    title: "BacakOS Kurulum";
+    preferred-width: 980px;
+    preferred-height: 680px;
+    min-width: 840px;
+    min-height: 600px;
+    background: Theme.bg;
+
+    // -- Navigation state
+    in-out property <int> current-step: 0;
+    in property <[StepModel]> steps;
+    /// Highest step the user has unlocked; guards the sidebar against skipping.
+    in property <int> max-reachable: 0;
+    /// False while the current page has invalid input, disabling "İleri".
+    in property <bool> can-advance: true;
+
+    // -- Page state
+    in property <[string]> locale-labels;
+    in property <[string]> keymaps;
+    in-out property <int> locale-index;
+    in-out property <int> keymap-index;
+
+    in property <[string]> zones;
+    in-out property <int> zone-index;
+    in property <string> selected-zone;
+
+    in property <[DiskModel]> disks;
+    in property <int> disk-index: -1;
+    in property <bool> manual-mode;
+    in property <[PartitionModel]> partitions;
+    in property <[string]> partition-roles;
+    in property <[SegmentModel]> disk-segments;
+    in property <[GapModel]> disk-gaps;
+    in property <[string]> create-roles;
+    in property <[PlannedCreateModel]> planned-creates;
+    in property <string> plan-error;
+
+    in-out property <string> hostname: "bacakos";
+    in-out property <string> username;
+    in-out property <string> password;
+    in-out property <string> password-confirm;
+    in-out property <bool> root-same-password: true;
+    in property <int> password-score;
+    in property <string> validation-error;
+
+    in property <bool> install-running;
+    in property <bool> install-finished;
+    in property <bool> install-failed;
+    in property <float> install-progress;
+    in property <string> install-stage;
+    in property <string> install-log;
+    in property <string> install-summary;
+    in property <bool> can-start;
+    in property <string> install-blocked-reason;
+
+    // -- Callbacks into Rust
+    callback step-selected(int);
+    callback next-clicked();
+    callback back-clicked();
+    /// The locale changed; Rust re-derives the matching keymap and time zone.
+    callback locale-changed();
+    callback zone-filter-changed(string);
+    callback zone-selected(int);
+    callback disk-selected(int);
+    callback manual-toggled(bool);
+    callback partition-role-changed(int, int);
+    callback partition-format-toggled(int, bool);
+    callback partition-created(int, int, string);
+    callback partition-create-removed(int);
+    /// Any account field changed; Rust re-validates and updates `can-advance`.
+    callback user-changed();
+    callback install-start();
+    callback install-cancel();
+    callback reboot();
+
+    HorizontalLayout {
+        // --- Sidebar
+        Rectangle {
+            width: 240px;
+            background: Theme.sidebar;
+
+            VerticalLayout {
+                padding: 20px;
+                spacing: 6px;
+
+                Text {
+                    text: "BacakOS";
+                    color: Theme.text;
+                    font-size: 20px;
+                    font-weight: 800;
+                }
+                Text {
+                    text: "Debian 13 · Trixie";
+                    color: Theme.text-dim;
+                    font-size: 12px;
+                }
+                Rectangle { height: 20px; }
+
+                for step[i] in steps: StepRow {
+                    step: step;
+                    active: i == root.current-step;
+                    reachable: i <= root.max-reachable;
+                    TouchArea {
+                        enabled: i <= root.max-reachable && !root.install-running;
+                        clicked => { root.step-selected(i); }
+                    }
+                }
+
+                Rectangle { vertical-stretch: 1; }
+
+                Text {
+                    text: "sürüm 0.1.0";
+                    color: Theme.text-dim;
+                    font-size: 11px;
+                }
+            }
+        }
+
+        // --- Content
+        VerticalLayout {
+            horizontal-stretch: 1;
+            padding: 28px;
+            spacing: Theme.gap;
+
+            if current-step == 0: LanguagePage {
+                vertical-stretch: 1;
+                locale-labels: root.locale-labels;
+                keymaps: root.keymaps;
+                locale-index <=> root.locale-index;
+                keymap-index <=> root.keymap-index;
+                changed => { root.locale-changed(); }
+            }
+            if current-step == 1: TimezonePage {
+                vertical-stretch: 1;
+                zones: root.zones;
+                zone-index <=> root.zone-index;
+                selected-zone: root.selected-zone;
+                filter-changed(text) => { root.zone-filter-changed(text); }
+                zone-selected(i) => { root.zone-selected(i); }
+            }
+            if current-step == 2: DiskPage {
+                vertical-stretch: 1;
+                disks: root.disks;
+                disk-index: root.disk-index;
+                manual-mode: root.manual-mode;
+                partitions: root.partitions;
+                partition-roles: root.partition-roles;
+                segments: root.disk-segments;
+                gaps: root.disk-gaps;
+                create-roles: root.create-roles;
+                creates: root.planned-creates;
+                plan-error: root.plan-error;
+                disk-selected(i) => { root.disk-selected(i); }
+                manual-toggled(on) => { root.manual-toggled(on); }
+                role-changed(i, role) => { root.partition-role-changed(i, role); }
+                format-toggled(i, on) => { root.partition-format-toggled(i, on); }
+                create-partition(gap, role, size) => { root.partition-created(gap, role, size); }
+                remove-create(i) => { root.partition-create-removed(i); }
+            }
+            if current-step == 3: UserPage {
+                vertical-stretch: 1;
+                hostname <=> root.hostname;
+                username <=> root.username;
+                password <=> root.password;
+                password-confirm <=> root.password-confirm;
+                root-same-password <=> root.root-same-password;
+                password-score: root.password-score;
+                validation-error: root.validation-error;
+                changed => { root.user-changed(); }
+            }
+            if current-step == 4: InstallPage {
+                vertical-stretch: 1;
+                running: root.install-running;
+                finished: root.install-finished;
+                failed: root.install-failed;
+                progress: root.install-progress;
+                stage-label: root.install-stage;
+                log-tail: root.install-log;
+                summary: root.install-summary;
+                can-start: root.can-start;
+                blocked-reason: root.install-blocked-reason;
+                start => { root.install-start(); }
+                cancel => { root.install-cancel(); }
+                reboot => { root.reboot(); }
+            }
+
+            // The final page owns its own action bar, so hide the shell's.
+            if current-step < 4: HorizontalLayout {
+                spacing: 8px;
+                Button {
+                    text: "Geri";
+                    enabled: root.current-step > 0;
+                    clicked => { root.back-clicked(); }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                Button {
+                    text: "İleri";
+                    primary: true;
+                    enabled: root.can-advance;
+                    clicked => { root.next-clicked(); }
+                }
+            }
+        }
+    }
+}

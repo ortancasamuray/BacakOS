@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Phone (Aegean, filled pale so it reads as a solid shape at launcher
+     size, not just a thin outline) with a Rust cursor arrow breaking out
+     of its top-right corner — this app's whole job is turning phone
+     touches into a desktop cursor, so that's the glyph. Colors read
+     against ic_launcher_background.xml's plain white. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Soft glow behind the cursor -->
+    <path
+        android:pathData="M74,60 m-14,0 a14,14 0 1,0 28,0 a14,14 0 1,0 -28,0"
+        android:fillColor="#26EF8348" />
+
+    <!-- Phone body -->
+    <path
+        android:pathData="M43,24 L61,24 A6,6 0 0 1 67,30 L67,70 A6,6 0 0 1 61,76 L43,76 A6,6 0 0 1 37,70 L37,30 A6,6 0 0 1 43,24 Z"
+        android:strokeColor="#07334A"
+        android:strokeWidth="5"
+        android:strokeLineJoin="round"
+        android:strokeLineCap="round"
+        android:fillColor="#E6F6F8" />
+
+    <!-- Home indicator -->
+    <path
+        android:pathData="M46,71 L58,71"
+        android:strokeColor="#5CB0C4"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+
+    <!-- Cursor arrow, breaking out of the phone's top-right corner -->
+    <path
+        android:pathData="M63,47 L63,68 L67.5,64 L71.5,73 L76,71 L72,62 L80,62 Z"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2"
+        android:strokeLineJoin="round"
+        android:fillColor="#D96C2D" />
+</vector>

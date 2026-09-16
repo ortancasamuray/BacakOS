@@ -1,0 +1,6 @@
+/target
+# Prebuilt Windows FFmpeg (BtbN FFmpeg-Builds, QSV/libvpl-enabled) vendored
+# for the planned hardware video encoding work — see
+# HARDWARE_ENCODE_PLAN.md. ~200MB of DLLs/headers/import libs; re-download
+# with the command in that plan rather than committing it.
+/vendor/ffmpeg-*/

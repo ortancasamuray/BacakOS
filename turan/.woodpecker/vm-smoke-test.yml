@@ -1,0 +1,69 @@
+# Woodpecker VM smoke test — bare-metal proof for docs/PROTOTYPE.md path B:
+# boots a Debian VM with a virtio-gpu (virgl 3D) seat and asserts an active
+# logind 'greeter' session on seat0 hosted by the **real bacak-compositor**
+# (DRM master + $BACAK_STARTUP). The compositor is built from a separate repo.
+#
+# RUNNER REQUIREMENT — this needs /dev/kvm. Either:
+#   (a) docker backend + a *trusted* repo so `privileged: true` exposes the
+#       host's /dev/kvm (used below), or
+#   (b) a Woodpecker agent with the **local** backend on a KVM host — then drop
+#       `privileged` and the `image`, and uncomment the `labels` filter.
+#
+# The compositor is cloned from a single secret URL (provider-agnostic; embed a
+# token if private), e.g. https://<token>@git.example.org/bacak-os/bacak.git :
+#   secret  bacak_compositor_clone_url
+when:
+  - event: manual
+  - event: cron        # schedule configured in the Woodpecker repo settings
+  - event: push
+    path:
+      - 'crates/bacak-display-manager/**'
+      - 'crates/bacak-pam/**'
+      - 'packaging/prototype/**'
+      - 'packaging/vm/**'
+      - 'pam/bacak-greeter'
+      - '.woodpecker/vm-smoke-test.yml'
+
+# (b) local-backend agent on a KVM host: uncomment and drop `image`/`privileged`.
+# labels:
+#   backend: local
+
+steps:
+  - name: vm-smoke
+    image: debian:trixie          # match the VM's distro so the built compositor runs
+    privileged: true              # exposes the host's /dev/kvm (trusted repo only)
+    environment:
+      BACAK_COMPOSITOR_CLONE_URL:
+        from_secret: bacak_compositor_clone_url
+      BDM_ALLOW_WESTON_FALLBACK: '0'
+      BDM_TIMEOUT: '2400'
+    commands:
+      - export DEBIAN_FRONTEND=noninteractive
+      # Absolute paths from the real workspace env var (set by Woodpecker).
+      - export BDM_WORKDIR="$CI_WORKSPACE/vmrun"
+      - export BDM_COMPOSITOR_SRC="$CI_WORKSPACE/bacak"
+      - apt-get update
+      - >-
+        apt-get install -y --no-install-recommends
+        qemu-system-x86 qemu-utils cloud-image-utils
+        git curl ca-certificates build-essential pkg-config cmake
+        libwayland-dev libxkbcommon-dev libfontconfig-1-dev
+        libdrm-dev libgbm-dev libegl-dev libgles-dev libgl-dev
+        libinput-dev libudev-dev libseat-dev libsystemd-dev
+        libfreetype-dev libexpat1-dev
+      # Rust toolchain (no GitHub-hosted action needed).
+      - curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+      - export PATH="$HOME/.cargo/bin:$PATH"
+      - command -v cargo-deb >/dev/null || cargo install cargo-deb --locked
+      # /dev/kvm sanity.
+      - test -e /dev/kvm || { echo "ERROR: no /dev/kvm in this step"; exit 1; }
+      - chmod 666 /dev/kvm 2>/dev/null || true
+      # The real compositor (separate repo).
+      - git clone --depth 1 "$BACAK_COMPOSITOR_CLONE_URL" bacak
+      # Build the .deb, then run the smoke test (it builds the compositor from
+      # $BDM_COMPOSITOR_SRC and requires it — no weston fallback).
+      - cargo build --release -p bacak-display-manager --features system-pam
+      - cargo build --release -p bacak-greeter --features gui --bin bacak-greeter
+      - cargo deb --no-build -p bacak-display-manager
+      - mkdir -p vmrun
+      - packaging/vm/smoke-test.sh

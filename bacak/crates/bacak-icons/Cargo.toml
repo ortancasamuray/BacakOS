@@ -1,0 +1,33 @@
+[package]
+name        = "bacak-icons"
+description = "BacakOS özgün ikon seti (freedesktop icon theme) — packaging-only"
+version     = { workspace = true }
+edition     = { workspace = true }
+license     = { workspace = true }
+authors     = { workspace = true }
+repository  = { workspace = true }
+
+[lib]
+path = "src/lib.rs"
+
+[package.metadata.deb]
+maintainer = "Bacak Desktop Project <packages@example.org>"
+copyright  = "2026, Bacak Desktop Project"
+section    = "x11"
+priority   = "optional"
+extended-description = """\
+BacakOS'a özgü, çok renkli düz (flat) tasarımlı freedesktop ikon seti.
+Uygulama, dosya türü, konum ve eylem ikonlarını kapsar; hicolor'dan miras alır
+so eksik isimler sistemin geri kalanına düşer. Masaüstü Ayarları → İkon Seti
+menüsünden seçilebilir; kuruluysa bacak-compositor'ın otomatik algılaması da
+onu tercih eder."""
+depends = "bacak-compositor (>= 0.1.0)"
+assets = [
+    ["theme/BacakOS/index.theme",              "usr/share/icons/BacakOS/index.theme",              "644"],
+    ["theme/BacakOS/scalable/apps/*.svg",       "usr/share/icons/BacakOS/scalable/apps/",           "644"],
+    ["theme/BacakOS/scalable/mimetypes/*.svg",  "usr/share/icons/BacakOS/scalable/mimetypes/",      "644"],
+    ["theme/BacakOS/scalable/places/*.svg",     "usr/share/icons/BacakOS/scalable/places/",         "644"],
+    ["theme/BacakOS/scalable/actions/*.svg",    "usr/share/icons/BacakOS/scalable/actions/",        "644"],
+    ["theme/BacakOS/scalable/status/*.svg",     "usr/share/icons/BacakOS/scalable/status/",         "644"],
+    ["changelog.Debian.gz",                     "usr/share/doc/bacak-icons/changelog.Debian.gz",    "644"],
+]
