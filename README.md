@@ -20,7 +20,6 @@ Official site: [www.anadolupanteri.org.tr](https://www.anadolupanteri.org.tr)
 | [`tahta/`](tahta) | GPU-accelerated digital whiteboard engine |
 | [`kur/`](kur) | System installer |
 | [`uzakel/`](uzakel) | Remote desktop: Android/Windows/macOS companion apps and the BacakOS-side daemon |
-| [`Buildeba/`](Buildeba) | live-build configuration used to produce the installable ISO |
 | [`kilavuz/`](kilavuz) | User guide (HTML) |
 
 Each component directory has its own README with build and architecture
@@ -33,13 +32,6 @@ Build all `.deb` packages for every component:
 ```bash
 sudo bash setup-deps.sh   # once: build + runtime dependencies
 bash build-debs.sh        # produces dist/*.deb
-```
-
-Build the installable ISO (requires root, uses `dist/*.deb` via
-`Buildeba/config/packages.chroot`):
-
-```bash
-sudo ./Buildeba/APbuild iso
 ```
 
 ## License
