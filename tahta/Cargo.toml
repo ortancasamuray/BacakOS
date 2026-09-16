@@ -1,0 +1,48 @@
+[package]
+name = "tahta"
+version = "0.1.0"
+edition = "2021"
+description = "Ultra-low-latency, GPU-accelerated digital whiteboard engine for interactive flat panels"
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "tahta"
+path = "src/main.rs"
+
+[dependencies]
+wgpu = "0.19"
+winit = "0.29"
+raw-window-handle = "0.6"
+glam = { version = "0.27", features = ["bytemuck"] }
+bytemuck = { version = "1.16", features = ["derive"] }
+pollster = "0.3"
+log = "0.4"
+env_logger = "0.11"
+mupdf = { version = "0.4", default-features = false, features = ["js", "xps", "svg", "cbz", "img", "html", "epub", "tesseract", "sys-lib-harfbuzz", "sys-lib-freetype"] }
+anyhow = "1"
+servo = { version = "0.5.0", default-features = false, features = ["baked-in-resources", "clipboard", "js_jit"] }
+dpi = "0.1"
+euclid = "0.22"
+url = "2"
+libc = "0.2"
+flate2 = "1"
+fontdue = "0.9"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[package.metadata.deb]
+maintainer = "Bacak Desktop Project <packages@example.org>"
+copyright  = "2026, Bacak Desktop Project"
+section    = "graphics"
+priority   = "optional"
+extended-description = "BacakOS için GPU hızlandırmalı, düşük gecikmeli dijital beyaz tahta uygulaması. Dokunmatik okul tahtaları (Interactive Flat Panels) için tasarlandı."
+depends    = "$auto, libwayland-client0, libwayland-egl1, libxkbcommon0, libmupdf25.1"
+assets = [
+    ["target/release/tahta", "usr/bin/", "755"],
+    ["desktop/tahta.desktop", "usr/share/applications/", "644"],
+    ["icons/hicolor/scalable/apps/tahta.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
+]

@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=Bacak Desktop
+Comment=The Bacak Wayland desktop session
+Exec=bacak-session
+Type=Application
+DesktopNames=Bacak
+Keywords=wayland;bacak;

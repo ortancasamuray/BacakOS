@@ -1,0 +1,63 @@
+.TH BACAK-DM-SETUP 1 "June 2026" "BDM 0.1.0" "User Commands"
+.SH NAME
+bacak-dm-setup \- install, enable, revert and uninstall the Bacak Display Manager
+.SH SYNOPSIS
+.B bacak-dm-setup
+.I subcommand
+.RI [ options ]
+.SH DESCRIPTION
+.B bacak-dm-setup
+manages making the Bacak Display Manager (BDM) the system display manager, with
+a built-in recovery path. Run as root.
+.SH SUBCOMMANDS
+.TP
+.B install
+Ensure runtime dependencies (weston, dbus), install the real
+.BR bacak-compositor (1)
+if resolvable, and the
+.B bacak-session
+wrapper. Does NOT change the active display manager.
+.TP
+.B enable
+Make BDM the display manager, disabling the current one. Prints recovery
+instructions and asks to confirm. By default it takes effect on the next reboot.
+.RS
+.TP
+.B \-\-autologin \fIUSER\fR
+Also enable autologin for \fIUSER\fR (the most-verified mode).
+.TP
+.B \-\-now
+Switch immediately instead of on reboot (ends the current graphical session).
+.TP
+.B \-y\fR, \fB\-\-yes
+Do not prompt for confirmation.
+.RE
+.TP
+.B revert
+Recovery: re-enable and start the previous display manager. Run from a text
+console (Ctrl+Alt+F3) if the graphical login does not appear.
+.TP
+.B status
+Show what is installed and which display manager is active.
+.TP
+.B uninstall
+Revert to the previous display manager, then remove the BDM package.
+.SH ENVIRONMENT
+.TP
+.B BDM_COMPOSITOR
+Path to a prebuilt
+.B bacak-compositor
+binary to install.
+.TP
+.B BDM_COMPOSITOR_SRC
+Path to the compositor source workspace (built if no binary is found).
+.TP
+.B BDM_DEB
+Path to the BDM .deb (used by
+.B install
+when run from a source tree).
+.SH SEE ALSO
+.BR bacak-display-manager (8),
+.BR bacak-compositor (1)
+.SH AUTHOR
+Bacak Desktop Project.

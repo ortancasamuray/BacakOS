@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Filled in by build_mac.sh (sed's __BIN_NAME__). Verified end-to-end
+     on a real Mac, 2026-09-15 (see ../README.md). Remaining TODO:
+     NSAppleEventsUsageDescription (or whatever the actual accessibility/
+     input-injection permission key turns out to require — Screen
+     Recording is covered by NSScreenCaptureUsageDescription below and
+     confirmed working; input injection's own permission prompt hasn't
+     been hit/checked yet) for the TCC prompts build_mac.sh's own TODO
+     section mentions. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>Bacak Remote Server</string>
+    <key>CFBundleDisplayName</key>
+    <string>Bacak Remote Server</string>
+    <key>CFBundleIdentifier</key>
+    <string>org.bacakos.bacak-remote-server</string>
+    <key>CFBundleVersion</key>
+    <string>0.1.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleExecutable</key>
+    <string>__BIN_NAME__</string>
+    <key>CFBundleIconFile</key>
+    <string>app.icns</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>11.0</string>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>Bacak Remote Server, BacakOS'tan görüntülenebilmesi için bu Mac'in ekranını yakalar.</string>
+</dict>
+</plist>

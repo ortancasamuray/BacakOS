@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+export ANSIBLE_LOG_FILE=/var/log/ovos-ansible.log
+export ATMEGA328P_SIGNATURE=":030000001E950F3B"
+export AVRDUDE_ARTIFACT_ARCH="aarch64"
+export AVRDUDE_ARTIFACT_BASE_URL="https://artifacts.smartgic.io/avrdude"
+export AVRDUDE_ARTIFACT_VERSION="v8.1"
+export AVRDUDE_BINARY_PATH=/usr/local/bin/avrdude
+export AVRDUDE_CONFIG_PATH=/usr/local/etc/avrdude.conf
+declare -a DETECTED_DEVICES
+export DETECTED_DEVICES
+export DT_FILE=/sys/firmware/devicetree/base/model
+export EXIT_ALREADY_RUNNING=6
+export EXIT_FAILURE=1
+export EXIT_INVALID_ARGUMENT=4
+export EXIT_MISSING_DEPENDENCY=5
+export EXIT_OS_NOT_SUPPORTED=3
+export EXIT_PERMISSION_DENIED=2
+export EXIT_SUCCESS=0
+export I2C_BUS="1"
+export INSTALLER_VENV_NAME="ovos-installer"
+export LOG_FILE=/var/log/ovos-installer.log
+export NEWT_COLORS="
+    root=white,black
+    border=black,lightgray
+    window=lightgray,lightgray
+    shadow=black,gray
+    title=red,lightgray
+    button=black,cyan
+    actbutton=white,cyan
+    compactbutton=black,lightgray
+    checkbox=black,lightgray
+    actcheckbox=lightgray,cyan
+    entry=black,lightgray
+    disentry=gray,lightgray
+    label=black,lightgray
+    listbox=black,lightgray
+    actlistbox=black,cyan
+    sellistbox=lightgray,black
+    actsellistbox=lightgray,black
+    textbox=black,lightgray
+    acttextbox=black,cyan
+    emptyscale=,gray
+    fullscale=,cyan
+    helpline=white,black
+    roottext=lightgrey,black
+"
+export OS_RELEASE=/etc/os-release
+if [ -d /run/lock ] && [ -w /run/lock ]; then
+    export OVOS_INSTALLER_LOCK_FILE=/run/lock/ovos-installer.lock
+else
+    export OVOS_INSTALLER_LOCK_FILE="${HOME:-/root}/.cache/ovos-installer/ovos-installer.lock"
+fi
+export PASTE_URL="https://paste.uoi.io"
+export PULSE_SOCKET_WSL2=/mnt/wslg/PulseServer
+export REBOOT_FILE_PATH=/tmp/ovos.reboot
+declare -ra SCENARIO_ALLOWED_FEATURES=(skills extra_skills homeassistant llm)
+export SCENARIO_ALLOWED_FEATURES
+declare -ra SCENARIO_ALLOWED_HIVEMIND_OPTIONS=(host port key password)
+export SCENARIO_ALLOWED_HIVEMIND_OPTIONS
+declare -ra SCENARIO_ALLOWED_LLM_OPTIONS=(api_url key model persona max_tokens temperature top_p)
+export SCENARIO_ALLOWED_LLM_OPTIONS
+declare -ra SCENARIO_ALLOWED_OPTIONS=(features channel hardware share_telemetry share_usage_telemetry profile method uninstall raspberry_pi_tuning hivemind llm)
+export SCENARIO_ALLOWED_OPTIONS
+export SCENARIO_NAME="scenario.yaml"
+export SCENARIO_PATH=""
+declare -rA SUPPORTED_DEVICES=(
+    ["atmega328p"]="1a" #https://www.microchip.com/en-us/product/atmega328p
+    ["attiny1614"]="04" #https://www.microchip.com/en-us/product/attiny1614
+    ["tas5806"]="2f"    #https://www.ti.com/product/TAS5806MD
+)
+export SUPPORTED_DEVICES
+export TUI_WINDOW_HEIGHT="35"
+export TUI_WINDOW_WIDTH="90"
+export USE_UV="true"
+export USER_ID="$EUID"
+export WLAN_INTERFACE="wlan0"
+export WSL_FILE=/etc/wsl.conf
+export YQ_BINARY_PATH=/tmp/yq
+export YQ_URL="https://github.com/mikefarah/yq/releases/download/v4.40.3"

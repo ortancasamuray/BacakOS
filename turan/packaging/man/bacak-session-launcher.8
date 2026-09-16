@@ -1,0 +1,32 @@
+.TH BACAK-SESSION-LAUNCHER 8 "June 2026" "BDM 0.1.0" "System Administration"
+.SH NAME
+bacak-session-launcher \- final stage of a BDM login; execs the desktop session
+.SH SYNOPSIS
+.B bacak-session-launcher
+.SH DESCRIPTION
+.B bacak-session-launcher
+is the last stage of a Bacak Display Manager login. By the time it runs,
+.BR bacak-display-manager (8)
+has already dropped privileges to the target user and exported the base
+environment. The launcher therefore runs wholly unprivileged.
+.PP
+It reads the chosen session's command and identifier from the environment,
+wraps the session in a D-Bus user session when needed, and
+.BR execve (2)s
+the session so it becomes the process the daemon waits on. Isolating this
+varied, third-party-heavy step in a tiny unprivileged binary keeps the
+privileged daemon small and auditable.
+.SH ENVIRONMENT
+.TP
+.B BDM_SESSION_EXEC
+The session command (from the
+.I Exec=
+line of the session's desktop entry).
+.TP
+.B BDM_SESSION_ID
+The session identifier (desktop-entry basename).
+.SH SEE ALSO
+.BR bacak-display-manager (8),
+.BR bacak-greeter (1)
+.SH AUTHOR
+Bacak Desktop Project.

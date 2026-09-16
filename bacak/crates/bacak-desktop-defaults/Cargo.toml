@@ -1,0 +1,32 @@
+[package]
+name        = "bacak-desktop-defaults"
+description = "BacakOS varsayılan masaüstü ayarları (dock, duvar kağıdı, ikon teması) — packaging-only"
+version     = { workspace = true }
+edition     = { workspace = true }
+license     = { workspace = true }
+authors     = { workspace = true }
+repository  = { workspace = true }
+
+[lib]
+path = "src/lib.rs"
+
+[package.metadata.deb]
+maintainer = "Bacak Desktop Project <packages@example.org>"
+copyright  = "2026, Bacak Desktop Project"
+section    = "x11"
+priority   = "optional"
+extended-description = """\
+Yeni kullanıcı hesapları (canlı ISO kullanıcısı dahil) için BacakOS
+varsayılan masaüstü ayarlarını kurar: dock açık ve altay/firefox-esr/
+libreoffice-startcenter/bacak-belge sabitlenmiş, BacakOS marka duvar
+kağıdı, BacakOS ikon teması, ve Firefox anasayfası www.eba.gov.tr.
+/etc/skel/.config/bacak/compositor.json olarak kurulur — adduser bunu
+her yeni kullanıcının ev dizinine kopyalar. Firefox anasayfası ise
+/etc/firefox/policies.json ile sistem geneli (tüm profiller, yeni
+kullanıcılar dahil) ayarlanır."""
+depends = "bacak-icons (>= 0.1.0)"
+assets = [
+    ["files/wallpaper.png",         "usr/share/backgrounds/bacakos/wallpaper.png",  "644"],
+    ["files/compositor.json",       "etc/skel/.config/bacak/compositor.json",       "644"],
+    ["files/firefox-policies.json", "etc/firefox/policies.json",                    "644"],
+]

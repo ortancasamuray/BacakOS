@@ -1,0 +1,13 @@
+kur (0.1.0-1) unstable; urgency=medium
+
+  * Initial release: graphical system installer for Debian 13 (Trixie).
+    - Slint UI (software renderer), sidebar wizard: locale, timezone,
+      partitioning, account, install.
+    - Automatic GPT layout (ESP + optional swap + ext4 root) and manual
+      partition role assignment with pre-flight validation.
+    - Refuses the live medium as an install target; refuses to start without
+      a reachable Debian mirror.
+    - Threaded install engine with weighted progress reporting; installs the
+      BacakOS desktop packages when the live image stages them.
+
+ -- Anadolu Panteri <bilgi@anadolupanteri.org.tr>  Fri, 10 Jul 2026 12:00:00 +0000

@@ -1,0 +1,76 @@
+.TH ALTAY 1 "2026-06-07" "altay 0.1.0" "User Commands"
+.SH NAME
+altay \- modern, touch-friendly, sandboxed file manager
+.SH SYNOPSIS
+.B altay
+.RI [ PATH " | " URI ]
+.SH DESCRIPTION
+.B Altay
+is a Wayland-first, touch-friendly file manager that runs entirely as a normal
+user and never requires root. Access is sandboxed to the user's home directory,
+mounted removable and external devices, and accessible network shares; system
+directories are not exposed.
+.PP
+It supports archives (zip, tar.*, 7z, rar, deb, rpm and split multi-volume
+sets), udisks2 device mounting, gvfs network shares (SMB/SFTP/FTP/WebDAV/NFS)
+with passwords stored in the system keyring, image/PDF/video/text previews,
+a background transfer queue, an indexed and content search, drag-and-drop,
+dark and light themes, and a trash with restore.
+.PP
+If a path or a network URI (for example
+.IR smb://server/share )
+is given, Altay opens it on start.
+.SH KEYBOARD SHORTCUTS
+.TP
+.B Delete
+Move the selection to Trash.
+.TP
+.B Backspace
+Go to the parent folder.
+.TP
+.B F2
+Rename the selected item.
+.TP
+.B F5
+Reload the current folder.
+.TP
+.B Escape
+Cancel path editing / close menu / clear the selection.
+.TP
+.B Ctrl+C / Ctrl+X / Ctrl+V
+Copy / Cut / Paste.
+.TP
+.B Ctrl+A
+Select all.
+.TP
+.B Ctrl+L
+Edit the path / enter a URI.
+.TP
+.B Ctrl+F
+Focus the search field.
+.SH FILES
+.TP
+.I ~/.config/altay/config.toml
+Preferences (hidden files, theme, default view, grid zoom) and saved network
+connections.
+.TP
+.I ~/.cache/altay/
+Search index cache and generated thumbnails.
+.SH ENVIRONMENT
+.TP
+.B WAYLAND_DISPLAY ", " DISPLAY
+Selects the Wayland (preferred) or X11 display.
+.TP
+.B XDG_CONFIG_HOME ", " XDG_CACHE_HOME
+Override the configuration and cache locations.
+.SH SEE ALSO
+.BR xdg\-open (1),
+.BR udisksctl (1),
+.BR gio (1)
+.SH AUTHORS
+Anadolu Panteri <bilgi@anadolupanteri.org.tr>, https://anadolupanteri.org.tr
+.SH COPYRIGHT
+Copyright \(co 2026 Anadolu Panteri.
+License GPL-3.0-or-later: GNU GPL version 3 or later
+<https://gnu.org/licenses/gpl.html>.
+This is free software: you are free to change and redistribute it.

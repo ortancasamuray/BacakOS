@@ -1,0 +1,11 @@
+/target
+**/*.rs.bk
+Cargo.lock.bak
+Cargo.backup
+*.deb
+*.log
+*.rvf
+*.rvf.lock
+ruvector.db
+agentdb.*
+.claude/

@@ -1,0 +1,1995 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Anadolu Panteri <bilgi@anadolupanteri.org.tr>
+
+import { ScrollView, LineEdit, Button, CheckBox } from "std-widgets.slint";
+
+// ---- Shared data structures (mirrored from Rust) ----------------------------
+
+export struct EntryModel {
+    name: string,
+    path: string,
+    is-dir: bool,
+    is-symlink: bool,
+    is-archive: bool,
+    size-text: string,
+    modified-text: string,
+    type-text: string,     // "Klasör", "PNG", "MP4", "APK" …
+    glyph: string,
+    selected: bool,
+    has-icon: bool,
+    icon: image,
+}
+
+export struct TransferModel {
+    id: int,
+    label: string,
+    status: string,
+    detail: string,
+    fraction: float,
+    paused: bool,
+    active: bool,
+}
+
+export struct RootModel {
+    label: string,
+    path: string,
+    kind: int,
+    glyph: string,
+    used-text: string,
+    total-text: string,
+    fraction: float,
+}
+
+export struct VolumeModel {
+    object-path: string,
+    label: string,
+    mounted: bool,
+    mount-point: string,
+    used-text: string,
+    total-text: string,
+    fraction: float,
+}
+
+export struct ConnModel {
+    name: string,
+    uri: string,
+}
+
+export struct BreadcrumbModel {
+    label: string,
+    path: string,
+}
+
+export struct AppModel {
+    id: string,
+    name: string,
+    is-default: bool,
+    has-icon: bool,
+    icon: image,
+}
+
+export struct DiskUsageModel {
+    label: string,
+    used-text: string,
+    total-text: string,
+    fraction: float,
+}
+
+// ---- Design tokens ----------------------------------------------------------
+
+export global Theme {
+    in-out property <bool> dark: false;
+    out property <color> bg:         dark ? #1e1f22 : #f5f5f8;
+    out property <color> surface:    dark ? #2b2d31 : #ffffff;
+    out property <color> surface-hi: dark ? #383a40 : #ebebef;
+    out property <color> accent:     dark ? #4f8cff : #FF8C00;
+    out property <color> text:       dark ? #e8e8ea : #1a1a1c;
+    out property <color> text-dim:   dark ? #9a9ba0 : #6a6b70;
+    out property <length> radius: 12px;
+    out property <length> touch-target: 48px;
+    out property <length> gap: 8px;
+}
+
+export global DragState {
+    in-out property <bool> active;
+    in-out property <int> source-index: -1;
+    in-out property <string> source-path;
+    in-out property <string> source-label;
+    in-out property <length> px;
+    in-out property <length> py;
+    in-out property <string> target-path;
+}
+
+export global ContextState {
+    in-out property <bool> active;
+    in-out property <int> index: -1;
+    in-out property <bool> is-dir;
+    in-out property <bool> is-archive;
+    in-out property <length> x;
+    in-out property <length> y;
+}
+
+export global Tip {
+    in-out property <string> text;
+    in-out property <length> x;
+    in-out property <length> y;
+    in-out property <bool> shown;
+}
+
+// ---- Localization -----------------------------------------------------------
+
+export global L {
+    in property <string> grid: "⊞";
+    in property <string> list: "≡";
+    in property <string> compact: "≡ Compact";
+    in property <string> folder: "+ Yeni Klasör";
+    in property <string> copy: "📋";
+    in property <string> cut: "✂";
+    in property <string> paste: "📥";
+    in property <string> connect: "🌐 Bağlan";
+    in property <string> import: "📎 İçe Aktar";
+    in property <string> select: "☐";
+    in property <string> selecting: "✓";
+    in property <string> preview: "👁 Önizleme";
+    in property <string> preview-on: "👁 Önizleme ✓";
+    in property <string> trash-btn: "🗑 Çöpe Taşı";
+    in property <string> compress-btn: "🗜 Sıkıştır";
+    in property <string> extract-btn: "📂 Çıkart";
+    in property <string> restore: "♻ Geri Yükle";
+    in property <string> empty-trash: "🗑 Çöpü Boşalt";
+    in property <string> search-ph: "Dosyalarda ara…";
+    in property <string> search-files-ph: "İçerik ara…";
+    in property <string> in-files: "İçerikte";
+    in property <string> places: "KONUMLAR";
+    in property <string> devices: "AYGITLAR";
+    in property <string> usb-storage: "USB Depolama";
+    in property <string> network: "AĞ";
+    in property <string> trash-place: "Çöp Kutusu";
+    in property <string> perms: "İzinler: ";
+    in property <string> toggle-exec: "Çalıştırılabilir";
+    in property <string> as-admin: "🔑 Yönetici Olarak";
+    in property <string> transfers: "Aktarımlar";
+    in property <string> clear-finished: "Tamamlananları Temizle";
+    in property <string> connect-to-server: "Sunucuya Bağlan";
+    in property <string> address: "Adres";
+    in property <string> password: "Parola";
+    in property <string> username-ph: "Kullanıcı adı (isteğe bağlı)";
+    in property <string> addr-ph: "smb://sunucu/paylaşım";
+    in property <string> path-ph: "Yol veya smb://sunucu/paylaşım";
+    in property <string> save-pw: "Parolayı anahtarlıkta kaydet";
+    in property <string> cancel: "İptal";
+    in property <string> connect-btn: "Bağlan";
+    in property <string> open: "Aç";
+    in property <string> open-folder: "Klasörü Aç";
+    in property <string> ctx-copy: "Kopyala";
+    in property <string> ctx-cut: "Kes";
+    in property <string> ctx-compress: "Sıkıştır";
+    in property <string> rename-item: "Yeniden Adlandır…";
+    in property <string> extract-here: "Buraya Çıkart";
+    in property <string> move-to-trash: "Çöpe Taşı";
+    in property <string> rename-title: "Yeniden Adlandır";
+    in property <string> settings: "Ayarlar";
+    in property <string> show-hidden: "Gizli dosyaları göster";
+    in property <string> dark-mode: "Karanlık mod";
+    in property <string> default-view: "Varsayılan görünüm";
+    in property <string> language: "Dil";
+    in property <string> close: "Kapat";
+    in property <string> open-with: "Şununla Aç…";
+    in property <string> set-default: "Varsayılan olarak ayarla";
+    in property <string> tip-paste: "Yapıştır";
+    in property <string> tip-select: "Seç";
+    in property <string> tip-up: "Üst Dizin";
+    in property <string> tip-down: "Alt Dizine Gir";
+    in property <string> tip-home: "Ana Dizin";
+    in property <string> tip-refresh: "Yenile";
+    in property <string> tip-zoom-in: "Yakınlaş";
+    in property <string> tip-zoom-out: "Uzaklaş";
+    in property <string> tip-pause: "Duraklat";
+    in property <string> tip-resume: "Devam Et";
+    in property <string> tip-eject: "Çıkart";
+    in property <string> tip-edit: "Yolu Düzenle";
+    // Samsung-style sidebar sections
+    in property <string> recent: "Son Dosyalar";
+    in property <string> categories: "KATEGORİLER";
+    in property <string> cat-images: "Görseller";
+    in property <string> cat-audio: "Ses";
+    in property <string> cat-videos: "Videolar";
+    in property <string> cat-docs: "Belgeler";
+    in property <string> cat-downloads: "İndirilenler";
+    in property <string> cat-archives: "Arşivler";
+    // Column headers
+    in property <string> col-name: "Ad";
+    in property <string> col-size: "Boyut";
+    in property <string> col-type: "Tür";
+    in property <string> col-date: "Tarih";
+    // Bottom action bar
+    in property <string> act-move: "Taşı";
+    in property <string> act-copy: "Kopyala";
+    in property <string> act-paste: "Yapıştır";
+    in property <string> act-delete: "Sil";
+    in property <string> act-more: "Daha Fazla";
+    in property <string> act-compress: "Sıkıştır";
+    in property <string> act-extract: "Çıkart";
+    in property <string> act-new-folder: "Yeni Klasör";
+    in property <string> act-restore: "Geri Yükle";
+    in property <string> act-empty-trash: "Çöpü Boşalt";
+}
+
+// ---- Icon-only button with tooltip ------------------------------------------
+
+component IconButton inherits Rectangle {
+    in property <string> icon;
+    in property <string> tip;
+    in property <bool> enabled: true;
+    callback clicked();
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+    background: ta.has-hover && enabled ? Theme.surface-hi : transparent;
+    animate background { duration: 100ms; }
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+        changed has-hover => {
+            if (ta.has-hover && root.tip != "") {
+                Tip.text = root.tip;
+                Tip.x = ta.absolute-position.x;
+                Tip.y = ta.absolute-position.y + root.height + 4px;
+                Tip.shown = true;
+            } else if (!ta.has-hover && Tip.text == root.tip) {
+                Tip.shown = false;
+            }
+        }
+    }
+    Text {
+        text: root.icon;
+        color: root.enabled ? Theme.text : Theme.text-dim;
+        font-size: 20px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+// ---- Sidebar plain row ------------------------------------------------------
+
+component SidebarRow inherits Rectangle {
+    in property <string> label;
+    in property <string> glyph;
+    in property <string> path;
+    in property <bool> active;
+    callback clicked();
+    callback dropped();
+    height: 38px;
+    border-radius: 10px;
+    property <bool> can-drop: DragState.active && self.path != "";
+    property <bool> drop-hot: can-drop && touch.has-hover;
+    background: drop-hot ? #2f5fbf
+        : (active ? Theme.accent.with-alpha(0.12) : (touch.has-hover ? Theme.surface-hi : transparent));
+    animate background { duration: 120ms; }
+    touch := TouchArea {
+        clicked => {
+            if (DragState.active) {
+                if (root.can-drop) { DragState.target-path = root.path; root.dropped(); }
+                DragState.active = false;
+                DragState.source-index = -1;
+                DragState.target-path = "";
+            } else {
+                root.clicked();
+            }
+        }
+    }
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 10px;
+        alignment: start;
+        Text {
+            text: glyph;
+            font-size: 16px;
+            vertical-alignment: center;
+            color: root.active ? Theme.accent : Theme.text-dim;
+        }
+        Text {
+            text: label;
+            color: root.active ? Theme.accent : Theme.text;
+            font-size: 14px;
+            font-weight: root.active ? 700 : 400;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+    if active : Rectangle {
+        x: 0px; y: 8px;
+        width: 3px;
+        height: parent.height - 16px;
+        border-radius: 2px;
+        background: Theme.accent;
+    }
+}
+
+// ---- Category row with colored badge ----------------------------------------
+
+component CategoryRow inherits Rectangle {
+    in property <string> label;
+    in property <string> glyph;
+    in property <color> icon-color;
+    in property <bool> active;
+    callback clicked();
+    height: 38px;
+    border-radius: 10px;
+    background: active ? Theme.accent.with-alpha(0.12) : (ta.has-hover ? Theme.surface-hi : transparent);
+    animate background { duration: 100ms; }
+    ta := TouchArea { clicked => { root.clicked(); } }
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 10px;
+        alignment: start;
+        // Badge dikey ortala
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 26px;
+                height: 26px;
+                border-radius: 6px;
+                background: root.icon-color;
+                Text {
+                    text: root.glyph;
+                    font-size: 14px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    color: white;
+                }
+            }
+        }
+        Text {
+            text: root.label;
+            color: root.active ? Theme.accent : Theme.text;
+            font-size: 13px;
+            font-weight: root.active ? 700 : 400;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+    }
+    if active : Rectangle {
+        x: 0px; y: 8px;
+        width: 3px;
+        height: parent.height - 16px;
+        border-radius: 2px;
+        background: Theme.accent;
+    }
+}
+
+// 2-column category tile used in the sidebar grid
+component CategoryTile inherits Rectangle {
+    in property <string> label;
+    in property <string> glyph;
+    in property <color> icon-color;
+    in property <bool> active;
+    callback clicked();
+    horizontal-stretch: 1;
+    height: 72px;
+    border-radius: 12px;
+    background: active ? icon-color.with-alpha(0.18)
+        : (ta.has-hover ? Theme.surface-hi : icon-color.with-alpha(0.08));
+    border-width: active ? 1.5px : 0px;
+    border-color: icon-color.with-alpha(0.5);
+    animate background { duration: 100ms; }
+    ta := TouchArea { clicked => { root.clicked(); } }
+    VerticalLayout {
+        alignment: center;
+        spacing: 6px;
+        Rectangle {
+            width: 34px;
+            height: 34px;
+            border-radius: 9px;
+            background: root.icon-color;
+            x: (parent.width - self.width) / 2;
+            Text {
+                text: root.glyph;
+                font-size: 16px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                color: white;
+            }
+        }
+        Text {
+            text: root.label;
+            color: root.active ? root.icon-color : Theme.text;
+            font-size: 11px;
+            font-weight: root.active ? 700 : 500;
+            horizontal-alignment: center;
+            overflow: elide;
+            padding-left: 4px;
+            padding-right: 4px;
+        }
+    }
+}
+
+// ---- Grid tile --------------------------------------------------------------
+
+component GridTile inherits Rectangle {
+    in property <EntryModel> entry;
+    in property <bool> selection-mode;
+    in property <int> idx;
+    in property <length> tile-size: 132px;
+    in property <bool> focused: false;
+    callback activate();
+    callback toggle();
+    callback dropped();
+    callback enter-selection();
+    width: tile-size;
+    height: tile-size;
+    border-radius: Theme.radius;
+    property <bool> can-drop: DragState.active && root.entry.is-dir && DragState.source-index != root.idx;
+    property <bool> drop-hot: can-drop && ta.has-hover;
+    property <bool> long-pressed;
+    background: drop-hot ? #2f5fbf
+        : (entry.selected ? Theme.surface-hi : (ta.has-hover ? Theme.surface : transparent));
+    border-width: (entry.selected || focused) ? 2px : 0px;
+    border-color: focused ? Theme.accent.brighter(0.4) : Theme.accent;
+    animate background { duration: 100ms; }
+
+    property <color> icon-bg:
+        entry.glyph == "🖼" ? #FF5722 :
+        entry.glyph == "🎵" ? #9C27B0 :
+        entry.glyph == "🎬" ? #2196F3 :
+        entry.glyph == "📕" ? #F44336 :
+        entry.glyph == "📊" ? #4CAF50 :
+        entry.glyph == "📽" ? #FF9800 :
+        entry.glyph == "🗜" ? #795548 :
+        entry.glyph == "📦" ? #607D8B :
+        #9E9E9E;
+
+    Timer {
+        interval: 500ms;
+        running: ta.pressed && !DragState.active && !ContextState.active && !root.long-pressed;
+        triggered => {
+            root.long-pressed = true;
+            if (!root.selection-mode) {
+                // Uzun basış → seçim moduna gir ve bu öğeyi seç
+                root.enter-selection();
+                root.toggle();
+            } else {
+                // Zaten seçim modundaysa → bağlam menüsü
+                ContextState.index = root.idx;
+                ContextState.is-dir = root.entry.is-dir;
+                ContextState.is-archive = root.entry.is-archive;
+                ContextState.x = ta.absolute-position.x + ta.pressed-x;
+                ContextState.y = ta.absolute-position.y + ta.pressed-y;
+                ContextState.active = true;
+            }
+        }
+    }
+    ta := TouchArea {
+        clicked => {
+            if (root.long-pressed) {
+                root.long-pressed = false;
+            } else if (DragState.active) {
+                if (root.can-drop) { DragState.target-path = root.entry.path; root.dropped(); }
+                DragState.active = false;
+                DragState.source-index = -1;
+                DragState.target-path = "";
+            } else if (root.selection-mode) {
+                root.toggle();
+            } else {
+                root.activate();
+            }
+        }
+        moved => {
+            if (self.pressed && !DragState.active && !ContextState.active
+                && (abs(self.mouse-x - self.pressed-x) > 8px || abs(self.mouse-y - self.pressed-y) > 8px)) {
+                DragState.active = true;
+                DragState.source-index = root.idx;
+                DragState.source-path = root.entry.path;
+                DragState.source-label = root.entry.name;
+                DragState.target-path = "";
+            }
+            if (DragState.active) {
+                DragState.px = self.absolute-position.x + self.mouse-x;
+                DragState.py = self.absolute-position.y + self.mouse-y;
+            }
+        }
+    }
+    VerticalLayout {
+        padding: 10px;
+        spacing: 8px;
+        alignment: center;
+        Rectangle {
+            height: root.tile-size * 0.48;
+            border-radius: entry.has-icon ? 0px : 12px;
+            background: entry.has-icon ? transparent : root.icon-bg;
+            if entry.has-icon : Image {
+                source: entry.icon;
+                image-fit: contain;
+                width: parent.width;
+                height: parent.height;
+            }
+            if !entry.has-icon : Text {
+                text: entry.glyph;
+                font-size: root.tile-size / 3.5;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                color: white;
+            }
+        }
+        Text {
+            text: entry.name;
+            color: Theme.text;
+            font-size: 12px;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+            overflow: elide;
+            max-width: root.tile-size - 20px;
+        }
+    }
+    if selection-mode : Rectangle {
+        x: 8px; y: 8px; width: 26px; height: 26px;
+        border-radius: 13px;
+        background: entry.selected ? Theme.accent : Theme.surface;
+        border-width: 2px;
+        border-color: Theme.text-dim;
+        Text { text: entry.selected ? "✓" : ""; color: white; font-size: 16px; }
+    }
+}
+
+
+// ---- Removable volume row ---------------------------------------------------
+
+component VolumeRow inherits Rectangle {
+    in property <VolumeModel> vol;
+    callback activate();
+    callback eject();
+    height: vol.label != "" ? 48px : 38px;
+    border-radius: 10px;
+    background: touch.has-hover ? Theme.surface-hi : transparent;
+    animate background { duration: 120ms; }
+    touch := TouchArea { clicked => { root.activate(); } }
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 8px;
+        spacing: 10px;
+        alignment: center;
+        Text { text: "🔌"; font-size: 16px; vertical-alignment: center; }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 1px;
+            alignment: center;
+            Text {
+                text: L.usb-storage;
+                color: Theme.text;
+                font-size: 14px;
+                overflow: elide;
+            }
+            if vol.label != "" : Text {
+                text: vol.label;
+                color: Theme.text-dim;
+                font-size: 10px;
+                overflow: elide;
+            }
+        }
+        Text {
+            text: vol.mounted ? "●" : "○";
+            color: vol.mounted ? #4caf50 : Theme.text-dim;
+            font-size: 10px;
+            vertical-alignment: center;
+        }
+        if vol.mounted : IconButton {
+            icon: "⏏";
+            tip: L.tip-eject;
+            clicked => { root.eject(); }
+        }
+    }
+}
+
+// ---- Transfer queue row -----------------------------------------------------
+
+component TransferRow inherits Rectangle {
+    in property <TransferModel> xfer;
+    callback pause();
+    callback resume();
+    callback cancel();
+    height: 56px;
+    border-radius: 8px;
+    background: Theme.surface;
+    HorizontalLayout {
+        padding: 8px;
+        spacing: 10px;
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 4px;
+            HorizontalLayout {
+                Text { text: xfer.label; color: Theme.text; font-size: 13px; overflow: elide; horizontal-stretch: 1; }
+                Text { text: xfer.detail; color: Theme.text-dim; font-size: 11px; }
+            }
+            Rectangle {
+                height: 8px;
+                border-radius: 4px;
+                background: Theme.bg;
+                Rectangle {
+                    x: 0; y: 0;
+                    width: parent.width * max(0.0, min(1.0, xfer.fraction));
+                    height: parent.height;
+                    border-radius: 4px;
+                    background: xfer.status == "Failed" ? #e05555
+                        : xfer.status == "Done" ? #4caf50
+                        : Theme.accent;
+                    animate width { duration: 150ms; }
+                }
+            }
+        }
+        if xfer.active : IconButton {
+            icon: xfer.paused ? "▶" : "⏸";
+            tip: xfer.paused ? L.tip-resume : L.tip-pause;
+            clicked => { if (xfer.paused) { root.resume(); } else { root.pause(); } }
+        }
+        if xfer.active : IconButton { icon: "✕"; tip: L.cancel; clicked => { root.cancel(); } }
+        if !xfer.active : Text {
+            text: xfer.status == "Done" ? "✓" : xfer.status == "Cancelled" ? "∅" : "⚠";
+            color: Theme.text-dim; font-size: 18px; vertical-alignment: center;
+        }
+    }
+}
+
+// ---- Breadcrumb segment -----------------------------------------------------
+
+component BreadcrumbChip inherits Rectangle {
+    in property <string> label;
+    callback clicked();
+    height: 30px;
+    border-radius: 6px;
+    background: ta.has-hover ? Theme.surface-hi : transparent;
+    animate background { duration: 100ms; }
+    ta := TouchArea { clicked => { root.clicked(); } }
+    HorizontalLayout {
+        padding-left: 6px;
+        padding-right: 6px;
+        Text {
+            text: root.label;
+            color: Theme.text;
+            font-size: 13px;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+}
+
+// ---- Context menu item ------------------------------------------------------
+
+component MenuItem inherits Rectangle {
+    in property <string> label;
+    callback clicked();
+    height: 38px;
+    border-radius: 6px;
+    background: ta.has-hover ? Theme.surface-hi : transparent;
+    ta := TouchArea { clicked => { root.clicked(); } }
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        Text {
+            text: root.label;
+            color: Theme.text;
+            font-size: 14px;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// ---- Open With row ----------------------------------------------------------
+
+component OpenWithRow inherits Rectangle {
+    in property <AppModel> app;
+    callback chosen();
+    height: 40px;
+    border-radius: 8px;
+    background: ta.has-hover ? Theme.surface-hi : transparent;
+    ta := TouchArea { clicked => { root.chosen(); } }
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 12px;
+        spacing: 10px;
+        Rectangle {
+            width: 24px; height: 24px;
+            y: (parent.height - 24px) / 2;
+            if app.has-icon : Image { source: app.icon; image-fit: contain; width: 24px; height: 24px; }
+            if !app.has-icon : Text { text: "🗔"; font-size: 18px; horizontal-alignment: center; vertical-alignment: center; }
+        }
+        Text {
+            text: app.name;
+            color: Theme.text;
+            font-size: 14px;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+        if app.is-default : Text { text: "✓"; color: Theme.accent; font-size: 14px; vertical-alignment: center; }
+    }
+}
+
+// ---- Bottom action button (Samsung My Files style) --------------------------
+
+component BottomActionButton inherits Rectangle {
+    in property <string> icon;
+    in property <string> label;
+    in property <bool> enabled: true;
+    in property <bool> highlighted: false;
+    callback clicked();
+    horizontal-stretch: 1;
+    height: 64px;
+    border-radius: 10px;
+    background: highlighted ? Theme.accent.with-alpha(0.12) : (ta.has-hover && enabled ? Theme.surface-hi : transparent);
+    animate background { duration: 80ms; }
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: enabled ? pointer : default;
+        clicked => { root.clicked(); }
+    }
+    VerticalLayout {
+        alignment: center;
+        spacing: 4px;
+        Text {
+            text: root.icon;
+            font-size: 22px;
+            horizontal-alignment: center;
+            color: !root.enabled ? Theme.text-dim : root.highlighted ? Theme.accent : Theme.text;
+        }
+        Text {
+            text: root.label;
+            font-size: 11px;
+            horizontal-alignment: center;
+            color: !root.enabled ? Theme.text-dim : root.highlighted ? Theme.accent : Theme.text;
+            overflow: elide;
+        }
+    }
+}
+
+// ---- Column sort header -----------------------------------------------------
+
+component ColHeader inherits Rectangle {
+    in property <string> label;
+    in property <string> col-key;
+    in property <string> sort-col;
+    in property <bool> sort-asc;
+    callback clicked();
+    height: 34px;
+    background: ta.has-hover ? Theme.surface-hi : transparent;
+    animate background { duration: 80ms; }
+    ta := TouchArea { clicked => { root.clicked(); } }
+    HorizontalLayout {
+        padding-left: 4px;
+        padding-right: 4px;
+        spacing: 3px;
+        alignment: start;
+        Text {
+            text: root.label;
+            color: root.col-key == root.sort-col ? Theme.accent : Theme.text-dim;
+            font-size: 12px;
+            font-weight: root.col-key == root.sort-col ? 700 : 400;
+            vertical-alignment: center;
+        }
+        if root.col-key == root.sort-col : Text {
+            text: root.sort-asc ? "↑" : "↓";
+            color: Theme.accent;
+            font-size: 11px;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// ---- Main window ------------------------------------------------------------
+
+export component MainWindow inherits Window {
+    title: "Altay";
+    icon: @image-url("../assets/altay.png");
+    preferred-width: 1100px;
+    preferred-height: 720px;
+    min-width: 760px;
+    min-height: 480px;
+    background: Theme.bg;
+
+    in property <image> new-folder-icon;
+
+    // ---- State exposed to Rust ----
+    in property <[RootModel]> roots;
+    in property <[EntryModel]> entries;
+    in-out property <string> current-path;
+    in property <string> active-root-path;
+    in property <[BreadcrumbModel]> breadcrumbs;
+    in-out property <bool> editing-path: false;
+    in-out property <int> view-mode: 0;
+    in property <bool> in-trash: false;
+    in-out property <float> grid-scale: 1.0;
+    in-out property <bool> selection-mode: false;
+    in-out property <int> focused-idx: -1;
+    property <int> nav-cols: max(1, floor((self.width - 264px - (self.show-preview ? 220px : 0px) - 24px) / (132px * self.grid-scale + 8px)));
+    property <length> nav-tile-h: 132px * self.grid-scale + 8px;
+    in-out property <bool> has-clipboard: false;
+    in property <string> status-text;
+    in-out property <string> search-text;
+    in-out property <bool> search-in-content: false;
+    in property <[VolumeModel]> volumes;
+    in property <[ConnModel]> connections;
+    in-out property <bool> show-connect: false;
+    in-out property <string> connect-address;
+    in-out property <string> connect-user;
+    in-out property <string> connect-password;
+    in-out property <bool> connect-save: true;
+    in property <string> connect-error;
+    in property <[TransferModel]> transfers;
+    in-out property <bool> extract-active: false;
+    in property <float> extract-fraction: 0;
+    in property <string> extract-label: "";
+    in-out property <bool> compress-active: false;
+    in property <float> compress-fraction: 0;
+    in property <string> compress-label: "";
+    in-out property <bool> in-archive: false;
+    in property <string> archive-name: "";
+    in-out property <bool> archive-loading: false;
+    in property <int> archive-loaded-count: 0;
+    in property <float> archive-load-fraction: 0;
+    callback extract-archive();
+    in-out property <bool> show-preview: false;
+    in property <bool> preview-is-image: false;
+    in property <image> preview-image;
+    in property <string> preview-text;
+    in property <string> preview-title;
+    in property <string> preview-meta;
+    in property <bool> preview-can-chmod: false;
+    in property <string> preview-perms;
+    in property <bool> preview-needs-elevation: false;
+    // Samsung-style extras
+    in property <DiskUsageModel> disk-usage;
+    in-out property <string> sort-column: "name";
+    in-out property <bool> sort-asc: true;
+    in-out property <string> active-category: "";
+    in-out property <bool> show-more-actions: false;
+
+    // ---- Callbacks into Rust ----
+    callback navigate(string);
+    callback open-entry(int);
+    callback toggle-entry(int);
+    callback go-up();
+    callback go-down();
+    callback go-home();
+    callback refresh();
+    callback do-search(string);
+    callback new-folder();
+    callback trash-selected();
+    callback compress-selected();
+    callback cancel-compress();
+    callback extract-selected();
+    callback restore-selected();
+    callback empty-trash();
+    callback set-view(int);
+    callback toggle-selection-mode();
+    callback toggle-preview();
+    callback copy-selected();
+    callback cut-selected();
+    callback paste();
+    callback pause-transfer(int);
+    callback resume-transfer(int);
+    callback cancel-transfer(int);
+    callback clear-transfers();
+    callback perform-drop();
+    callback chmod-toggle-exec();
+    callback chmod-as-admin();
+    callback mount-volume(string);
+    callback unmount-volume(string);
+    callback open-connect-dialog();
+    callback do-connect();
+    callback cancel-connect();
+    callback open-connection(string);
+    callback import-files();
+    callback ctx-open();
+    callback ctx-copy();
+    callback ctx-cut();
+    callback ctx-rename();
+    callback ctx-compress();
+    callback ctx-extract();
+    callback ctx-trash();
+    in-out property <bool> show-rename: false;
+    in-out property <string> rename-text;
+    callback do-rename();
+    callback grid-scale-changed(float);
+    changed grid-scale => { root.grid-scale-changed(root.grid-scale); }
+    changed focused-idx => {
+        if (root.view-mode == 0 && root.focused-idx >= 0) {
+            root.nav-viewport-y = -(floor(root.focused-idx / root.nav-cols) * root.nav-tile-h);
+        }
+    }
+    in-out property <length> nav-viewport-y: 0px;
+    callback toggle-fullscreen();
+    callback key-rename();
+    callback select-all();
+    callback clear-selection();
+    in-out property <bool> show-settings: false;
+    in-out property <bool> show-hidden-pref: false;
+    in-out property <string> lang: "tr";
+    callback set-show-hidden(bool);
+    callback set-dark(bool);
+    callback set-language(string);
+    in property <[AppModel]> open-with-apps;
+    in-out property <bool> show-open-with: false;
+    in-out property <bool> ow-set-default: false;
+    in property <string> ow-title;
+    callback open-with-dialog();
+    callback ow-pick(string);
+    // Samsung-style new callbacks
+    callback navigate-category(string);
+    callback show-recent();
+    callback sort-by-column(string);
+    callback rename-selected();
+    callback open-with-selected();
+
+    forward-focus: key-scope;
+    key-scope := FocusScope {
+        key-pressed(e) => {
+            if (e.text == Key.Delete && !in-trash) { root.trash-selected(); return EventResult.accept; }
+            if (e.text == Key.F11) { root.toggle-fullscreen(); return EventResult.accept; }
+            if (e.text == Key.Backspace) { root.go-up(); return EventResult.accept; }
+            if (e.text == Key.F2) { root.key-rename(); return EventResult.accept; }
+            if (e.text == Key.F5) { root.refresh(); return EventResult.accept; }
+            if (e.text == Key.Return && root.focused-idx >= 0 && root.focused-idx < entries.length) {
+                root.open-entry(root.focused-idx);
+                return EventResult.accept;
+            }
+            if (e.text == Key.LeftArrow) {
+                root.focused-idx = max(0, (root.focused-idx < 0 ? 0 : root.focused-idx) - 1);
+                return EventResult.accept;
+            }
+            if (e.text == Key.RightArrow) {
+                root.focused-idx = min(entries.length - 1, (root.focused-idx < 0 ? 0 : root.focused-idx) + 1);
+                return EventResult.accept;
+            }
+            if (e.text == Key.UpArrow) {
+                root.focused-idx = max(0, (root.focused-idx < 0 ? 0 : root.focused-idx) - root.nav-cols);
+                return EventResult.accept;
+            }
+            if (e.text == Key.DownArrow) {
+                root.focused-idx = min(entries.length - 1, (root.focused-idx < 0 ? 0 : root.focused-idx) + root.nav-cols);
+                return EventResult.accept;
+            }
+            if (e.text == Key.Escape) {
+                if (root.editing-path) { root.editing-path = false; }
+                else if (ContextState.active) { ContextState.active = false; }
+                else { root.clear-selection(); }
+                return EventResult.accept;
+            }
+            if (e.modifiers.control && e.text == "c") { root.copy-selected(); return EventResult.accept; }
+            if (e.modifiers.control && e.text == "x") { root.cut-selected(); return EventResult.accept; }
+            if (e.modifiers.control && e.text == "v") { root.paste(); return EventResult.accept; }
+            if (e.modifiers.control && e.text == "a") { root.select-all(); return EventResult.accept; }
+            if (e.modifiers.control && (e.text == "+" || e.text == "=")) { root.grid-scale = clamp(root.grid-scale + 0.1, 0.6, 2.2); return EventResult.accept; }
+            if (e.modifiers.control && e.text == "-") { root.grid-scale = clamp(root.grid-scale - 0.1, 0.6, 2.2); return EventResult.accept; }
+            if (e.modifiers.control && e.text == "l") { root.editing-path = true; return EventResult.accept; }
+            if (e.modifiers.control && e.text == "f") { sidebar-search.focus(); return EventResult.accept; }
+            return EventResult.reject;
+        }
+
+    HorizontalLayout {
+        // ===== Left sidebar =====
+        Rectangle {
+            width: 264px;
+            background: Theme.surface;
+
+            VerticalLayout {
+                // --- Scrollable sidebar body ---
+                ScrollView {
+                    vertical-stretch: 1;
+                    VerticalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        spacing: 2px;
+
+                        // Recent files
+                        CategoryRow {
+                            label: L.recent;
+                            glyph: "🕐";
+                            icon-color: #607D8B;
+                            active: root.active-category == "recent";
+                            clicked => {
+                                root.active-category = "recent";
+                                root.show-recent();
+                            }
+                        }
+
+                        Rectangle { height: 4px; }
+
+                        // Categories header
+                        Text {
+                            text: L.categories;
+                            color: Theme.text-dim;
+                            font-size: 10px;
+                            font-weight: 700;
+                            height: 18px;
+                            vertical-alignment: bottom;
+                            x: 12px;
+                        }
+
+                        CategoryRow {
+                            label: L.cat-images;   glyph: "🖼"; icon-color: #FF5722;
+                            active: root.active-category == "images";
+                            clicked => { root.active-category = "images"; root.navigate-category("images"); }
+                        }
+                        CategoryRow {
+                            label: L.cat-audio;    glyph: "🎵"; icon-color: #9C27B0;
+                            active: root.active-category == "audio";
+                            clicked => { root.active-category = "audio"; root.navigate-category("audio"); }
+                        }
+                        CategoryRow {
+                            label: L.cat-videos;   glyph: "🎬"; icon-color: #2196F3;
+                            active: root.active-category == "videos";
+                            clicked => { root.active-category = "videos"; root.navigate-category("videos"); }
+                        }
+                        CategoryRow {
+                            label: L.cat-docs;     glyph: "📄"; icon-color: #F44336;
+                            active: root.active-category == "docs";
+                            clicked => { root.active-category = "docs"; root.navigate-category("docs"); }
+                        }
+                        CategoryRow {
+                            label: L.cat-downloads; glyph: "⬇"; icon-color: #4CAF50;
+                            active: root.active-category == "downloads";
+                            clicked => { root.active-category = "downloads"; root.navigate-category("downloads"); }
+                        }
+                        CategoryRow {
+                            label: L.cat-archives;  glyph: "🗜"; icon-color: #795548;
+                            active: root.active-category == "archives";
+                            clicked => { root.active-category = "archives"; root.navigate-category("archives"); }
+                        }
+
+                        Rectangle { height: 4px; }
+
+                        // Devices header
+                        Text {
+                            text: L.devices;
+                            color: Theme.text-dim;
+                            font-size: 10px;
+                            font-weight: 700;
+                            height: 18px;
+                            vertical-alignment: bottom;
+                            x: 12px;
+                        }
+
+                        for r in roots : VerticalLayout {
+                            spacing: 0px;
+                            SidebarRow {
+                                label: r.label;
+                                glyph: r.glyph;
+                                path: r.path;
+                                active: r.path == active-root-path && root.active-category == "";
+                                dropped => { root.perform-drop(); }
+                                clicked => {
+                                    root.active-category = "";
+                                    root.navigate(r.path);
+                                }
+                            }
+                            if r.fraction > 0.0 : Rectangle {
+                                height: 18px;
+                                HorizontalLayout {
+                                    padding-left: 40px;
+                                    padding-right: 12px;
+                                    padding-bottom: 3px;
+                                    spacing: 6px;
+                                    alignment: center;
+                                    Rectangle {
+                                        height: 4px;
+                                        border-radius: 2px;
+                                        horizontal-stretch: 1;
+                                        background: Theme.surface-hi;
+                                        Rectangle {
+                                            x: 0; y: 0; height: parent.height;
+                                            width: parent.width * max(0.0, min(1.0, r.fraction));
+                                            border-radius: 2px;
+                                            background: r.fraction > 0.9 ? #e05555 : Theme.accent;
+                                            animate width { duration: 300ms; }
+                                        }
+                                    }
+                                    Text {
+                                        text: r.used-text + "/" + r.total-text;
+                                        font-size: 9px;
+                                        color: Theme.text-dim;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+
+                        for v in volumes : VerticalLayout {
+                            spacing: 0px;
+                            VolumeRow {
+                                vol: v;
+                                activate => {
+                                    if (v.mounted) { root.navigate(v.mount-point); }
+                                    else { root.mount-volume(v.object-path); }
+                                }
+                                eject => { root.unmount-volume(v.object-path); }
+                            }
+                            if v.mounted && v.fraction > 0.0 : Rectangle {
+                                height: 18px;
+                                HorizontalLayout {
+                                    padding-left: 40px;
+                                    padding-right: 12px;
+                                    padding-bottom: 3px;
+                                    spacing: 6px;
+                                    alignment: center;
+                                    Rectangle {
+                                        height: 4px;
+                                        border-radius: 2px;
+                                        horizontal-stretch: 1;
+                                        background: Theme.surface-hi;
+                                        Rectangle {
+                                            x: 0; y: 0; height: parent.height;
+                                            width: parent.width * max(0.0, min(1.0, v.fraction));
+                                            border-radius: 2px;
+                                            background: v.fraction > 0.9 ? #e05555 : #FF8C00;
+                                            animate width { duration: 300ms; }
+                                        }
+                                    }
+                                    Text {
+                                        text: v.used-text + "/" + v.total-text;
+                                        font-size: 9px;
+                                        color: Theme.text-dim;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Network section
+                        if connections.length > 0 : Rectangle { height: 4px; }
+                        if connections.length > 0 : Text {
+                            text: L.network;
+                            color: Theme.text-dim;
+                            font-size: 10px;
+                            font-weight: 700;
+                            height: 18px;
+                            vertical-alignment: bottom;
+                            x: 12px;
+                        }
+                        for c in connections : SidebarRow {
+                            label: c.name;
+                            glyph: "🌐";
+                            clicked => { root.open-connection(c.uri); }
+                        }
+
+                        Rectangle { height: 4px; }
+
+                        // Trash
+                        SidebarRow {
+                            label: L.trash-place;
+                            glyph: "🗑";
+                            clicked => {
+                                root.active-category = "";
+                                root.navigate("trash://");
+                            }
+                        }
+
+                        Rectangle { height: 4px; }
+                    }
+                }
+
+                // --- Search bar ---
+                Rectangle {
+                    height: 54px;
+                    background: Theme.surface;
+                    Rectangle { y: 0; height: 1px; width: parent.width; background: Theme.surface-hi; }
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        alignment: center;
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            background: Theme.bg;
+                            border-radius: 11px;
+                            height: 38px;
+                            HorizontalLayout {
+                                padding-left: 10px;
+                                padding-right: 10px;
+                                spacing: 6px;
+                                alignment: center;
+                                Text {
+                                    text: "🔍";
+                                    font-size: 13px;
+                                    vertical-alignment: center;
+                                    color: Theme.text-dim;
+                                }
+                                sidebar-search := LineEdit {
+                                    text <=> search-text;
+                                    placeholder-text: search-in-content ? L.search-files-ph : L.search-ph;
+                                    horizontal-stretch: 1;
+                                    accepted(t) => { root.do-search(t); }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // --- Sidebar bottom controls ---
+                Rectangle {
+                    height: 62px;
+                    background: Theme.surface;
+                    Rectangle { height: 1px; background: Theme.surface-hi; }
+                    HorizontalLayout {
+                        padding-left: 6px;
+                        padding-right: 6px;
+                        padding-top: 7px;
+                        padding-bottom: 7px;
+                        spacing: 2px;
+                        IconButton { icon: "⬆"; tip: L.tip-up;      clicked => { root.go-up(); } }
+                        IconButton { icon: "⬇"; tip: L.tip-down;    clicked => { root.go-down(); } }
+                        IconButton { icon: "🏠"; tip: L.tip-home;    clicked => { root.go-home(); } }
+                        IconButton { icon: "⟳"; tip: L.tip-refresh; clicked => { root.refresh(); } }
+                        Rectangle { horizontal-stretch: 1; }
+                        // Yeni klasör
+                        Rectangle {
+                            width: 48px;
+                            border-radius: 12px;
+                            background: nf-ta.has-hover ? Theme.surface-hi : transparent;
+                            animate background { duration: 100ms; }
+                            nf-ta := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.new-folder(); }
+                            }
+                            HorizontalLayout {
+                                alignment: center;
+                                Image {
+                                    source: root.new-folder-icon;
+                                    image-fit: contain;
+                                    width: 28px;
+                                    height: 28px;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Right border line
+            Rectangle {
+                x: parent.width - 1px; y: 0;
+                width: 1px;
+                height: parent.height;
+                background: Theme.surface-hi;
+            }
+        }
+
+        // ===== Main pane =====
+        VerticalLayout {
+
+            // ---- Breadcrumb row ----
+            Rectangle {
+                height: 44px;
+                background: Theme.surface;
+                HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    spacing: 4px;
+                    alignment: center;
+                    // Breadcrumb / path editor
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        if !editing-path : ScrollView {
+                            HorizontalLayout {
+                                alignment: start;
+                                spacing: 0px;
+                                for seg[i] in breadcrumbs : HorizontalLayout {
+                                    if i > 0 : Text {
+                                        text: "›"; color: Theme.text-dim; font-size: 16px;
+                                        vertical-alignment: center;
+                                        padding-left: 2px; padding-right: 2px;
+                                    }
+                                    BreadcrumbChip {
+                                        label: seg.label;
+                                        clicked => {
+                                            root.active-category = "";
+                                            root.navigate(seg.path);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if editing-path : LineEdit {
+                            text <=> current-path;
+                            placeholder-text: L.path-ph;
+                            accepted(t) => { root.navigate(t); root.editing-path = false; }
+                        }
+                    }
+                    IconButton {
+                        icon: editing-path ? "✓" : "✎";
+                        tip: L.tip-edit;
+                        clicked => { root.editing-path = !root.editing-path; }
+                    }
+                }
+                Rectangle {
+                    x: 0; y: parent.height - 1px;
+                    width: parent.width; height: 1px;
+                    background: Theme.surface-hi;
+                }
+            }
+
+
+            // ---- File area + optional preview pane ----
+            HorizontalLayout {
+                vertical-stretch: 1;
+
+                Rectangle {
+                    background: Theme.bg;
+                    horizontal-stretch: 1;
+
+                    // Grid view
+                    if view-mode == 0 : file-scroll := Flickable {
+                        interactive: true;
+                        viewport-y: root.nav-viewport-y;
+                        viewport-height: max(self.height, grid.preferred-height);
+                        TouchArea {
+                            width: parent.viewport-width;
+                            height: parent.viewport-height;
+                            clicked => {
+                                if (root.selection-mode) { root.toggle-selection-mode(); }
+                                else { root.clear-selection(); }
+                                root.focused-idx = -1;
+                            }
+                        }
+                        grid := VerticalLayout {
+                            property <length> tile-size: 132px * root.grid-scale;
+                            property <int> columns: max(1, floor((root.width - 264px - (root.show-preview ? 220px : 0px) - 24px) / (grid.tile-size + 8px)));
+                            padding: 12px;
+                            spacing: 8px;
+                            for row-start in ceil(entries.length / grid.columns) : HorizontalLayout {
+                                spacing: 8px;
+                                alignment: start;
+                                for col in grid.columns : GridTile {
+                                    idx: row-start * grid.columns + col;
+                                    tile-size: grid.tile-size;
+                                    focused: root.focused-idx == self.idx;
+                                    visible: self.idx < entries.length;
+                                    entry: self.idx < entries.length ? entries[self.idx]
+                                        : { name: "", path: "", is-dir: false, is-symlink: false,
+                                            is-archive: false, size-text: "", modified-text: "",
+                                            type-text: "", glyph: "", selected: false };
+                                    selection-mode: root.selection-mode;
+                                    activate => {
+                                        root.focused-idx = self.idx;
+                                        root.open-entry(self.idx);
+                                    }
+                                    toggle => { root.toggle-entry(self.idx); }
+                                    dropped => { root.perform-drop(); }
+                                    enter-selection => {
+                                        if (!root.selection-mode) { root.toggle-selection-mode(); }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                }
+
+                // Preview pane — always in layout; width 0 when hidden so file area gets correct space
+                Rectangle {
+                    width: show-preview ? 220px : 0px;
+                    clip: true;
+                    background: Theme.surface;
+                    VerticalLayout {
+                        padding: 14px;
+                        spacing: 8px;
+                        HorizontalLayout {
+                            spacing: 8px;
+                            alignment: space-between;
+                            Text {
+                                text: root.preview-title;
+                                color: Theme.text;
+                                font-size: 14px;
+                                font-weight: 600;
+                                overflow: elide;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                            }
+                            Rectangle {
+                                width: 28px; height: 28px;
+                                border-radius: 14px;
+                                background: close-ta.has-hover ? Theme.surface-hi : transparent;
+                                animate background { duration: 100ms; }
+                                close-ta := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { root.show-preview = false; }
+                                }
+                                Text {
+                                    text: "✕";
+                                    color: Theme.text-dim;
+                                    font-size: 14px;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                        if root.preview-is-image : Image {
+                            source: root.preview-image;
+                            image-fit: contain;
+                            vertical-stretch: 1;
+                        }
+                        if !root.preview-is-image : ScrollView {
+                            vertical-stretch: 1;
+                            Text {
+                                text: root.preview-text;
+                                color: Theme.text-dim;
+                                font-size: 13px;
+                                wrap: word-wrap;
+                            }
+                        }
+                        // File metadata (size, date) — shown for all file types
+                        Rectangle { height: 1px; background: Theme.surface-hi; }
+                        Text {
+                            text: root.preview-meta;
+                            color: Theme.text-dim;
+                            font-size: 12px;
+                            wrap: word-wrap;
+                        }
+                        if root.preview-can-chmod : Rectangle { height: 1px; background: Theme.surface-hi; }
+                        if root.preview-can-chmod : VerticalLayout {
+                            spacing: 6px;
+                            Text { text: L.perms + root.preview-perms; color: Theme.text-dim; font-size: 12px; }
+                            HorizontalLayout {
+                                spacing: 8px; alignment: start;
+                                Button { text: L.toggle-exec; clicked => { root.chmod-toggle-exec(); } }
+                                if root.preview-needs-elevation : Button {
+                                    text: L.as-admin;
+                                    clicked => { root.chmod-as-admin(); }
+                                }
+                            }
+                        }
+                    }
+                    Rectangle { x: 0; y: 0; width: 1px; height: parent.height; background: Theme.surface-hi; }
+                }
+            }
+
+            // ---- Bottom action bar (Samsung style) ----
+            // Always present — height 0 when hidden, 65px when shown.
+            // Using Rectangle+animate avoids the Slint preferred-height issue
+            // with conditional VerticalLayout children.
+            Rectangle {
+                height: (selection-mode || in-trash || has-clipboard) ? 65px : 0px;
+                clip: true;
+                animate height { duration: 180ms; easing: ease-out; }
+
+                VerticalLayout {
+                    // Top divider
+                    Rectangle { height: 1px; background: Theme.surface-hi; }
+
+                    Rectangle {
+                        vertical-stretch: 1;
+                        background: Theme.surface;
+
+                        if !in-trash : HorizontalLayout {
+                            padding-left: 4px;
+                            padding-right: 4px;
+                            spacing: 0px;
+                            BottomActionButton {
+                                icon: "✂";
+                                label: L.act-move;
+                                enabled: selection-mode;
+                                clicked => { root.cut-selected(); }
+                            }
+                            BottomActionButton {
+                                icon: "📋";
+                                label: L.act-copy;
+                                enabled: selection-mode;
+                                clicked => { root.copy-selected(); }
+                            }
+                            BottomActionButton {
+                                icon: "📥";
+                                label: L.act-paste;
+                                clicked => { root.paste(); }
+                            }
+                            BottomActionButton {
+                                icon: "🗑";
+                                label: L.act-delete;
+                                enabled: selection-mode;
+                                clicked => { root.trash-selected(); }
+                            }
+                            BottomActionButton {
+                                icon: "⋯";
+                                label: L.act-more;
+                                highlighted: root.show-more-actions;
+                                clicked => { root.show-more-actions = !root.show-more-actions; }
+                            }
+                        }
+
+                        if in-trash : HorizontalLayout {
+                            padding-left: 4px;
+                            padding-right: 4px;
+                            spacing: 0px;
+                            BottomActionButton {
+                                icon: "♻";
+                                label: L.act-restore;
+                                enabled: selection-mode;
+                                clicked => { root.restore-selected(); }
+                            }
+                            BottomActionButton {
+                                icon: "🗑";
+                                label: L.act-empty-trash;
+                                clicked => { root.empty-trash(); }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Archive browser banner — shown below the file area when browsing an archive
+            if root.in-archive : Rectangle {
+                height: root.archive-loading ? 64px : 48px;
+                background: Theme.surface;
+                animate height { duration: 150ms; }
+                Rectangle { x: 0; y: 0; width: parent.width; height: 1px; background: Theme.surface-hi; }
+                HorizontalLayout {
+                    padding-left: 12px;
+                    padding-right: 8px;
+                    spacing: 8px;
+                    alignment: center;
+                    Text { text: "📦"; font-size: 18px; vertical-alignment: center; }
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 4px;
+                        alignment: center;
+                        Text {
+                            text: root.archive-name;
+                            color: Theme.text;
+                            font-size: 13px;
+                            font-weight: 600;
+                            overflow: elide;
+                        }
+                        if root.archive-loading : HorizontalLayout {
+                            spacing: 8px;
+                            alignment: center;
+                            Rectangle {
+                                horizontal-stretch: 1;
+                                height: 5px;
+                                border-radius: 2px;
+                                background: Theme.bg;
+                                property <float> shimmer: 0;
+                                animate shimmer { duration: 1100ms; iteration-count: -1; easing: linear; }
+                                init => { shimmer = 1; }
+                                Rectangle {
+                                    x: root.archive-load-fraction > 0 ? 0
+                                        : (parent.width - self.width) * parent.shimmer;
+                                    width: root.archive-load-fraction > 0
+                                        ? parent.width * max(0.03, root.archive-load-fraction)
+                                        : parent.width * 0.3;
+                                    height: parent.height;
+                                    border-radius: 2px;
+                                    background: Theme.accent;
+                                    animate width { duration: 120ms; }
+                                }
+                            }
+                            Text {
+                                text: root.archive-load-fraction > 0
+                                    ? Math.round(root.archive-load-fraction * 100) + "%"
+                                    : root.archive-loaded-count + " dosya";
+                                color: Theme.accent;
+                                font-size: 11px;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                    if !root.archive-loading : Button {
+                        text: "📂 " + L.act-extract;
+                        clicked => { root.extract-archive(); }
+                    }
+                }
+            }
+
+            // ---- Status bar ----
+            Rectangle {
+                height: 56px;
+                background: Theme.surface;
+                Rectangle { x: 0; y: 0; width: parent.width; height: 1px; background: Theme.surface-hi; }
+                HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    spacing: 8px;
+                    alignment: center;
+
+                    if root.extract-active : VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 4px;
+                        alignment: center;
+                        HorizontalLayout {
+                            Text {
+                                text: root.extract-label;
+                                color: Theme.text-dim;
+                                font-size: 11px;
+                                overflow: elide;
+                                horizontal-alignment: left;
+                                horizontal-stretch: 1;
+                            }
+                            Text {
+                                text: root.extract-fraction > 0
+                                    ? Math.round(root.extract-fraction * 100) + "%"
+                                    : "";
+                                color: Theme.accent;
+                                font-size: 11px;
+                                horizontal-alignment: right;
+                            }
+                        }
+                        Rectangle {
+                            height: 6px;
+                            border-radius: 3px;
+                            background: Theme.bg;
+                            property <float> shimmer: 0;
+                            animate shimmer { duration: 1200ms; iteration-count: -1; easing: linear; }
+                            init => { shimmer = 1; }
+                            Rectangle {
+                                x: root.extract-fraction > 0 ? 0
+                                    : (parent.width - self.width) * parent.shimmer;
+                                width: root.extract-fraction > 0
+                                    ? parent.width * max(0.02, root.extract-fraction)
+                                    : parent.width * 0.35;
+                                height: parent.height;
+                                border-radius: 3px;
+                                background: Theme.accent;
+                                animate width { duration: 150ms; }
+                            }
+                        }
+                    }
+
+                    if root.compress-active : HorizontalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 8px;
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            spacing: 4px;
+                            alignment: center;
+                            HorizontalLayout {
+                                Text {
+                                    text: root.compress-label;
+                                    color: Theme.text-dim;
+                                    font-size: 11px;
+                                    overflow: elide;
+                                    horizontal-alignment: left;
+                                    horizontal-stretch: 1;
+                                }
+                                Text {
+                                    text: Math.round(root.compress-fraction * 100) + "%";
+                                    color: Theme.accent;
+                                    font-size: 11px;
+                                    horizontal-alignment: right;
+                                }
+                            }
+                            Rectangle {
+                                height: 6px;
+                                border-radius: 3px;
+                                background: Theme.bg;
+                                Rectangle {
+                                    x: 0;
+                                    width: parent.width * max(0.02, root.compress-fraction);
+                                    height: parent.height;
+                                    border-radius: 3px;
+                                    background: Theme.accent;
+                                    animate width { duration: 150ms; }
+                                }
+                            }
+                        }
+                        IconButton {
+                            icon: "✕";
+                            tip: L.cancel;
+                            clicked => { root.cancel-compress(); }
+                        }
+                    }
+
+                    if !root.extract-active && !root.compress-active : Text {
+                        text: status-text;
+                        color: Theme.text-dim;
+                        font-size: 12px;
+                        vertical-alignment: center;
+                        horizontal-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+
+                    HorizontalLayout {
+                        spacing: 4px;
+                        alignment: center;
+                        IconButton {
+                            icon: "－"; tip: L.tip-zoom-out;
+                            width: 44px; height: 44px;
+                            clicked => { root.grid-scale = clamp(root.grid-scale - 0.1, 0.6, 2.2); }
+                        }
+                        IconButton {
+                            icon: "＋"; tip: L.tip-zoom-in;
+                            width: 44px; height: 44px;
+                            clicked => { root.grid-scale = clamp(root.grid-scale + 0.1, 0.6, 2.2); }
+                        }
+                    }
+                }
+            }
+
+            // ---- Transfer queue ----
+            if transfers.length > 0 : Rectangle {
+                background: Theme.bg;
+                height: min(200px, 16px + transfers.length * 60px);
+                VerticalLayout {
+                    padding: 8px;
+                    spacing: 6px;
+                    HorizontalLayout {
+                        Text { text: L.transfers; color: Theme.text-dim; font-size: 12px; vertical-alignment: center; horizontal-stretch: 1; }
+                        Button { text: L.clear-finished; clicked => { root.clear-transfers(); } }
+                    }
+                    ScrollView {
+                        VerticalLayout {
+                            spacing: 6px;
+                            for t in transfers : TransferRow {
+                                xfer: t;
+                                pause => { root.pause-transfer(t.id); }
+                                resume => { root.resume-transfer(t.id); }
+                                cancel => { root.cancel-transfer(t.id); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    }
+
+    // ---- Settings dialog ----
+    if show-settings : Rectangle {
+        width: root.width; height: root.height;
+        background: #00000099;
+        TouchArea {}
+        Rectangle {
+            width: 440px; height: 420px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            background: Theme.surface;
+            border-radius: 14px;
+            VerticalLayout {
+                padding: 22px; spacing: 14px;
+                Text { text: L.settings; color: Theme.text; font-size: 18px; font-weight: 700; }
+                CheckBox {
+                    text: L.show-hidden;
+                    checked: root.show-hidden-pref;
+                    toggled => { root.show-hidden-pref = self.checked; root.set-show-hidden(self.checked); }
+                }
+                CheckBox {
+                    text: L.dark-mode;
+                    checked: Theme.dark;
+                    toggled => { Theme.dark = self.checked; root.set-dark(self.checked); }
+                }
+                Text { text: L.language; color: Theme.text-dim; font-size: 12px; }
+                HorizontalLayout {
+                    spacing: 8px; alignment: start;
+                    Button { text: "English"; primary: root.lang == "en"; clicked => { root.set-language("en"); } }
+                    Button { text: "Türkçe";  primary: root.lang == "tr"; clicked => { root.set-language("tr"); } }
+                    Button { text: "Español"; primary: root.lang == "es"; clicked => { root.set-language("es"); } }
+                }
+                Rectangle { vertical-stretch: 1; }
+                HorizontalLayout {
+                    alignment: end;
+                    Button { text: L.close; clicked => { root.show-settings = false; } }
+                }
+            }
+        }
+    }
+
+    // ---- Open With dialog ----
+    if show-open-with : Rectangle {
+        width: root.width; height: root.height;
+        background: #00000099;
+        TouchArea {}
+        Rectangle {
+            width: 420px; height: 440px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            background: Theme.surface;
+            border-radius: 14px;
+            VerticalLayout {
+                padding: 18px; spacing: 10px;
+                Text { text: root.ow-title; color: Theme.text; font-size: 16px; font-weight: 700; overflow: elide; }
+                ScrollView {
+                    vertical-stretch: 1;
+                    VerticalLayout {
+                        spacing: 2px;
+                        for a in open-with-apps : OpenWithRow {
+                            app: a;
+                            chosen => { root.ow-pick(a.id); }
+                        }
+                    }
+                }
+                CheckBox { text: L.set-default; checked <=> root.ow-set-default; }
+                HorizontalLayout {
+                    alignment: end;
+                    Button { text: L.close; clicked => { root.show-open-with = false; } }
+                }
+            }
+        }
+    }
+
+    // ---- Connect dialog ----
+    if show-connect : Rectangle {
+        width: root.width; height: root.height;
+        background: #00000099;
+        TouchArea {}
+        Rectangle {
+            width: 440px; height: 360px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            background: Theme.surface;
+            border-radius: 14px;
+            VerticalLayout {
+                padding: 20px; spacing: 12px;
+                Text { text: L.connect-to-server; color: Theme.text; font-size: 18px; font-weight: 700; }
+                Text { text: L.address; color: Theme.text-dim; font-size: 12px; }
+                LineEdit { text <=> root.connect-address; placeholder-text: L.addr-ph; }
+                LineEdit { text <=> root.connect-user; placeholder-text: L.username-ph; }
+                LineEdit { text <=> root.connect-password; placeholder-text: L.password; input-type: password; }
+                CheckBox { text: L.save-pw; checked <=> root.connect-save; }
+                if root.connect-error != "" : Text {
+                    text: root.connect-error; color: #e05555; font-size: 12px; wrap: word-wrap;
+                }
+                Rectangle { vertical-stretch: 1; }
+                HorizontalLayout {
+                    spacing: 10px; alignment: end;
+                    Button { text: L.cancel; clicked => { root.cancel-connect(); } }
+                    Button { text: L.connect-btn; primary: true; clicked => { root.do-connect(); } }
+                }
+            }
+        }
+    }
+
+    // ---- Context menu ----
+    if ContextState.active : Rectangle {
+        width: root.width; height: root.height;
+        TouchArea { clicked => { ContextState.active = false; } }
+        Rectangle {
+            x: min(ContextState.x, root.width - self.width - 8px);
+            y: min(ContextState.y, root.height - self.height - 8px);
+            width: 220px;
+            height: menu-col.preferred-height;
+            background: Theme.surface;
+            border-radius: 10px;
+            border-width: 1px;
+            border-color: Theme.surface-hi;
+            drop-shadow-blur: 12px;
+            drop-shadow-color: #00000030;
+            menu-col := VerticalLayout {
+                padding: 6px; spacing: 2px;
+                MenuItem { label: ContextState.is-dir ? L.open-folder : L.open;
+                           clicked => { ContextState.active = false; root.ctx-open(); } }
+                if !ContextState.is-dir : MenuItem { label: L.open-with;
+                    clicked => { ContextState.active = false; root.open-with-dialog(); } }
+                MenuItem { label: L.ctx-copy;     clicked => { ContextState.active = false; root.ctx-copy(); } }
+                MenuItem { label: L.ctx-cut;      clicked => { ContextState.active = false; root.ctx-cut(); } }
+                MenuItem { label: L.rename-item;  clicked => { ContextState.active = false; root.ctx-rename(); } }
+                MenuItem { label: L.ctx-compress; clicked => { ContextState.active = false; root.ctx-compress(); } }
+                if ContextState.is-archive : MenuItem { label: L.extract-here;
+                    clicked => { ContextState.active = false; root.ctx-extract(); } }
+                Rectangle { height: 1px; background: Theme.surface-hi; }
+                MenuItem { label: L.move-to-trash; clicked => { ContextState.active = false; root.ctx-trash(); } }
+            }
+        }
+    }
+
+    // ---- Rename dialog ----
+    if show-rename : Rectangle {
+        width: root.width; height: root.height;
+        background: #00000099;
+        TouchArea {}
+        Rectangle {
+            width: 380px; height: 160px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            background: Theme.surface;
+            border-radius: 14px;
+            VerticalLayout {
+                padding: 20px; spacing: 12px;
+                Text { text: L.rename-title; color: Theme.text; font-size: 18px; font-weight: 700; }
+                rename-edit := LineEdit {
+                    text <=> root.rename-text;
+                    accepted(_t) => { root.do-rename(); }
+                }
+                Rectangle { vertical-stretch: 1; }
+                HorizontalLayout {
+                    spacing: 10px; alignment: end;
+                    Button { text: L.cancel;       clicked => { root.show-rename = false; } }
+                    Button { text: L.rename-title; primary: true; clicked => { root.do-rename(); } }
+                }
+            }
+        }
+    }
+
+    // ---- Hover tooltip ----
+    if Tip.shown && Tip.text != "" : Rectangle {
+        width: tip-label.preferred-width + 16px;
+        height: tip-label.preferred-height + 8px;
+        x: min(Tip.x, root.width - self.width - 6px);
+        y: min(Tip.y, root.height - self.height - 6px);
+        background: #000000e0;
+        border-radius: 6px;
+        tip-label := Text {
+            x: 8px; y: 4px;
+            width: parent.width - 16px;
+            text: Tip.text;
+            color: white;
+            font-size: 12px;
+            vertical-alignment: center;
+        }
+    }
+
+    // ---- "Daha Fazla" more-actions sheet (anchored bottom-right) ----
+    if show-more-actions : Rectangle {
+        width: root.width;
+        height: root.height;
+        // Tap outside to close
+        TouchArea { clicked => { root.show-more-actions = false; } }
+        // Sheet panel
+        Rectangle {
+            width: 220px;
+            x: root.width - self.width - 8px;
+            y: root.height - self.height - 96px;
+            height: more-col.preferred-height;
+            background: Theme.surface;
+            border-radius: 12px;
+            border-width: 1px;
+            border-color: Theme.surface-hi;
+            drop-shadow-blur: 16px;
+            drop-shadow-color: #00000025;
+            more-col := VerticalLayout {
+                padding: 6px;
+                spacing: 2px;
+                MenuItem {
+                    label: L.open-with;
+                    clicked => { root.show-more-actions = false; root.open-with-selected(); }
+                }
+                MenuItem {
+                    label: L.rename-item;
+                    clicked => { root.show-more-actions = false; root.rename-selected(); }
+                }
+                Rectangle { height: 1px; background: Theme.surface-hi; }
+                MenuItem {
+                    label: L.act-new-folder;
+                    clicked => { root.show-more-actions = false; root.new-folder(); }
+                }
+                MenuItem {
+                    label: L.act-compress;
+                    clicked => { root.show-more-actions = false; root.compress-selected(); }
+                }
+                MenuItem {
+                    label: L.act-extract;
+                    clicked => { root.show-more-actions = false; root.extract-selected(); }
+                }
+                Rectangle { height: 1px; background: Theme.surface-hi; }
+                MenuItem {
+                    label: L.connect;
+                    clicked => { root.show-more-actions = false; root.open-connect-dialog(); }
+                }
+                MenuItem {
+                    label: L.import;
+                    clicked => { root.show-more-actions = false; root.import-files(); }
+                }
+                Rectangle { height: 1px; background: Theme.surface-hi; }
+                MenuItem {
+                    label: show-preview ? L.preview-on : L.preview;
+                    clicked => { root.show-more-actions = false; root.toggle-preview(); }
+                }
+            }
+        }
+    }
+
+    // ---- Drag ghost ----
+    if DragState.active : Rectangle {
+        x: DragState.px + 8px;
+        y: DragState.py + 8px;
+        width: 180px; height: 30px;
+        border-radius: 8px;
+        background: Theme.accent;
+        opacity: 0.88;
+        Text {
+            text: DragState.source-label;
+            color: white;
+            font-size: 13px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+}

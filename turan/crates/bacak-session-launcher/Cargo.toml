@@ -1,0 +1,16 @@
+[package]
+name = "bacak-session-launcher"
+description = "Sets up the user environment and execs the chosen desktop session"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "bacak-session-launcher"
+path = "src/main.rs"
+
+[dependencies]
+log = { workspace = true }
+env_logger = { workspace = true }
+nix = { workspace = true }

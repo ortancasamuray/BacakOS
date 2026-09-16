@@ -1,0 +1,26 @@
+[package]
+name = "bacak-pam"
+description = "PAM authentication abstraction for BDM (conversation + privilege-separated backend)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+# Off by default so the workspace builds with zero system libraries.
+# Distro/release builds enable `system-pam` to bind the real libpam stack.
+#
+# The system backend uses a small hand-written FFI to libpam (no bindgen, no
+# C headers, no libclang) and is linked against `libpam.so.0` by the consuming
+# binary's build script. This keeps the dependency tree tiny and auditable —
+# important for a security-critical, pre-login daemon.
+default = []
+system-pam = []
+
+[dependencies]
+bacak-common = { workspace = true }
+log = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+# mock-based tests need no system libs

@@ -1,0 +1,95 @@
+---
+- name: Open Voice OS Installer
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  user: "{{ ovos_installer_user }}"
+  become: true
+
+  vars:
+    ovos_installer_reboot: false
+    ovos_installer_raspberry_pi_4_regex: "(^|\\s)Raspberry\\s+Pi\\s+4([^0-9]|$)"
+
+  pre_tasks:
+    - name: Gather reduced subset of facts
+      ansible.builtin.setup:
+        gather_subset:
+          - "hardware"
+      tags:
+        - always
+    - name: Lookup installer uid
+      ansible.builtin.command: "id -u {{ ovos_installer_user }}"
+      register: ovos_installer_uid_result
+      changed_when: false
+      check_mode: false
+      when: ovos_installer_uid is not defined
+      tags:
+        - always
+    - name: Lookup installer gid
+      ansible.builtin.command: "id -g {{ ovos_installer_user }}"
+      register: ovos_installer_gid_result
+      changed_when: false
+      check_mode: false
+      when: ovos_installer_gid is not defined
+      tags:
+        - always
+    - name: Set installer uid fact
+      ansible.builtin.set_fact:
+        ovos_installer_uid: "{{ ovos_installer_uid_result.stdout | int }}"
+      when: ovos_installer_uid is not defined
+      tags:
+        - always
+    - name: Set installer gid fact
+      ansible.builtin.set_fact:
+        ovos_installer_gid: "{{ ovos_installer_gid_result.stdout | int }}"
+      when: ovos_installer_gid is not defined
+      tags:
+        - always
+
+  roles:
+    - role: ovos_contract
+      tags:
+        - ovos_contract
+        - always
+
+    - role: ovos_hardware_mark1
+      tags:
+        - ovos_hardware_mark1
+        - hardware
+      when:
+        - ansible_facts.distribution == "Debian"
+        - ansible_facts.distribution_major_version is version('11', '>=')
+        - "'atmega328p' in ovos_installer_i2c_devices"
+        - ansible_facts.architecture == "aarch64"
+
+    - role: ovos_hardware_mark2
+      tags:
+        - ovos_hardware_mark2
+        - hardware
+      when:
+        - ansible_facts.distribution == "Debian"
+        - ansible_facts.distribution_major_version is version('11', '>=')
+        - (ovos_installer_raspberrypi | default('')) | regex_search(ovos_installer_raspberry_pi_4_regex)
+        - "'tas5806' in ovos_installer_i2c_devices"
+        - ansible_facts.architecture == "aarch64"
+
+    - role: ovos_installer
+      tags:
+        - ovos_installer
+
+  tasks:
+    - name: Flush handlers before reboot check
+      ansible.builtin.meta: flush_handlers
+      tags:
+        - always
+
+    - name: Checking for reboot requirement
+      ansible.builtin.file:
+        path: "{{ ovos_installer_reboot_file_path }}"
+        state: touch
+        owner: root
+        group: root
+        mode: "0644"
+      when: ovos_installer_reboot | bool
+      tags:
+        - always

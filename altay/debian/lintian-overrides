@@ -1,0 +1,8 @@
+# Skia (via the skia-safe crate) statically embeds its own copies of libjpeg
+# and libpng; no system shared library is used or could be. Inherent to the
+# Rust static-linking build.
+altay: embedded-library libjpeg [usr/bin/altay]
+altay: embedded-library libpng [usr/bin/altay]
+# This package is not destined for the Debian archive, so there is no ITP bug
+# for the initial release to close.
+altay: initial-upload-closes-no-bugs

@@ -1,0 +1,69 @@
+---
+- name: Assert macOS-supported installer modes
+  ansible.builtin.assert:
+    that:
+      - ovos_installer_method == 'virtualenv'
+      - not (ovos_installer_tuning | bool)
+    fail_msg: "On macOS only virtualenv mode is currently supported and tuning must be disabled."
+  when: ansible_facts.system == 'Darwin'
+
+- name: Assert Mark 2/DevKit-supported installer modes
+  ansible.builtin.assert:
+    that:
+      - ovos_installer_method == 'virtualenv'
+    fail_msg: "On Mark 2/DevKit hardware only virtualenv mode is currently supported."
+  when:
+    - not (ovos_installer_is_cleaning | bool)
+    - (ovos_installer_raspberrypi | default('')) | regex_search(ovos_installer_raspberry_pi_4_regex)
+    - "'tas5806' in (ovos_installer_i2c_devices | default([]))"
+
+- name: Assert GUI support constraints
+  ansible.builtin.assert:
+    that:
+      - ovos_installer_method == 'virtualenv'
+      - ansible_facts.system == 'Linux'
+      - ansible_facts.distribution == 'Debian'
+      - ansible_facts.distribution_major_version == '13'
+      - (ovos_installer_raspberrypi | default('')) | regex_search(ovos_installer_raspberry_pi_4_regex)
+      - "'tas5806' in (ovos_installer_i2c_devices | default([]))"
+    fail_msg: "GUI support is only available on Debian Trixie Mark II/DevKit virtualenv installs."
+  when:
+    - not (ovos_installer_is_cleaning | bool)
+    - ovos_installer_feature_gui | bool
+
+- name: Assert containers required variables
+  ansible.builtin.assert:
+    that:
+      - ovos_installer_display_server | default('') | length > 0
+    fail_msg: "Containers install requires ovos_installer_display_server (use 'N/A' for headless)."
+  when: ovos_installer_method == 'containers'
+
+- name: Assert satellite required variables
+  ansible.builtin.assert:
+    that:
+      - ovos_installer_listener_host | default('') | length > 0
+      - ovos_installer_satellite_key | default('') | length > 0
+      - ovos_installer_satellite_password | default('') | length > 0
+    fail_msg: "Satellite profile requires listener host, satellite key, and satellite password."
+  when: ovos_installer_profile == 'satellite'
+
+- name: Assert LLM required variables when LLM feature is enabled
+  ansible.builtin.assert:
+    that:
+      - ovos_installer_profile not in ['satellite', 'server']
+      - ovos_installer_method in ['virtualenv', 'containers']
+      - ovos_installer_llm_api_url | default('') | length > 0
+      - ovos_installer_llm_api_key | default('') | length > 0
+      - ovos_installer_llm_model | default('') | trim | length > 0
+      - ovos_installer_llm_persona | default('') | length > 0
+      - (ovos_installer_llm_max_tokens | default(300, true) | string | trim | int) > 0
+      - (ovos_installer_llm_temperature | default(0.2) | string | trim) is match('^([0-9]+([.][0-9]+)?|[.][0-9]+)$')
+      - (ovos_installer_llm_temperature | default(0.2) | float) >= 0
+      - (ovos_installer_llm_temperature | default(0.2) | float) <= 2
+      - (ovos_installer_llm_top_p | default(0.1) | string | trim) is match('^([0-9]+([.][0-9]+)?|[.][0-9]+)$')
+      - (ovos_installer_llm_top_p | default(0.1) | float) >= 0
+      - (ovos_installer_llm_top_p | default(0.1) | float) <= 1
+    fail_msg: "LLM feature requires profile ovos/listener and non-empty API URL, API key, model, and persona."
+  when:
+    - not (ovos_installer_is_cleaning | bool)
+    - ovos_installer_feature_llm | default(false) | bool

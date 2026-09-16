@@ -1,0 +1,16 @@
+[package]
+name = "bacak-remote-proto"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+postcard = { version = "1", features = ["alloc"] }
+thiserror = "2"
+x25519-dalek = { version = "3.0.0", features = ["static_secrets", "getrandom"] }
+hkdf = "0.13.0"
+hmac = "0.13.0"
+sha2 = "0.11"
+chacha20poly1305 = "0.11.0"
+rand = "0.8"

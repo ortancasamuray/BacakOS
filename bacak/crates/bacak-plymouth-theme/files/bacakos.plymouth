@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=BacakOS
+Description=BacakOS boot splash: dark gradient, breathing logo, thin accent progress bar
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/bacakos
+ScriptFile=/usr/share/plymouth/themes/bacakos/bacakos.script

@@ -1,0 +1,15 @@
+---
+- name: Include assert.yml
+  ansible.builtin.import_tasks: assert.yml
+  tags:
+    - always
+
+- name: Include uninstall tasks
+  ansible.builtin.import_tasks: uninstall.yml
+  when: ovos_containers_is_cleaning | bool
+  tags:
+    - uninstall
+
+- name: Include install tasks
+  ansible.builtin.import_tasks: install.yml
+  when: not (ovos_containers_is_cleaning | bool)

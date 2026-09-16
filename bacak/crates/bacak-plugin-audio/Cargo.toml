@@ -1,0 +1,27 @@
+[package]
+name        = "bacak-plugin-audio"
+description = "Audio settings plugin for Bacak compositor (volume, mic, device selection)"
+version     = { workspace = true }
+edition     = { workspace = true }
+license     = { workspace = true }
+authors     = { workspace = true }
+repository  = { workspace = true }
+
+[lib]
+path = "src/lib.rs"
+
+[package.metadata.deb]
+maintainer = "Bacak Desktop Project <packages@example.org>"
+copyright  = "2026, Bacak Desktop Project"
+section    = "x11"
+priority   = "optional"
+extended-description = """\
+Provides output volume, microphone volume and audio device selection
+panels inside the Bacak compositor Control Center. Requires PipeWire
+and WirePlumber at runtime."""
+depends = "bacak-compositor (>= 0.1.0), pipewire, wireplumber"
+recommends = "pulseaudio-utils"
+assets = [
+    ["plugin.conf",          "usr/share/bacak/plugins/audio.plugin",                      "644"],
+    ["changelog.Debian.gz",  "usr/share/doc/bacak-plugin-audio/changelog.Debian.gz",      "644"],
+]

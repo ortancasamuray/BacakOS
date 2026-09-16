@@ -1,0 +1,32 @@
+[package]
+name        = "uzakel-daemon"
+description = "BacakOS-side remote control & file transfer daemon (input replay + file receive)"
+version     = "0.1.0"
+edition     = "2021"
+license     = "GPL-3.0-or-later"
+homepage    = "https://anadolupanteri.org.tr"
+repository  = "https://anadolupanteri.org.tr"
+authors     = ["Anadolu Panteri <bilgi@anadolupanteri.org.tr>"]
+
+[[bin]]
+name = "uzakel-daemon"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "fs", "io-util", "signal"] }
+input-linux = "0.7"
+sha2 = "0.11"
+anyhow = "1"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rand = "0.8"
+bitflags = "2"
+x25519-dalek = { version = "3.0.0", features = ["static_secrets", "getrandom"] }
+hkdf = "0.13.0"
+chacha20poly1305 = "0.11.0"
+hmac = "0.13.0"
+
+[profile.release]
+panic = "abort"
+lto = true
