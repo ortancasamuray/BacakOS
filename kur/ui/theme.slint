@@ -1,0 +1,81 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Anadolu Panteri <bilgi@anadolupanteri.org.tr>
+//
+// The visual language: one global of colours plus the primitives built on it.
+
+/// A single global, flipped from Rust with `ui.global::<Theme>().set_dark(..)`.
+/// Every colour in the app derives from here, so dark mode is one assignment.
+export global Theme {
+    in property <bool> dark: true;
+
+    out property <color> bg:        dark ? #16181d : #f6f7f9;
+    out property <color> surface:   dark ? #1e2128 : #ffffff;
+    out property <color> sidebar:   dark ? #12141a : #eceef2;
+    out property <color> border:    dark ? #2c3038 : #d8dbe0;
+    out property <color> text:      dark ? #e6e8ec : #1a1c20;
+    out property <color> text-dim:  dark ? #9aa0ab : #62676f;
+    out property <color> accent:    #3b82f6;
+    out property <color> danger:    #ef4444;
+    out property <color> warning:   #f59e0b;
+    out property <color> success:   #22c55e;
+    /// The BIOS boot partition's disk-bar colour. Distinct from every
+    /// RoleChoice colour since BIOS boot is never a combo-box option.
+    out property <color> boot:      #8b5cf6;
+
+    out property <length> radius: 10px;
+    out property <length> gap: 16px;
+}
+
+export component Card inherits Rectangle {
+    background: Theme.surface;
+    border-radius: Theme.radius;
+    border-width: 1px;
+    border-color: Theme.border;
+}
+
+export component Heading inherits VerticalLayout {
+    in property <string> title;
+    in property <string> subtitle;
+    spacing: 4px;
+
+    Text {
+        text: title;
+        color: Theme.text;
+        font-size: 24px;
+        font-weight: 700;
+    }
+    Text {
+        text: subtitle;
+        color: Theme.text-dim;
+        font-size: 13px;
+        wrap: word-wrap;
+    }
+}
+
+/// A one-line notice, collapsing to nothing when `text` is empty.
+/// `kind`: 0 = neutral, 1 = warning, 2 = error, 3 = success.
+export component Notice inherits Rectangle {
+    in property <string> text;
+    in property <int> kind;
+
+    property <color> tint: kind == 2
+        ? Theme.danger
+        : (kind == 1 ? Theme.warning : (kind == 3 ? Theme.success : Theme.text-dim));
+
+    visible: text != "";
+    height: text == "" ? 0px : 36px;
+    border-radius: 6px;
+    background: tint.with-alpha(0.12);
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        Text {
+            text: root.text;
+            color: tint;
+            font-size: 12px;
+            vertical-alignment: center;
+            wrap: word-wrap;
+        }
+    }
+}

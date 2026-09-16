@@ -1,0 +1,8 @@
+BacakOS meta-paketi
+====================
+
+Bu paket içeriksizdir — yalnızca BacakOS'u oluşturan tüm bileşenleri
+bağımlılık olarak listeler. Kaldırmak masaüstünü bozmaz (bağımlı
+paketler ayrı ayrı kurulu kalır); yeniden kurmak için:
+
+    sudo apt install bacakos

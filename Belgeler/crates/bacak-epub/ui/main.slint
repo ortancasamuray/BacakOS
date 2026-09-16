@@ -1,0 +1,94 @@
+import { Button, HorizontalBox, VerticalBox, ScrollView, ComboBox } from "std-widgets.slint";
+
+export component AppWindow inherits Window {
+    title: "Bacak EPUB Okuyucu";
+    min-width: 480px;
+    min-height: 600px;
+
+    in property <string> book-title: "";
+    in property <string> chapter-title: "";
+    in property <string> body-text: "";
+    in property <[string]> chapters: [];
+    in property <int>    chapter-index: 0;
+    in property <int>    font-size: 16;
+    in property <bool>   dark-mode: false;
+
+    callback prev-chapter();
+    callback next-chapter();
+    callback select-chapter(int);
+    callback font-larger();
+    callback font-smaller();
+    callback toggle-dark();
+
+    property <color> bg:   dark-mode ? #1a1a2e : #f5f0e8;
+    property <color> fg:   dark-mode ? #e8e0d0 : #2c2416;
+    property <color> bar:  dark-mode ? #16213e : #e8e2d6;
+
+    background: bg;
+
+    VerticalBox {
+        padding: 0px;
+        spacing: 0px;
+
+        // Toolbar
+        Rectangle {
+            height: 48px;
+            background: bar;
+
+            HorizontalBox {
+                padding: 8px;
+                spacing: 6px;
+                alignment: center;
+
+                Button { text: "◀"; width: 36px; clicked => { prev-chapter(); } }
+                Button { text: "▶"; width: 36px; clicked => { next-chapter(); } }
+                Rectangle { width: 4px; }
+                Button { text: "A−"; width: 36px; clicked => { font-smaller(); } }
+                Button { text: "A+"; width: 36px; clicked => { font-larger(); } }
+                Button { text: "☀"; width: 36px; clicked => { toggle-dark(); } }
+                Rectangle { horizontal-stretch: 1; }
+                Text {
+                    text: chapter-title;
+                    color: fg;
+                    font-size: 13px;
+                    overflow: elide;
+                    max-width: 300px;
+                }
+                Rectangle { horizontal-stretch: 1; }
+            }
+        }
+
+        // Book title
+        Rectangle {
+            height: 32px;
+            background: bar;
+            Text {
+                text: book-title;
+                color: fg;
+                font-size: 14px;
+                font-weight: 700;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        // Content
+        ScrollView {
+            vertical-stretch: 1;
+
+            Rectangle {
+                padding: 32px;
+                background: bg;
+
+                Text {
+                    text: body-text;
+                    color: fg;
+                    font-size: root.font-size * 1px;
+                    wrap: word-wrap;
+                    width: parent.width - 64px;
+                    x: 32px;
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,5 @@
+// Embeds the app icon into the .exe (Explorer/taskbar) — resource ID 1 is
+// what Windows shows as the file's icon by convention (the lowest-ID icon
+// group), and it's also what `gui.rs` loads via `nwg::Icon::from_embed` for
+// the pairing window's title bar and the system-tray icon.
+1 ICON "app.ico"

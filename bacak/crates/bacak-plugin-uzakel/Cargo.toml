@@ -1,0 +1,29 @@
+[package]
+name        = "bacak-plugin-uzakel"
+description = "Uzakel pairing plugin for Bacak compositor (QR-code pairing panel)"
+version     = { workspace = true }
+edition     = { workspace = true }
+license     = { workspace = true }
+authors     = { workspace = true }
+repository  = { workspace = true }
+
+[lib]
+path = "src/lib.rs"
+
+[package.metadata.deb]
+maintainer = "Bacak Desktop Project <packages@example.org>"
+copyright  = "2026, Bacak Desktop Project"
+section    = "x11"
+priority   = "optional"
+extended-description = """\
+Adds an "Uzakel'e Bağlan" tile to the Bacak compositor Control Center,
+opening a panel with a QR code of the uzakel-daemon's current pairing PIN
+and LAN address — scan it from the Uzakel Android app instead of typing
+the PIN and IP by hand. Requires uzakel-daemon to be running (the tile
+still shows without it, but the panel explains it isn't paired-able yet)."""
+depends = "bacak-compositor (>= 0.1.0)"
+recommends = "uzakel-daemon"
+assets = [
+    ["plugin.conf",          "usr/share/bacak/plugins/uzakel.plugin",                "644"],
+    ["changelog.Debian.gz",  "usr/share/doc/bacak-plugin-uzakel/changelog.Debian.gz", "644"],
+]

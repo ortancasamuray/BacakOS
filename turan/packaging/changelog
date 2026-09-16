@@ -1,0 +1,9 @@
+bacak-display-manager (0.1.0-1) unstable; urgency=medium
+
+  * Initial release.
+    - Wayland-native display manager for the Bacak Desktop Environment.
+    - Privilege-separated daemon / unprivileged greeter / session launcher.
+    - PAM authentication, autologin, systemd + logind integration.
+    - Touchscreen detection, virtual-keyboard and accessibility hooks.
+
+ -- Bacak Desktop Project <packages@example.org>  Wed, 10 Jun 2026 00:00:00 +0000

@@ -1,0 +1,34 @@
+# Woodpecker CI — build / test / lint / package. Runs in containers on the
+# docker backend; no KVM needed (see vm-smoke-test.yml for the VM job).
+# Woodpecker is FOSS and self-hostable; this file has no GitHub dependency.
+when:
+  - event: [push, pull_request, manual]
+
+steps:
+  - name: test
+    image: rust:bookworm
+    commands:
+      - apt-get update
+      - >-
+        apt-get install -y --no-install-recommends
+        pkg-config cmake libwayland-dev libxkbcommon-dev libfontconfig-1-dev
+      - rustup component add rustfmt clippy
+      - cargo fmt --all --check
+      - cargo clippy --workspace --all-targets -- -D warnings
+      - cargo test --workspace --all-targets
+      - cargo build -p bacak-display-manager --features system-pam
+      - cargo build -p bacak-greeter --features gui
+
+  - name: package
+    image: rust:bookworm
+    commands:
+      - apt-get update
+      - >-
+        apt-get install -y --no-install-recommends
+        pkg-config cmake lintian libwayland-dev libxkbcommon-dev libfontconfig-1-dev
+      - command -v cargo-deb >/dev/null || cargo install cargo-deb --locked
+      - cargo build --release -p bacak-display-manager --features system-pam
+      - cargo build --release -p bacak-greeter --features gui --bin bacak-greeter
+      - cargo deb --no-build -p bacak-display-manager
+      - lintian target/debian/bacak-display-manager_*_amd64.deb || true
+      - ls -l target/debian/*.deb

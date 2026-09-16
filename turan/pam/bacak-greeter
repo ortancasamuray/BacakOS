@@ -1,0 +1,21 @@
+# /etc/pam.d/bacak-greeter
+#
+# Non-interactive PAM service for the unprivileged greeter's *logind session*.
+# The greeter system user is trusted and has no password, so there is no
+# credential prompt (pam_permit). The point of this service is the session
+# stack: pam_systemd registers a logind session of class "greeter" on the seat,
+# which lets the compositor (weston / bacak-compositor) take DRM master and open
+# input devices via libseat/logind.
+#
+# The BDM daemon opens this session from the forked child that becomes the
+# compositor, passing XDG_SESSION_CLASS=greeter / XDG_SESSION_TYPE=wayland /
+# XDG_SEAT / XDG_VTNR via pam_putenv so logind classifies it correctly.
+
+auth      required  pam_permit.so
+account   required  pam_permit.so
+password  required  pam_deny.so
+
+session   required  pam_loginuid.so
+session   required  pam_systemd.so
+session   optional  pam_keyinit.so force revoke
+session   optional  pam_env.so

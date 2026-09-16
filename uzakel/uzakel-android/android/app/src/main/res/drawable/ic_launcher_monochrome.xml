@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Single-color silhouette for Android 13+ themed icons (the launcher
+     recolors this to match the user's wallpaper palette) — same glyph as
+     ic_launcher_foreground.xml, flattened to one fill since a themed icon
+     ignores per-path color anyway. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:pathData="M43,24 L61,24 A6,6 0 0 1 67,30 L67,70 A6,6 0 0 1 61,76 L43,76 A6,6 0 0 1 37,70 L37,30 A6,6 0 0 1 43,24 Z"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="5"
+        android:strokeLineJoin="round"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+    <path
+        android:pathData="M46,71 L58,71"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+    <path
+        android:pathData="M63,47 L63,68 L67.5,64 L71.5,73 L76,71 L72,62 L80,62 Z"
+        android:fillColor="#FFFFFF" />
+</vector>

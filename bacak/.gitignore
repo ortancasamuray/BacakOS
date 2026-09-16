@@ -1,0 +1,11 @@
+/target/
+*.deb
+*.log
+*.rvf
+*.rvf.lock
+ruvector.db
+agentdb.*
+cosmic-comp/
+cosmic-comp-master.zip
+Cargo.backup
+.claude/

@@ -1,0 +1,5 @@
+/target/
+*.deb
+*.log
+ruvector.db
+.claude/

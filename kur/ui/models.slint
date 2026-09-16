@@ -1,0 +1,56 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Anadolu Panteri <bilgi@anadolupanteri.org.tr>
+//
+// Data structures mirrored into Rust by the Slint compiler. They live in their
+// own file because both `pages.slint` and `main.slint` need them, and an import
+// cycle would otherwise be unavoidable.
+
+export struct StepModel {
+    title: string,
+    glyph: string,
+    done: bool,
+}
+
+export struct DiskModel {
+    /// e.g. "/dev/nvme0n1"
+    path: string,
+    model: string,
+    size-text: string,
+    removable: bool,
+    /// True when the disk currently backs the running live system. Never wipe it.
+    is-live-medium: bool,
+}
+
+export struct PartitionModel {
+    path: string,
+    /// Pre-formatted by Rust: "/dev/sda1 — 512.0 MiB · vfat · «ESP»"
+    description: string,
+    /// Index into `MainWindow.partition-roles`: 0 = unused.
+    role-index: int,
+    format: bool,
+    /// False while the partition is unused, deleted, or is the root, whose
+    /// format box would be a lie: root is always formatted.
+    format-enabled: bool,
+}
+
+/// One block of the manual-partitioning bar, proportional to its share of the
+/// disk. `role-kind` mirrors `MainWindow.partition-roles`' index (0 = unused,
+/// 1 = root, 2 = ESP, 3 = swap, 4 = delete) so both share one colour table.
+export struct SegmentModel {
+    role-kind: int,
+    is-free: bool,
+    fraction: float,
+    label: string,
+}
+
+/// A free-space gap the user can create a new partition in.
+export struct GapModel {
+    /// Pre-formatted: "Boş alan — 100.0 GiB"
+    description: string,
+}
+
+/// A new partition the user has planned into a gap, awaiting confirmation.
+export struct PlannedCreateModel {
+    /// Pre-formatted: "Kök dizin (/) — 100.0 GiB (boş alanda #1)"
+    description: string,
+}

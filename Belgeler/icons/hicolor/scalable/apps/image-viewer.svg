@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <!-- frame -->
+  <rect x="6" y="10" width="52" height="42" rx="4" fill="#3d3d5c"/>
+  <!-- photo area -->
+  <rect x="10" y="14" width="44" height="34" rx="2" fill="#6688bb"/>
+  <!-- sky gradient simulation -->
+  <rect x="10" y="14" width="44" height="18" rx="2" fill="#88aadd"/>
+  <!-- mountain hills -->
+  <polygon points="10,32 22,20 34,28 44,18 54,26 54,48 10,48" fill="#2d5a27"/>
+  <!-- sun -->
+  <circle cx="42" cy="22" r="5" fill="#ffdd44"/>
+  <!-- aperture highlight -->
+  <circle cx="32" cy="10" r="3" fill="#555577"/>
+</svg>

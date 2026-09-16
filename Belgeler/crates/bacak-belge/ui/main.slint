@@ -1,0 +1,346 @@
+import { Button, HorizontalBox, VerticalBox, ScrollView } from "std-widgets.slint";
+
+component ColorSwatch inherits Rectangle {
+    in property <color> swatch-color;
+    in property <bool>  selected: false;
+    callback picked(color);
+
+    width: 22px;
+    height: 22px;
+    background: swatch-color;
+    border-radius: 3px;
+    border-color: selected ? #ffffff : #55555588;
+    border-width: selected ? 2.5px : 1px;
+
+    TouchArea { clicked => { root.picked(root.swatch-color); } }
+}
+
+export component AppWindow inherits Window {
+    title: "Bacak Belge Görüntüleyici";
+    min-width: 520px;
+    min-height: 600px;
+
+    // "pdf" | "epub" | "image" | "loading" | "error"
+    in property <string>  mode: "loading";
+    in property <string>  filename: "";
+    in property <string>  status: "";
+
+    // PDF & image shared
+    in property <image>   content-image;
+    in property <float>   zoom: 1.0;
+
+    // Pinch gesture — visual multiplier during gesture, resets to 1.0 after
+    in-out property <float> pinch-scale: 1.0;
+    private property <float> zoom-at-start: 1.0;
+
+    // PDF specific
+    in property <int>     page-num: 1;
+    in property <int>     page-count: 0;
+
+    // EPUB specific
+    in property <string>  chapter-title: "";
+    in property <string>  body-text: "";
+    in property <int>     font-size: 16;
+    in property <bool>    dark-mode: false;
+    in property <bool>    has-prev: false;
+    in property <bool>    has-next: false;
+
+    // Pan (single-finger drag)
+    in-out property <float>  pan-x: 0;
+    in-out property <float>  pan-y: 0;
+    private property <float> pan-start-x: 0;
+    private property <float> pan-start-y: 0;
+
+    // Draw / annotation
+    in-out property <bool>   draw-mode: false;
+    in-out property <string> active-tool: "pen";   // "pen" | "marker"
+    in property <color>      pen-color: #ff4444;
+    in property <image>      annotation-layer;
+    out property <float>     canvas-w-px: 0;
+    out property <float>     canvas-h-px: 0;
+
+    callback prev-action();
+    callback next-action();
+    callback zoom-in();
+    callback zoom-out();
+    callback fit();
+    callback font-larger();
+    callback font-smaller();
+    callback toggle-dark();
+    callback pinch-ended(float);
+    callback set-tool(string);
+    callback draw-start(float, float);
+    callback draw-move(float, float);
+    callback draw-end();
+    callback clear-annotations();
+    callback pick-color(color);
+
+    property <color> epub-bg:  dark-mode ? #1a1a2e : #f5f0e8;
+    property <color> epub-fg:  dark-mode ? #e8e0d0 : #2c2416;
+    property <color> epub-bar: dark-mode ? #16213e : #e0dbd0;
+
+    background: mode == "epub" ? epub-bg : (mode == "image" ? #111111 : #404040);
+
+    VerticalBox {
+        padding: 0px;
+        spacing: 0px;
+
+        // EPUB: book title bar (stays at top)
+        if mode == "epub": Rectangle {
+            height: 30px;
+            background: epub-bar;
+            Text {
+                text: filename;
+                color: epub-fg;
+                font-size: 13px;
+                font-weight: 700;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        // ── Content area ───────────────────────────────────────────────────
+
+        // PDF / image — shared pixel canvas
+        if mode == "pdf" || mode == "image": Rectangle {
+            vertical-stretch: 1;
+            background: mode == "image" ? #111111 : #505050;
+            clip: true;
+
+            init          => { root.canvas-w-px = self.width / 1px; root.canvas-h-px = self.height / 1px; }
+            changed width  => { root.canvas-w-px = self.width / 1px; }
+            changed height => { root.canvas-h-px = self.height / 1px; }
+
+            // Document image + pinch gesture
+            ScaleRotateGestureHandler {
+                enabled: !root.draw-mode;
+                started   => { root.zoom-at-start = root.zoom; root.pinch-scale = 1.0; }
+                updated   => { root.pinch-scale = self.scale; }
+                ended     => { root.pinch-ended(root.zoom-at-start * root.pinch-scale); root.pinch-scale = 1.0; }
+                cancelled => { root.pinch-scale = 1.0; }
+
+                if content-image.width > 0: Rectangle {
+                    background: mode == "pdf" ? #ffffff : transparent;
+                    width:  content-image.width  * 1px * zoom * pinch-scale;
+                    height: content-image.height * 1px * zoom * pinch-scale;
+                    x: (parent.width  - self.width)  / 2 + root.pan-x * 1px;
+                    y: (parent.height - self.height) / 2 + root.pan-y * 1px;
+                    Image {
+                        source: content-image;
+                        width:  parent.width;
+                        height: parent.height;
+                        image-fit: fill;
+                    }
+                }
+                if content-image.width == 0: Text {
+                    text: "Yükleniyor…";
+                    color: #888888;
+                    font-size: 16px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                // Single-finger pan — disabled while pinch gesture is active
+                if !root.draw-mode: TouchArea {
+                    enabled: !parent.active;
+                    mouse-cursor: move;
+                    pointer-event(e) => {
+                        if e.kind == PointerEventKind.down {
+                            root.pan-start-x = self.mouse-x / 1px;
+                            root.pan-start-y = self.mouse-y / 1px;
+                        }
+                    }
+                    moved => {
+                        if self.pressed {
+                            root.pan-x = root.pan-x + (self.mouse-x / 1px - root.pan-start-x);
+                            root.pan-y = root.pan-y + (self.mouse-y / 1px - root.pan-start-y);
+                            root.pan-start-x = self.mouse-x / 1px;
+                            root.pan-start-y = self.mouse-y / 1px;
+                        }
+                    }
+                }
+            }
+
+            // Annotation overlay (drawn on top of document)
+            if annotation-layer.width > 0: Image {
+                width: parent.width;
+                height: parent.height;
+                source: annotation-layer;
+                image-fit: fill;
+            }
+
+            // Draw capture area — sits on top, intercepts pointer when draw-mode active
+            if draw-mode: TouchArea {
+                mouse-cursor: crosshair;
+                pointer-event(e) => {
+                    if e.kind == PointerEventKind.down {
+                        root.draw-start(self.mouse-x / 1px, self.mouse-y / 1px);
+                    } else if e.kind == PointerEventKind.up {
+                        root.draw-end();
+                    }
+                }
+                moved => {
+                    if self.pressed { root.draw-move(self.mouse-x / 1px, self.mouse-y / 1px); }
+                }
+            }
+        }
+
+        // EPUB — scrollable text
+        if mode == "epub": ScrollView {
+            vertical-stretch: 1;
+            Rectangle {
+                background: epub-bg;
+                Text {
+                    text: body-text;
+                    color: epub-fg;
+                    font-size: root.font-size * 1px;
+                    wrap: word-wrap;
+                    width: parent.width - 80px;
+                    x: 40px;
+                    y: 24px;
+                }
+            }
+        }
+
+        // Loading / error placeholder
+        if mode == "loading" || mode == "error": Rectangle {
+            vertical-stretch: 1;
+            Text {
+                text: mode == "error" ? status : "Yükleniyor…";
+                color: mode == "error" ? #dd4444 : #888888;
+                font-size: 16px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        // ── Toolbar (bottom) ───────────────────────────────────────────────
+        Rectangle {
+            height: 48px;
+            background: mode == "epub" ? epub-bar : #1e1e2e;
+
+            HorizontalBox {
+                padding: 8px;
+                spacing: 4px;
+                alignment: center;
+
+                // Prev / Next (all modes)
+                Button { text: "◀"; width: 36px; enabled: has-prev;  clicked => { prev-action(); } }
+                Button { text: "▶"; width: 36px; enabled: has-next; clicked => { next-action(); } }
+
+                Rectangle { width: 4px; }
+
+                // PDF page indicator
+                if mode == "pdf": Text {
+                    text: page-num + " / " + page-count;
+                    color: #cccccc; font-size: 13px;
+                    vertical-alignment: center;
+                    min-width: 60px; horizontal-alignment: center;
+                }
+
+                // Zoom (PDF & image)
+                if mode == "pdf" || mode == "image": Button { text: "−"; width: 32px; clicked => { zoom-out(); } }
+                if mode == "pdf": Text {
+                    text: Math.round(zoom * 100) + "%";
+                    color: #aaaaaa; font-size: 12px;
+                    vertical-alignment: center; min-width: 40px; horizontal-alignment: center;
+                }
+                if mode == "pdf" || mode == "image": Button { text: "+"; width: 32px; clicked => { zoom-in(); } }
+                if mode == "pdf" || mode == "image": Button { text: "⊞"; width: 32px; clicked => { fit(); } }
+
+                // ── Draw / annotation controls (PDF & image only) ──────────
+                if mode == "pdf" || mode == "image": Rectangle { width: 4px; }
+
+                // Pen tool button
+                if mode == "pdf" || mode == "image": Rectangle {
+                    width: 32px; height: 32px;
+                    background: (draw-mode && active-tool == "pen") ? #3a3a5a : transparent;
+                    border-radius: 4px;
+                    Text {
+                        text: "✏"; font-size: 18px;
+                        horizontal-alignment: center; vertical-alignment: center;
+                        color: (draw-mode && active-tool == "pen") ? #aaaaff : #aaaaaa;
+                    }
+                    TouchArea { clicked => { set-tool("pen"); } }
+                }
+
+                // Marker tool button
+                if mode == "pdf" || mode == "image": Rectangle {
+                    width: 32px; height: 32px;
+                    background: (draw-mode && active-tool == "marker") ? #3a3a5a : transparent;
+                    border-radius: 4px;
+                    Text {
+                        text: "🖌"; font-size: 18px;
+                        horizontal-alignment: center; vertical-alignment: center;
+                        color: (draw-mode && active-tool == "marker") ? #aaaaff : #aaaaaa;
+                    }
+                    TouchArea { clicked => { set-tool("marker"); } }
+                }
+
+                // Color swatches — visible only when draw-mode is active
+                if draw-mode && (mode == "pdf" || mode == "image"): Rectangle { width: 4px; }
+                if draw-mode && (mode == "pdf" || mode == "image"): ColorSwatch {
+                    swatch-color: #ff4444; selected: pen-color == #ff4444;
+                    picked(c) => { pick-color(c); }
+                }
+                if draw-mode && (mode == "pdf" || mode == "image"): ColorSwatch {
+                    swatch-color: #4488ff; selected: pen-color == #4488ff;
+                    picked(c) => { pick-color(c); }
+                }
+                if draw-mode && (mode == "pdf" || mode == "image"): ColorSwatch {
+                    swatch-color: #44cc44; selected: pen-color == #44cc44;
+                    picked(c) => { pick-color(c); }
+                }
+                if draw-mode && (mode == "pdf" || mode == "image"): ColorSwatch {
+                    swatch-color: #ffdd00; selected: pen-color == #ffdd00;
+                    picked(c) => { pick-color(c); }
+                }
+                if draw-mode && (mode == "pdf" || mode == "image"): ColorSwatch {
+                    swatch-color: #111111; selected: pen-color == #111111;
+                    picked(c) => { pick-color(c); }
+                }
+                if draw-mode && (mode == "pdf" || mode == "image"): ColorSwatch {
+                    swatch-color: #ffffff; selected: pen-color == #ffffff;
+                    picked(c) => { pick-color(c); }
+                }
+
+                // Clear annotations button
+                if draw-mode && (mode == "pdf" || mode == "image"): Rectangle { width: 4px; }
+                if draw-mode && (mode == "pdf" || mode == "image"): Rectangle {
+                    width: 32px; height: 32px; border-radius: 4px;
+                    Text {
+                        text: "🗑"; font-size: 16px;
+                        horizontal-alignment: center; vertical-alignment: center;
+                        color: #cc6666;
+                    }
+                    TouchArea { clicked => { clear-annotations(); } }
+                }
+
+                // Font size (EPUB)
+                if mode == "epub": Button { text: "A−"; width: 40px; clicked => { font-smaller(); } }
+                if mode == "epub": Button { text: "A+"; width: 40px; clicked => { font-larger(); } }
+                if mode == "epub": Button { text: "☀";  width: 36px; clicked => { toggle-dark(); } }
+
+                Rectangle { horizontal-stretch: 1; }
+
+                // Centre label
+                if mode == "epub": Text {
+                    text: chapter-title; color: epub-fg; font-size: 13px;
+                    overflow: elide; max-width: 200px; vertical-alignment: center;
+                }
+                if mode != "epub": Text {
+                    text: filename; color: #aaaaaa; font-size: 12px;
+                    overflow: elide; max-width: 200px; vertical-alignment: center;
+                }
+
+                Rectangle { horizontal-stretch: 1; }
+
+                // Status / info (right side)
+                Text {
+                    text: status; color: #777777; font-size: 11px;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+}

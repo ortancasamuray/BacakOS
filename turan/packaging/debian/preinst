@@ -1,0 +1,25 @@
+#!/bin/sh
+# preinst — create the unprivileged greeter system account before files land.
+set -e
+
+case "$1" in
+    install|upgrade)
+        if ! getent passwd bacak-greeter >/dev/null; then
+            adduser --system --group \
+                    --home /var/lib/bacak-greeter \
+                    --gecos "Bacak Greeter" \
+                    --shell /usr/sbin/nologin \
+                    bacak-greeter
+        fi
+        # Grant DRM/GPU access so the greeter compositor can open render nodes
+        # and the kernel will honour SET_MASTER on the logind-granted fd.
+        if getent group video >/dev/null; then
+            adduser bacak-greeter video 2>/dev/null || true
+        fi
+        if getent group render >/dev/null; then
+            adduser bacak-greeter render 2>/dev/null || true
+        fi
+        ;;
+esac
+
+exit 0

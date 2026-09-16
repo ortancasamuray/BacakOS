@@ -1,0 +1,19 @@
+---
+- name: Add rpi-backlight DT overlay
+  ansible.builtin.lineinfile:
+    path: "{{ ovos_hardware_mark2_boot_config_path }}"
+    regexp: "^dtoverlay=rpi-backlight$"
+    line: "{{ ovos_hardware_mark2_backlight_overlay }}"
+  notify: Set Reboot
+
+- name: Manage touchscreen, DevKit vs Mark II
+  ansible.builtin.lineinfile:
+    path: "{{ ovos_hardware_mark2_boot_config_path }}"
+    regexp: "^{{ item.overlay }}"
+    line: "{{ item.overlay }}"
+    state: "{{ item.state }}"
+  loop: "{{ ovos_hardware_mark2_touchscreen_overlays }}"
+  when:
+    - (ovos_installer_raspberrypi | default('')) | regex_search(ovos_installer_raspberry_pi_4_regex)
+    - "'tas5806' in (ovos_installer_i2c_devices | default([]))"
+  notify: Set Reboot

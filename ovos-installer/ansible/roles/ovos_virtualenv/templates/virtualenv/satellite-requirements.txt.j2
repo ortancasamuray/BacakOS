@@ -1,0 +1,51 @@
+{% set _ovos_is_raspberry_pi_4 = (ovos_installer_raspberrypi | default('')) | regex_search(ovos_installer_raspberry_pi_4_regex) %}
+{% set _ovos_is_mark2_family = _ovos_is_raspberry_pi_4 and ('tas5806' in (ovos_installer_i2c_devices | default([]))) %}
+hivemind-bus-client
+hivemind-voice-sat
+ovos-audio[extras]
+ovos-dinkum-listener[{{ 'extras' if ansible_facts.system == 'Darwin' else 'extras,linux' }}]
+# Keep configured VAD selection and Linux fallback installed explicitly.
+{% if (ovos_installer_cpu_is_capable | default(false)) | bool %}
+ovos-vad-plugin-silero
+{% endif %}
+{% if ansible_facts.system != 'Darwin' %}
+ovos-vad-plugin-webrtcvad
+{% endif %}
+{% if ansible_facts.system == 'Darwin' or _ovos_is_mark2_family %}
+ovos-microphone-plugin-sounddevice
+{% endif %}
+{% if ansible_facts.system == 'Darwin' %}
+{% if (ovos_installer_cpu_is_capable | default(false)) | bool %}
+ovos-ww-plugin-precise-onnx
+{% endif %}
+{% endif %}
+ovos-PHAL[{{ 'mac' if ansible_facts.system == 'Darwin' else 'linux' }}]
+ovos-phal-plugin-ipgeo
+{% if (ovos_installer_locale != "ca-es") and (ovos_installer_locale != "eu-es") and (ovos_installer_locale != "gl-es") %}
+ovos-tts-plugin-piper
+{% endif %}
+ovos-tts-plugin-polly
+
+{% if ovos_installer_locale == "ca-es" %}
+ovos-tts-plugin-matxa-multispeaker-cat
+{% endif %}
+
+{% if ovos_installer_locale == "gl-es" %}
+ovos-tts-plugin-nos
+{% endif %}
+
+{% if (ovos_installer_locale == "es-es") or (ovos_installer_locale == "eu-es") %}
+ovos-tts-plugin-ahotts
+{% endif %}
+
+{% if ovos_installer_cpu_is_capable | bool %}
+ovos-dinkum-listener[onnx]
+{% endif %}
+
+{% if 'atmega328p' in ovos_installer_i2c_devices %}
+ovos-PHAL[mk1]
+{% endif %}
+
+{% if _ovos_is_mark2_family %}
+ovos-PHAL[mk2]
+{% endif %}

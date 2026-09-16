@@ -1,0 +1,11 @@
+---
+uninstall: false
+method: containers
+channel: testing
+profile: server
+features:
+  skills: true
+  extra_skills: true
+raspberry_pi_tuning: false
+share_telemetry: true
+share_usage_telemetry: true

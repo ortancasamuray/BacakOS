@@ -1,0 +1,50 @@
+---
+- name: Ensure /tmp permissions are apt-compatible
+  ansible.builtin.file:
+    path: /tmp
+    state: directory
+    owner: root
+    group: root
+    mode: "1777"
+
+- name: Prepare kernel headers package tracking
+  ansible.builtin.include_role:
+    name: ovos_installer
+    tasks_from: package_tracking_prepare_linux.yml
+  vars:
+    ovos_installer_package_tracking_marker_path: "{{ ovos_hardware_mark2_package_marker_path }}"
+    ovos_installer_package_tracking_requested_packages: "{{ ovos_hardware_mark2_kernel_headers_packages }}"
+
+- name: Install kernel headers
+  ansible.builtin.apt:
+    name: "{{ ovos_hardware_mark2_kernel_headers_packages }}"
+    install_recommends: false
+    update_cache: true
+    cache_valid_time: "{{ ovos_hardware_mark2_apt_cache_valid_time }}"
+  register: ovos_hardware_mark2_kernel_headers_install_result
+
+- name: Persist tracked kernel headers package ownership
+  ansible.builtin.include_role:
+    name: ovos_installer
+    tasks_from: package_tracking_persist.yml
+  vars:
+    ovos_installer_package_tracking_marker_path: "{{ ovos_hardware_mark2_package_marker_path }}"
+
+- name: Set EEPROM release
+  ansible.builtin.lineinfile:
+    path: "{{ ovos_hardware_mark2_eeprom_config_path }}"
+    regexp: "^FIRMWARE_RELEASE_STATUS="
+    line: 'FIRMWARE_RELEASE_STATUS="{{ ovos_hardware_mark2_eeprom_release }}"'
+
+- name: Update EEPROM
+  ansible.builtin.command:
+    cmd: "{{ ovos_hardware_mark2_eeprom_update_cmd }}"
+  register: ovos_hardware_mark2_eeprom_status
+  changed_when: false
+
+- name: Set ovos_hardware_mark2_reboot fact (EEPROM)
+  vars:
+    ovos_hardware_mark2_eeprom_reboot: "{{ ovos_hardware_mark2_eeprom_status.stdout | regex_search('reboot') }}"
+  ansible.builtin.set_fact:
+    ovos_installer_reboot: true  # noqa var-naming
+  when: ovos_hardware_mark2_eeprom_status is defined and ovos_hardware_mark2_eeprom_reboot | length > 0

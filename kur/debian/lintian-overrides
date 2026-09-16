@@ -1,0 +1,8 @@
+# This package is not destined for the Debian archive, so there is no ITP bug
+# for the initial release to close.
+kur: initial-upload-closes-no-bugs
+
+# kur-root is not meant to be run by hand; it is the sudo target `kur-baslat`
+# calls to restore the display environment sudo strips. Documenting it as a
+# user-facing command would invite exactly the misuse the wrapper prevents.
+kur: binary-without-manpage [usr/libexec/kur-root]

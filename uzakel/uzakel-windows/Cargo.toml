@@ -1,0 +1,24 @@
+[workspace]
+resolver = "2"
+members = [
+    "bacak-remote-proto",
+    "bacak-remote-server",
+    "bacak-remote-client",
+]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+license = "GPL-3.0-or-later"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+
+# Upstream scrap 0.5.0's build.rs picks its platform backend via `cfg!(windows)`,
+# which reflects the *host* a build script runs on, not the `--target` being
+# built for — breaking cross-compilation to Windows from this Linux host. The
+# vendored copy fixes that one line; see vendor/scrap-0.5.0/build.rs.
+[patch.crates-io]
+scrap = { path = "vendor/scrap-0.5.0" }

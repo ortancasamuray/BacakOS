@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!-- CHANGE_WIFI_MULTICAST_STATE isn't needed: discovery uses UDP
+         broadcast (see ARCHITECTURE.md's note on why not real mDNS), not
+         multicast, so no multicast lock is required. -->
+
+    <!-- QR-code pairing scan (ui/QrScanScreen.kt) — requested at runtime,
+         not just declared here; the feature is optional (manual PIN entry
+         still works without it) so android:required="false" keeps this app
+         installable on a device with no camera at all. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+
+    <!-- Adaptive icon (res/mipmap-anydpi-v26/): an Aegean-gradient
+         background (matching bacak/DESIGN_SYSTEM.md's desktop background)
+         behind a phone + cursor glyph, following that doc's app-icon rule
+         (§5: primary glyph in Aegean pale, secondary detail in white at
+         60%, Rust accent for the one element meant to draw the eye first
+         — here, the cursor). No legacy mipmap PNGs needed: minSdk 26 is
+         exactly where adaptive icons became mandatory-supported. -->
+    <application
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="@string/app_name"
+        android:theme="@style/Theme.Uzakel"
+        android:supportsRtl="true">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:theme="@style/Theme.Uzakel">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
