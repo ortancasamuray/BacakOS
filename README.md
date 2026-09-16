@@ -7,6 +7,8 @@ BacakOS is a custom Wayland-based Linux desktop environment built on Debian
 core system functions (Wi-Fi, Bluetooth, audio, settings) live directly
 inside a single native compositor.
 
+Official site: [www.anadolupanteri.org.tr](https://www.anadolupanteri.org.tr)
+
 ## Components
 
 | Component | Description |

@@ -6,6 +6,8 @@ BacakOS, Debian 13 (trixie) tabanlı, özgün Wayland masaüstü ortamıdır. Ma
 onlarca ayrı uygulama yerine, temel sistem işlevlerini (Wi-Fi, Bluetooth,
 ses, ayarlar) doğrudan tek bir native compositor içinde barındırır.
 
+Resmi site: [www.anadolupanteri.org.tr](https://www.anadolupanteri.org.tr)
+
 ## Bileşenler
 
 | Bileşen | Açıklama |
