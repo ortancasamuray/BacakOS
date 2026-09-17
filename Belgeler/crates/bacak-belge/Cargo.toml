@@ -21,7 +21,8 @@ epub   = "2"
 slint-build = { workspace = true }
 
 [package.metadata.deb]
-maintainer = "Bacak Desktop Project <packages@example.org>"
+revision = "2"
+maintainer = "Bacak Desktop Project <bilgi@anadolupanteri.org.tr>"
 copyright  = "2026, Bacak Desktop Project"
 section    = "utils"
 priority   = "optional"

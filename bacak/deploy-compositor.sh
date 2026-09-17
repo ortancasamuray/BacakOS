@@ -8,7 +8,7 @@
 # greeter compositor down on SIGTERM, but the explicit pkill is belt-and-braces.)
 set -eu
 
-REL=/home/os/bacak/target/release
+REL=/home/os2/bacakos/bacak/target/release
 ts=$(date +%Y%m%d-%H%M%S)
 
 [ -x "$REL/bacak-compositor" ] || { echo "missing $REL/bacak-compositor — build it first"; exit 1; }

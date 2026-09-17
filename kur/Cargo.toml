@@ -50,6 +50,7 @@ strip = true
 
 # `cargo deb` packaging (cargo install cargo-deb && cargo deb)
 [package.metadata.deb]
+revision = "2"
 maintainer = "Anadolu Panteri <bilgi@anadolupanteri.org.tr>"
 copyright = "2026, Anadolu Panteri <bilgi@anadolupanteri.org.tr>"
 changelog = "debian/changelog"

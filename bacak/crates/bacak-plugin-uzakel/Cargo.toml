@@ -11,7 +11,7 @@ repository  = { workspace = true }
 path = "src/lib.rs"
 
 [package.metadata.deb]
-maintainer = "Bacak Desktop Project <packages@example.org>"
+maintainer = "Bacak Desktop Project <bilgi@anadolupanteri.org.tr>"
 copyright  = "2026, Bacak Desktop Project"
 section    = "x11"
 priority   = "optional"

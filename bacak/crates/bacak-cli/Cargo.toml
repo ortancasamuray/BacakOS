@@ -22,8 +22,9 @@ serde_json  = { workspace = true }
 anyhow      = { workspace = true }
 
 [package.metadata.deb]
-maintainer = "Bacak Desktop Project <packages@example.org>"
+maintainer = "Bacak Desktop Project <bilgi@anadolupanteri.org.tr>"
 copyright  = "2026, Bacak Desktop Project"
+revision   = "2"
 section    = "admin"
 priority   = "optional"
 extended-description = "Service management CLI for the Bacak OS desktop environment."
