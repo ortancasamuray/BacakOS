@@ -33,7 +33,7 @@ use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::utils::draw_render_elements;
 use smithay::backend::renderer::{Color32F, Frame, Renderer};
 use smithay::backend::winit::{self as winit_backend, WinitEvent};
-use smithay::input::keyboard::{FilterResult, KeyboardHandle};
+use smithay::input::keyboard::{FilterResult, KeyboardHandle, XkbConfig};
 use smithay::output::{Mode as OutputMode, Output, PhysicalProperties, Subpixel};
 use smithay::input::pointer::{ButtonEvent, MotionEvent, PointerHandle};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
@@ -99,10 +99,20 @@ pub fn run() -> Result<()> {
     // inherited. Overwriting it first would point a nested winit at its own
     // (empty) socket and hang on the init roundtrip. We set it after init.
 
-    // Keyboard / repeat (rate, delay) in ms.
+    // Keyboard / repeat (rate, delay) in ms. Programmed with the configured
+    // xkb layout (default `tr(f)`) from the start — see the matching note
+    // in `udev_runtime.rs`.
     let keyboard = state
         .seat
-        .add_keyboard(Default::default(), 200, 25)
+        .add_keyboard(
+            XkbConfig {
+                layout: &state.config.xkb_layout,
+                variant: &state.config.xkb_variant,
+                ..Default::default()
+            },
+            200,
+            25,
+        )
         .map_err(|e| anyhow::anyhow!("seat.add_keyboard: {e}"))?;
     // Pointer — needed so wl_pointer protocol is advertised on the seat and
     // hit-testing has somewhere to send focus enter/leave.

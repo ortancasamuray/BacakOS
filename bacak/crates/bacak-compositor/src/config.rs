@@ -144,6 +144,27 @@ pub struct CompositorConfig {
     /// an internal one-shot flag, not a user preference to edit by hand.
     #[serde(default)]
     pub onboarding_shown: bool,
+    /// xkb layout for the *physical* seat keyboard (e.g. `"tr"`, `"us"`).
+    /// Empty falls back to `XKB_DEFAULT_LAYOUT`/xkbcommon's own default
+    /// (effectively `"us"`), which is why this defaults to `"tr"` — Bacak
+    /// OS is Turkish-first (see [`crate::keyboard::system_default_layout`]),
+    /// and previously only the on-screen keyboard ever retuned the seat's
+    /// xkb layout, leaving a physical keyboard stuck on `"us"` (no AltGr
+    /// `@`, etc.) until the OSK was opened at least once.
+    #[serde(default = "default_xkb_layout")]
+    pub xkb_layout: String,
+    /// xkb variant to go with `xkb_layout` (e.g. `"f"` for the Turkish
+    /// F-keyboard). Empty is a valid variant (plain Q-keyboard layouts).
+    #[serde(default = "default_xkb_variant")]
+    pub xkb_variant: String,
+}
+
+fn default_xkb_layout() -> String {
+    "tr".to_string()
+}
+
+fn default_xkb_variant() -> String {
+    "f".to_string()
 }
 
 impl Default for CompositorConfig {
@@ -167,6 +188,8 @@ impl Default for CompositorConfig {
             font: String::new(),
             icon_theme: String::new(),
             onboarding_shown: false,
+            xkb_layout: default_xkb_layout(),
+            xkb_variant: default_xkb_variant(),
         }
     }
 }
@@ -262,6 +285,8 @@ impl CompositorConfig {
         "dock_pinned",
         "font",
         "icon_theme",
+        "xkb_layout",
+        "xkb_variant",
     ];
 
     /// Split a comma-separated list value into trimmed, non-empty,
@@ -327,6 +352,8 @@ impl CompositorConfig {
             "dock_pinned" => self.dock_pinned = Self::parse_list(value),
             "font" => self.font = value.trim().to_string(),
             "icon_theme" => self.icon_theme = value.trim().to_string(),
+            "xkb_layout" => self.xkb_layout = value.trim().to_string(),
+            "xkb_variant" => self.xkb_variant = value.trim().to_string(),
             other => {
                 return Err(format!(
                     "unknown key `{other}` (valid: {})",
@@ -356,6 +383,8 @@ impl CompositorConfig {
             "dock_pinned" => self.dock_pinned = d.dock_pinned,
             "font" => self.font = d.font,
             "icon_theme" => self.icon_theme = d.icon_theme,
+            "xkb_layout" => self.xkb_layout = d.xkb_layout,
+            "xkb_variant" => self.xkb_variant = d.xkb_variant,
             other => {
                 return Err(format!(
                     "unknown key `{other}` (valid: {})",

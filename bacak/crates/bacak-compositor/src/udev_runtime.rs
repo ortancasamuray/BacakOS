@@ -57,7 +57,7 @@ use smithay::backend::renderer::{Bind, Color32F, Offscreen};
 use smithay::backend::session::libseat::LibSeatSession;
 use smithay::backend::session::{Event as SessionEvent, Session};
 use smithay::backend::udev::{primary_gpu, UdevBackend, UdevEvent};
-use smithay::input::keyboard::{FilterResult, KeyboardHandle};
+use smithay::input::keyboard::{FilterResult, KeyboardHandle, XkbConfig};
 use smithay::input::pointer::{ButtonEvent, MotionEvent, PointerHandle};
 use smithay::input::touch::{DownEvent, MotionEvent as TouchMotionEvent, TouchHandle, UpEvent};
 use smithay::output::{Mode as OutputMode, Output, PhysicalProperties, Subpixel};
@@ -376,9 +376,23 @@ pub fn run() -> Result<()> {
     // host. Click-to-focus is still available via the runtime API.
     state.focus_policy = FocusPolicy::FocusFollowsPointer;
 
+    // Program the physical seat keyboard with the configured xkb layout
+    // (default `tr(f)` — Bacak OS is Turkish-first) from the start.
+    // Previously this used `Default::default()`, which falls back to
+    // xkbcommon's own default (effectively `us`) and only ever got
+    // retuned when the on-screen keyboard was opened — leaving a
+    // physical keyboard stuck without AltGr `@` etc. until then.
     let keyboard = state
         .seat
-        .add_keyboard(Default::default(), 200, 25)
+        .add_keyboard(
+            XkbConfig {
+                layout: &state.config.xkb_layout,
+                variant: &state.config.xkb_variant,
+                ..Default::default()
+            },
+            200,
+            25,
+        )
         .map_err(|e| anyhow!("seat.add_keyboard: {e}"))?;
     let pointer = state.seat.add_pointer();
     let touch = state.seat.add_touch();
