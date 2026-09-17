@@ -481,7 +481,15 @@ fn page_turkish() -> Page {
             KeyCap::letter(DOT, ".", ":", &["…"]),
             KeyCap::letter(SLASH, ",", ";", &[]),
             KeyCap::modk(Modifier::Shift, "⇧", 1.0),
-            KeyCap::act(Action::Goto(LayoutId::Numeric), "123", 1.25),
+            // A direct, reliable `@` key (committed as fixed Unicode text,
+            // same mechanism as the €/₺/emoji keys — sidesteps xkb/AltGr
+            // entirely). Replaces the old `123`-page switch: the number row
+            // above already has digits, and the numeric-keypad page it led
+            // to sent evdev keypad codes (KP1..KP9) whose keysyms resolve to
+            // navigation keys (End/Down/PageDown/…) instead of digits unless
+            // NumLock is active — the actual cause of "numbers don't work"
+            // reports for that page.
+            KeyCap::emoji("@"),
         ],
         // Control row: Ctrl Win Alt [lang] [space] AltGr ← → ↑ ↓  ☰
         // The language key sits left of the space bar; its cap shows the live
