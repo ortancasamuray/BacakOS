@@ -21,7 +21,7 @@ anyhow  = "1"
 slint-build = "1.8"
 
 [package.metadata.deb]
-maintainer = "Bacak Desktop Project <packages@example.org>"
+maintainer = "Bacak Desktop Project <bilgi@anadolupanteri.org.tr>"
 copyright  = "2026, Bacak Desktop Project"
 section    = "graphics"
 priority   = "optional"
