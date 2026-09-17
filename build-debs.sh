@@ -168,23 +168,14 @@ log "=== bacakos meta-paketi oluşturuluyor ==="
 # NOT: Ayarlar/ dizini kaldırıldı — BT/Wi-Fi/Ses/Ayarlar artık ayrı uygulama
 # değil, bacak-compositor içindedir. (bkz. project-tree.md)
 
-# ---------------------------------------------------------------------------
-# ISO senkronizasyonu: Buildeba/ (live-build) varsa dist/*.deb'i
-# config/packages.chroot'a kopyala, live-build bunları chroot'a kurar —
-# kur'un unutulduğu 2026-07-17 hatasının tekrarını önler.
+# NOT: dist/*.deb artık ISO'nun config/packages.chroot'una kopyalanmıyor.
+# BacakOS paketlerinin tamamı ISO build'i sırasında depo.anadolupanteri.org.tr
+# APT deposundan kuruluyor (bkz. config/hooks/normal/anadolupanteri.chroot ve
+# config/package-lists/bacakos.list.chroot). packages.chroot'ta hem yerel
+# hem de depo kopyası aynı anda bulunursa, versiyonlar eşitse apt hangisini
+# kuracağına karar veremiyor/eskiyi seçebiliyor — bu yüzden yeni deb'leri
+# ISO'ya değil, depo.anadolupanteri.org.tr'ye yüklemek gerekiyor.
 #
-# Not: eskiden ayrıca config/includes.chroot/usr/share/bacakos/debs'e de
-# kopyalanırdı; kur artık ISO'nun kendi squashfs'inden kuruyor (bkz.
-# stages::extract_squashfs), o dizini okuyan kod kalmadığı için kaldırıldı.
-# ---------------------------------------------------------------------------
-PACKAGES_CHROOT="$HERE/Buildeba/config/packages.chroot"
-if [ -d "$PACKAGES_CHROOT" ]; then
-    log "=== ISO debs senkronize ediliyor: $PACKAGES_CHROOT ==="
-    cp -v "$DIST"/*.deb "$PACKAGES_CHROOT/"
-else
-    log "Buildeba/ live-build dizini bulunamadı — ISO senkronizasyonu atlandı"
-fi
-
 # ---------------------------------------------------------------------------
 echo ""
 ok "=== Tüm paketler hazır: $DIST ==="
