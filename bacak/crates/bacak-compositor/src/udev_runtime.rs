@@ -66,6 +66,7 @@ use smithay::wayland::dmabuf::DmabufFeedbackBuilder;
 use smithay::reexports::drm::control::{
     connector, crtc, Device as DrmControlDevice, Mode as DrmMode, ModeFlags, ModeTypeFlags,
 };
+use smithay::reexports::drm::Device as DrmBaseDevice;
 use smithay::reexports::input::Libinput;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{Client, Display, DisplayHandle, ListeningSocket};
@@ -1084,6 +1085,29 @@ fn connector_handle_from_raw(raw: u32) -> Option<connector::Handle> {
     smithay::reexports::drm::control::from_u32(raw)
 }
 
+/// DRM driver names for virtual/hypervisor GPUs whose EDID physical size
+/// is fabricated (often a fixed value regardless of the actual mode) —
+/// feeding that into the DPI estimate below computes a wildly high DPI
+/// for any halfway-large virtual resolution, so `pick_scale` forces 1×
+/// for these instead of trusting the EDID.
+const VIRTUAL_GPU_DRIVERS: &[&str] = &[
+    "vboxvideo", "qxl", "virtio_gpu", "virtio-gpu", "vmwgfx", "bochs-drm", "bochs", "cirrus",
+    "vkms",
+];
+
+/// True if `drm`'s kernel driver is a known virtual/hypervisor GPU (VirtualBox,
+/// QEMU/QXL, virtio-gpu, VMware, …). Best-effort: an ioctl failure is treated
+/// as "not virtual" so real hardware is never affected by a lookup error.
+fn is_virtual_gpu(drm: &DrmDevice) -> bool {
+    match DrmBaseDevice::get_driver(drm) {
+        Ok(driver) => {
+            let name = driver.name().to_string_lossy().to_lowercase();
+            VIRTUAL_GPU_DRIVERS.iter().any(|d| name == *d)
+        }
+        Err(_) => false,
+    }
+}
+
 /// Pick an integer HiDPI scale for a connector.
 ///
 /// `BACAK_SCALE` (1–3) forces a global value and short-circuits the
@@ -1091,8 +1115,11 @@ fn connector_handle_from_raw(raw: u32) -> Option<connector::Handle> {
 /// user just wants a different size. Otherwise we estimate the panel's
 /// DPI from its mode resolution and EDID physical size and pick 2 once
 /// it crosses the classic "HiDPI" threshold (2× of 96 dpi). Panels with
-/// no usable EDID size fall back to 1.
-fn pick_scale(mode_px: (u16, u16), phys_mm: (u32, u32)) -> i32 {
+/// no usable EDID size fall back to 1. `is_virtual` (see
+/// [`is_virtual_gpu`]) skips the EDID-based estimate entirely — virtual
+/// GPUs report fabricated physical sizes that otherwise get misread as
+/// HiDPI on an ordinary Full HD guest display.
+fn pick_scale(mode_px: (u16, u16), phys_mm: (u32, u32), is_virtual: bool) -> i32 {
     if let Ok(s) = std::env::var("BACAK_SCALE") {
         if let Ok(n) = s.trim().parse::<i32>() {
             if (1..=3).contains(&n) {
@@ -1100,6 +1127,9 @@ fn pick_scale(mode_px: (u16, u16), phys_mm: (u32, u32)) -> i32 {
             }
             warn!(value = %s, "BACAK_SCALE out of range 1..=3; auto-detecting");
         }
+    }
+    if is_virtual {
+        return 1;
     }
     let (pw, ph) = phys_mm;
     if pw == 0 || ph == 0 {
@@ -1328,7 +1358,7 @@ fn try_bringup_target(
             info!(connector = connector_raw, scale = clamped, "using config-specified output scale");
             clamped
         } else {
-            pick_scale(mode_size, (phys_w, phys_h))
+            pick_scale(mode_size, (phys_w, phys_h), is_virtual_gpu(drm))
         };
         smithay_output.set_preferred(smithay_mode);
         smithay_output.change_current_state(
@@ -1995,7 +2025,7 @@ fn scan_connectors(
             .get(&name)
             .and_then(|c| c.scale)
             .map(|s| s.clamp(1, 3))
-            .unwrap_or_else(|| pick_scale((w, h), info.size().unwrap_or((0, 0))));
+            .unwrap_or_else(|| pick_scale((w, h), info.size().unwrap_or((0, 0)), is_virtual_gpu(drm)));
         let handle: u32 = c.into();
         raw.push((handle, w as i32 / scale, h as i32 / scale));
     }
