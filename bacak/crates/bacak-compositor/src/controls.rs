@@ -44,6 +44,42 @@ fn run_ok(cmd: &str, args: &[&str]) -> bool {
         .is_ok()
 }
 
+/// Run a command fire-and-forget like [`run_ok`], but on a background thread
+/// drain its stderr to EOF (same "don't `wait()`" trick as [`capture`]) and
+/// log it if non-empty. Use this instead of `run_ok` where a silent failure
+/// would look, from the UI, indistinguishable from the button not
+/// registering the click at all — e.g. `systemctl poweroff` refused by
+/// polkit ("Interactive authentication required") previously left the
+/// "Kapat" tile looking unresponsive with nothing in the logs to explain why.
+fn run_logged(cmd: &'static str, args: &[&str]) -> bool {
+    let args_owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+    match Command::new(cmd)
+        .args(&args_owned)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(mut child) => {
+            if let Some(mut stderr) = child.stderr.take() {
+                std::thread::spawn(move || {
+                    let mut s = String::new();
+                    let _ = stderr.read_to_string(&mut s);
+                    let s = s.trim();
+                    if !s.is_empty() {
+                        tracing::warn!(cmd, args = ?args_owned, stderr = %s, "command reported an error");
+                    }
+                });
+            }
+            true
+        }
+        Err(e) => {
+            tracing::warn!(cmd, args = ?args_owned, error = %e, "failed to spawn command");
+            false
+        }
+    }
+}
+
 /// Run a command and capture its trimmed stdout, or `None` if it couldn't be
 /// spawned. Reads stdout to EOF (blocks until the child exits) rather than
 /// `wait()`-ing, so it works despite the global `SIGCHLD = SIG_IGN`.
@@ -686,11 +722,11 @@ pub fn set_default_sink(id: &str) {
 // ----- Power -----------------------------------------------------------
 
 pub fn power_off() {
-    run_ok("systemctl", &["poweroff"]);
+    run_logged("systemctl", &["poweroff"]);
 }
 
 pub fn reboot() {
-    run_ok("systemctl", &["reboot"]);
+    run_logged("systemctl", &["reboot"]);
 }
 
 /// End the session: raise `SIGTERM` on ourselves. The signal handler in
