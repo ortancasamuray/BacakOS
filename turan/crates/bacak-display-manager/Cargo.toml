@@ -33,7 +33,7 @@ serde_json = "1"
 #     cargo deb --no-build -p bacak-display-manager
 # ---------------------------------------------------------------------------
 [package.metadata.deb]
-revision = "2"
+revision = "3"
 maintainer = "Bacak Desktop Project <bilgi@anadolupanteri.org.tr>"
 copyright = "2026, Bacak Desktop Project"
 section = "x11"
