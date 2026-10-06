@@ -21,6 +21,10 @@ use crate::security::Sandbox;
 
 use super::{entry_from_path, Query};
 
+/// How long the background thread waits after loading a cached index before
+/// starting the watcher and the refresh walk (see [`Index::build`]).
+const REFRESH_DELAY: std::time::Duration = std::time::Duration::from_secs(3);
+
 /// A shared, clonable handle to the index for one root.
 #[derive(Clone)]
 pub struct Index {
@@ -39,21 +43,34 @@ impl Index {
         let root = sandbox.resolve(root).ok()?.into_path_buf();
         let map: Arc<RwLock<HashMap<PathBuf, Entry>>> = Arc::new(RwLock::new(HashMap::new()));
         let ready = Arc::new(AtomicBool::new(false));
+        let watcher_slot: Arc<Mutex<Option<notify::RecommendedWatcher>>> = Arc::new(Mutex::new(None));
 
-        // Background thread: load cache first for instant search, then full walk.
+        // Background thread: load cache first for instant search, then the
+        // watcher, then a full walk. Everything here stays off the UI thread —
+        // a recursive inotify watch adds one watch per directory under $HOME
+        // and used to block the window from appearing for many seconds.
         {
             let root = root.clone();
             let map = map.clone();
             let ready = ready.clone();
+            let watcher_slot = watcher_slot.clone();
             std::thread::Builder::new()
                 .name("search-index-build".into())
                 .spawn(move || {
                     // Load persisted cache so search is available without a full walk.
-                    if let Some(loaded) = load_map(&root) {
+                    let cached = load_map(&root);
+                    let had_cache = cached.is_some();
+                    if let Some(loaded) = cached {
                         log::info!("search index loaded from cache for {} ({} entries)", root.display(), loaded.len());
                         *map.write().unwrap() = loaded;
                         ready.store(true, Ordering::SeqCst);
+                        // Search already works off the cache; let the window's
+                        // first directory listing have the disk before the
+                        // watcher setup and full re-walk start thrashing it.
+                        std::thread::sleep(REFRESH_DELAY);
                     }
+                    // Filesystem watcher for incremental updates.
+                    *watcher_slot.lock().unwrap() = start_watcher(&root, map.clone());
                     // Full walk to refresh the stale cache.
                     let mut local = HashMap::new();
                     for entry in walkdir::WalkDir::new(&root).follow_links(false).into_iter().flatten() {
@@ -65,20 +82,15 @@ impl Index {
                     let n = local.len();
                     *map.write().unwrap() = local;
                     ready.store(true, Ordering::SeqCst);
-                    log::info!("search index rebuilt for {} ({n} entries)", root.display());
+                    log::info!(
+                        "search index rebuilt for {} ({n} entries, cache={had_cache})",
+                        root.display()
+                    );
                 })
                 .ok();
         }
 
-        // Filesystem watcher for incremental updates.
-        let watcher = start_watcher(&root, map.clone());
-
-        Some(Index {
-            root,
-            map,
-            ready,
-            _watcher: Arc::new(Mutex::new(watcher)),
-        })
+        Some(Index { root, map, ready, _watcher: watcher_slot })
     }
 
     /// Whether `path` falls within this index's root.
