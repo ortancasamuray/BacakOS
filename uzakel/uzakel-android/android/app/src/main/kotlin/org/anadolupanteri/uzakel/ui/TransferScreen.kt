@@ -41,7 +41,8 @@ import org.anadolupanteri.uzakel.transfer.TransferState
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TransferScreen(
-    session: PairedSession,
+    /** Read at send time — a reconnect may have re-keyed the session. */
+    session: () -> PairedSession,
     manager: FileTransferManager,
     onBack: () -> Unit,
 ) {
@@ -50,7 +51,7 @@ fun TransferScreen(
 
     val pickFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
-            scope.launch { manager.send(uri, session) }
+            scope.launch { manager.send(uri, session()) }
         }
     }
 

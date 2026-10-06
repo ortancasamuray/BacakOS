@@ -25,6 +25,9 @@ enum class Opcode(val value: Int) {
     MOUSE_CLICK(2),
     MOUSE_SCROLL(3),
     KEY_PRESS(4),
+    /** Encrypted liveness probe / answer on the input channel. */
+    PING(5),
+    PONG(6),
 
     FILE_META(10),
     FILE_ACCEPT(11),
@@ -37,6 +40,9 @@ enum class Opcode(val value: Int) {
     DISCOVER_RESPONSE(21),
     PAIR_REQUEST(22),
     PAIR_RESPONSE(23),
+    /** PIN-less session resumption (ResumeCrypto / daemon resume.rs). */
+    RESUME_REQUEST(24),
+    RESUME_RESPONSE(25),
 
     /** Wraps a full inner frame's ciphertext once a session key exists
      * (ARCHITECTURE.md §2.3.1) — carried on both the input and
@@ -266,3 +272,21 @@ fun decodeEncryptedFramePayload(payload: ByteArray): Pair<ByteArray, ByteArray> 
     if (payload.size < NONCE_LEN) throw ProtocolException("truncated EncryptedFrame")
     return payload.copyOfRange(0, NONCE_LEN) to payload.copyOfRange(NONCE_LEN, payload.size)
 }
+
+// ── Resumption + liveness (ARCHITECTURE.md §2.3.3) ─────────────────────────
+
+fun encodeResumeRequest(clientId: ByteArray, clientNonce: ByteArray, mac: ByteArray): ByteArray =
+    frame(Opcode.RESUME_REQUEST, clientId + clientNonce + mac)
+
+data class ResumeResponse(val accepted: Boolean, val daemonNonce: ByteArray, val mac: ByteArray) {
+    companion object {
+        fun decodePayload(p: ByteArray): ResumeResponse {
+            if (p.size < 1 + 32 + 32) throw ProtocolException("truncated RESUME_RESPONSE")
+            return ResumeResponse(p[0].toInt() != 0, p.copyOfRange(1, 33), p.copyOfRange(33, 65))
+        }
+    }
+}
+
+/** Inner PING frame (sent encrypted); the payload is echoed back in PONG. */
+fun encodePing(token: Long): ByteArray =
+    frame(Opcode.PING, ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(token).array())

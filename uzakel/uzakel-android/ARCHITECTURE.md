@@ -84,6 +84,7 @@ silently misinterpret payloads.
 | `MOUSE_CLICK` | `button: u8, state: u8` | `button`: left/right/middle; `state`: down/up. |
 | `MOUSE_SCROLL` | `dx: i16, dy: i16` | Relative scroll delta (two-finger drag on the trackpad view). |
 | `KEY_PRESS` | `keycode: u16, modifiers: u8, state: u8` | `modifiers` is a bitmask (Shift/Ctrl/Alt/Super); `state` is down/up so held keys and repeats are the client's responsibility, not the wire's. |
+| `PING` / `PONG` | `token: u64` | Liveness (§2.3.3): the client sends `PING` every 2 s inside the encrypted envelope; the daemon echoes the token back as `PONG` under the same session. |
 
 Every input packet also carries a monotonic `seq: u32` in its payload
 prefix so `input_manager.rs` can drop an out-of-order UDP packet instead of
@@ -173,12 +174,11 @@ still complete a valid-looking handshake, because the PIN itself carries
 no brute-force resistance of its own (a real PAKE like SPAKE2 would fold
 the PIN into the key exchange itself, making an offline guess-and-check
 attack on it infeasible; this scheme instead uses the PIN only to
-authenticate a key exchange that already happened). Session trust is also
-still **in-memory only** — it doesn't survive a daemon restart, so
-Android's "Bağlan" (saved-host reconnect) always re-runs the full PIN +
-ECDH handshake rather than reusing old keys, since it has no way to know
-whether the daemon still remembers the old session (and reusing keys
-across daemon restarts would risk nonce-counter reuse anyway). A real
+authenticate a key exchange that already happened). Live session keys stay
+in memory only, but reconnecting no longer needs the PIN: see §2.3.3 for
+the persisted pairing secret that derives *fresh* session keys on every
+connect (reusing the old session keys across a daemon restart would reuse
+nonce counters). A real
 TLS/PSK or SPAKE2 approach (§5) remains the next step if this needs to
 hold up against a more capable active attacker.
 
@@ -220,6 +220,46 @@ have to synchronously ask the daemon for this), it's inherently a *local*
 mechanism — reading it requires being logged into the same BacakOS session
 the daemon is running in, which is an acceptable trust boundary (anyone who
 can read that file already controls the desktop being paired with).
+
+#### 2.3.3 PIN-less resumption, liveness and cleanup
+
+The first (PIN) pairing also derives, from the same HKDF, a long-lived
+`resume_key` (`"uzakel resume"`) and a public 16-byte `client_id`
+(`"uzakel client id"`). The daemon keeps `client_id → resume_key` in
+`~/.local/state/uzakel/eslesmeler` (dir 0700, file 0600,
+`pairings.rs`); the phone keeps it in `PairingStore`, the key sealed with a
+non-exportable Android Keystore AES key (`KeystoreBox`). Every later
+connection — opening a saved computer, or recovering from a drop — runs:
+
+```text
+RESUME_REQUEST (24)  client_id | client_nonce[32] | HMAC(rk, "uzakel resume req"  | client_id | client_nonce)
+RESUME_RESPONSE (25) accepted  | daemon_nonce[32] | HMAC(rk, "uzakel resume resp" | client_nonce | daemon_nonce)
+c2s/s2c = HKDF-SHA256(salt "uzakel-resume-v1", ikm rk, info "uzakel c2s"/"uzakel s2c" | client_nonce | daemon_nonce)
+```
+
+Fresh keys every time are what make this safe: `Cipher` nonces are
+counters starting at 0, so persisting and reusing *session* keys across a
+daemon restart would reuse (key, nonce) pairs. Each MAC proves possession
+of `resume_key`; the daemon also refuses a `client_nonce` it saw recently
+for that pairing. Vectors are pinned in `resume.rs`/`ResumeCryptoTest`
+(and were cross-checked against an independent Python computation).
+
+**Liveness:** the client sends an encrypted `PING` (5) on the input channel
+every 2 s; the daemon answers `PONG` (6) under the same session. After 7 s
+without one, `Connection` resumes — first at the last address, then at
+whatever a discovery broadcast finds (same computer name first) — so a
+daemon restart, the phone's Wi-Fi handoff and the PC's new DHCP lease all
+recover without a PIN. If the daemon answers `accepted = 0` the pairing is
+gone and the app asks to pair again.
+
+**Several sessions per address:** `TrustStore` keeps up to 4 sessions per
+source IP and the input channel tries each until one authenticates the
+datagram (see §6 for why).
+
+**Cleanup:** pairings unused for 30 days are dropped on both sides (daemon:
+hourly sweep; phone: on every list read), and the phone can delete one by
+hand. **PIN brute force:** after 5 wrong PINs the daemon replaces the PIN,
+so each PIN gets at most 5 guesses.
 
 ---
 
@@ -427,22 +467,12 @@ control → transfer, and back).
   a notification daemon at all. Real-hardware testing hit exactly this: the
   test session had no notification service running, so the PIN was only
   ever visible in the daemon's own log — a real UX gap, not just a nice-to-have.
-- `DeviceListScreen`'s "Bağlan" (saved host) path uses the persisted IP
-  as-is rather than re-scanning first; if the host's address changed since
-  it was saved, the re-pairing attempt (now required every time, see §2.3)
-  just times out with "PIN yanlış veya cihaz yanıt vermedi" rather than
-  falling back to a fresh discovery broadcast to find the new address —
-  not silent anymore, but not a great error message for this specific
-  cause either.
 - `FileTransferManager` reads the whole file twice (once to hash, once to
   send) since `FILE_META`'s SHA-256 has to be known before streaming
   starts (§2.2) — an incrementally-hashed send (compute the digest as
   chunks go out, verify against a value only known after the last chunk)
   would need a protocol change to move verification to a trailer frame the
   sender computes, not the receiver.
-- Android reconnect/retry behavior on Wi-Fi handoff or the daemon
-  restarting mid-session — `InputChannel` currently just swallows send
-  failures silently (see its doc comment) with no reconnect logic.
 - A custom cursor (round, grows/shrinks on touch) for on-screen visibility
   from a distance — a `bacak-compositor` cursor-rendering feature, not
   something Uzakel itself can provide; out of scope here but worth linking
@@ -575,3 +605,20 @@ small Python capture loop (`os.read()` + immediate `write()` + `flush()`
 per chunk, driven by `select()` on a non-blocking fd) fixed it on the third
 attempt. Prefer that pattern over shelling out to `cat` for any future
 kernel-event capture in this project.
+
+### PIN-less resumption (§2.3.3), verified on real hardware — one real bug found
+
+Paired once by QR, then the daemon was killed and restarted while the
+phone was on the control screen: the phone resumed within 5–6 s with no
+PIN (`session resumed without a PIN`), and the cursor kept working.
+
+The first attempt, though, showed the cursor **not** moving after the
+resume, and the daemon log showed input from **three** phone source ports
+at once plus a resume every ~2 s. Leaving the control screen with Back had
+finished the activity but left each old `Connection`'s PING/resume loop
+running in the process; with only one session per IP on the daemon, every
+resume replaced the other connections' keys, which then failed their
+PINGs and resumed in turn — an endless storm. Fixed on both ends:
+`ActiveConnection` (one connection at a time, closed when the activity
+finishes; Back on the control screen disconnects) and `TrustStore` keeping
+several sessions per IP.

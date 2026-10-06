@@ -54,6 +54,14 @@ fn main() {
     println!("confirm_key   = {}", hex(&confirm_key));
     println!("confirm_tag   = {}", hex(&confirm_tag));
 
+    // Resumption material (resume.rs / crypto.rs `derive`).
+    let mut resume_key = [0u8; 32];
+    hk.expand_multi_info(&[b"uzakel resume", &transcript], &mut resume_key).unwrap();
+    let mut client_id = [0u8; 16];
+    hk.expand_multi_info(&[b"uzakel client id", &transcript], &mut client_id).unwrap();
+    println!("resume_key    = {}", hex(&resume_key));
+    println!("client_id     = {}", hex(&client_id));
+
     // Also print one ChaCha20-Poly1305 seal() output for a fixed
     // plaintext under c2s_key with nonce counter 0, to cross-check AEAD
     // framing (nonce layout, tag placement) independently of HKDF.

@@ -25,8 +25,16 @@ use tokio::net::UdpSocket;
 use tracing::{info, warn};
 
 use crate::crypto::EphemeralKeypair;
+use crate::pairings::Pairings;
 use crate::protocol::{DiscoverResponse, Header, Opcode, PairRequest, PairResponse, HEADER_LEN};
+use crate::resume::{self, ResumeRequest, ResumeResponse};
 use crate::trust::TrustStore;
+
+/// Wrong PINs tolerated before the PIN is replaced. The PIN has only ~20
+/// bits of entropy; without this an attacker on the LAN could simply try
+/// all 10^6 values over UDP. With it, each PIN gets at most 5 guesses
+/// (≈5·10^-6 chance) before it changes.
+const MAX_WRONG_PINS: u32 = 5;
 
 const DAEMON_NAME_ENV: &str = "UZAKEL_DAEMON_NAME";
 
@@ -49,12 +57,13 @@ fn new_pin() -> u32 {
     pin
 }
 
-pub async fn run(socket: UdpSocket, trust: TrustStore) -> Result<()> {
+pub async fn run(socket: UdpSocket, trust: TrustStore, pairings: Pairings) -> Result<()> {
     let daemon_name = std::env::var(DAEMON_NAME_ENV)
         .unwrap_or_else(|_| hostname().unwrap_or_else(|| "BacakOS".to_string()));
     let discovery_port = socket.local_addr().map(|a| a.port()).unwrap_or(0);
     let mut current_pin = new_pin();
     crate::pairing_state::publish(&daemon_name, discovery_port, current_pin);
+    let mut wrong_pins = 0u32;
     let mut buf = [0u8; 512];
 
     loop {
@@ -66,21 +75,33 @@ pub async fn run(socket: UdpSocket, trust: TrustStore) -> Result<()> {
             }
         };
 
-        if let Err(err) = handle(&socket, &buf[..len], from, &daemon_name, discovery_port, &mut current_pin, &trust).await {
+        let mut ctx = Ctx {
+            daemon_name: &daemon_name,
+            discovery_port,
+            current_pin: &mut current_pin,
+            wrong_pins: &mut wrong_pins,
+            trust: &trust,
+            pairings: &pairings,
+        };
+        if let Err(err) = handle(&socket, &buf[..len], from, &mut ctx).await {
             warn!(?err, %from, "error handling a discovery/pairing packet");
         }
     }
 }
 
-async fn handle(
-    socket: &UdpSocket,
-    buf: &[u8],
-    from: SocketAddr,
-    daemon_name: &str,
+struct Ctx<'a> {
+    daemon_name: &'a str,
     discovery_port: u16,
-    current_pin: &mut u32,
-    trust: &TrustStore,
-) -> Result<()> {
+    current_pin: &'a mut u32,
+    wrong_pins: &'a mut u32,
+    trust: &'a TrustStore,
+    pairings: &'a Pairings,
+}
+
+async fn handle(socket: &UdpSocket, buf: &[u8], from: SocketAddr, ctx: &mut Ctx<'_>) -> Result<()> {
+    let daemon_name = ctx.daemon_name;
+    let discovery_port = ctx.discovery_port;
+    let trust = ctx.trust;
     if buf.len() < HEADER_LEN {
         return Ok(()); // too short to even be a header — ignore, not an error
     }
@@ -101,7 +122,7 @@ async fn handle(
         Opcode::PairRequest => {
             let payload = &buf[HEADER_LEN..];
             let req = PairRequest::decode_payload(payload)?;
-            let accepted = req.pin == *current_pin;
+            let accepted = req.pin == *ctx.current_pin;
 
             let response = if accepted {
                 let daemon_keypair = EphemeralKeypair::generate();
@@ -115,11 +136,13 @@ async fn handle(
                 // From the daemon's side: c2s_key decrypts what the client
                 // sends us, s2c_key encrypts what we send the client.
                 trust.trust(from.ip(), material.c2s_key, material.s2c_key);
+                ctx.pairings.add(material.client_id, material.resume_key);
                 info!(%from, "client paired successfully");
+                *ctx.wrong_pins = 0;
                 // A fresh PIN for the *next* pairing attempt, so a captured
                 // PIN can't be replayed once it's been used.
-                *current_pin = new_pin();
-                crate::pairing_state::publish(daemon_name, discovery_port, *current_pin);
+                *ctx.current_pin = new_pin();
+                crate::pairing_state::publish(daemon_name, discovery_port, *ctx.current_pin);
                 PairResponse {
                     accepted: true,
                     daemon_pubkey,
@@ -127,6 +150,13 @@ async fn handle(
                 }
             } else {
                 warn!(%from, "pairing attempt with a wrong PIN");
+                *ctx.wrong_pins += 1;
+                if *ctx.wrong_pins >= MAX_WRONG_PINS {
+                    warn!("{MAX_WRONG_PINS} wrong PINs — rotating the PIN");
+                    *ctx.wrong_pins = 0;
+                    *ctx.current_pin = new_pin();
+                    crate::pairing_state::publish(daemon_name, discovery_port, *ctx.current_pin);
+                }
                 PairResponse {
                     accepted: false,
                     daemon_pubkey: [0u8; 32],
@@ -137,6 +167,34 @@ async fn handle(
                 .send_to(&response.encode(), from)
                 .await
                 .context("sending PAIR_RESPONSE")?;
+        }
+        Opcode::ResumeRequest => {
+            let req = ResumeRequest::decode_payload(&buf[HEADER_LEN..])?;
+            let response = match ctx.pairings.resume_key(&req.client_id) {
+                Some(rk)
+                    if resume::ct_eq(&req.mac, &resume::request_mac(&rk, &req.client_id, &req.client_nonce))
+                        && ctx.pairings.fresh_nonce(&req.client_id, &req.client_nonce) =>
+                {
+                    let mut daemon_nonce = [0u8; resume::NONCE_LEN];
+                    rand::thread_rng().fill(&mut daemon_nonce);
+                    let (c2s, s2c) = resume::session_keys(&rk, &req.client_nonce, &daemon_nonce);
+                    // Re-binds the session to the address the request came
+                    // from — this is what survives a phone IP change.
+                    trust.trust(from.ip(), c2s, s2c);
+                    ctx.pairings.touch(&req.client_id);
+                    info!(%from, "session resumed without a PIN");
+                    ResumeResponse {
+                        accepted: true,
+                        daemon_nonce,
+                        mac: resume::response_mac(&rk, &req.client_nonce, &daemon_nonce),
+                    }
+                }
+                _ => {
+                    warn!(%from, "resume refused (unknown/expired pairing, bad MAC or replay)");
+                    ResumeResponse::rejected()
+                }
+            };
+            socket.send_to(&response.encode(), from).await.context("sending RESUME_RESPONSE")?;
         }
         other => {
             warn!(?other, %from, "unexpected opcode on the discovery channel");

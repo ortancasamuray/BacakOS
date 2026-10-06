@@ -24,6 +24,11 @@ pub enum Opcode {
     MouseClick = 2,
     MouseScroll = 3,
     KeyPress = 4,
+    // Liveness (encrypted, inner frames on the input channel): the client
+    // sends Ping every few seconds, the daemon answers Pong under the same
+    // session — proof the session keys are still valid on both ends.
+    Ping = 5,
+    Pong = 6,
 
     // File transfer channel (TCP)
     FileMeta = 10,
@@ -38,6 +43,9 @@ pub enum Opcode {
     DiscoverResponse = 21,
     PairRequest = 22,
     PairResponse = 23,
+    // Session resumption without a PIN (see `resume.rs`).
+    ResumeRequest = 24,
+    ResumeResponse = 25,
 
     // Encrypted envelope (ARCHITECTURE.md §2.3.1) — wraps a full inner
     // frame (its own 8-byte header + payload) once a session key exists.
@@ -54,6 +62,8 @@ impl TryFrom<u8> for Opcode {
             2 => Opcode::MouseClick,
             3 => Opcode::MouseScroll,
             4 => Opcode::KeyPress,
+            5 => Opcode::Ping,
+            6 => Opcode::Pong,
             10 => Opcode::FileMeta,
             11 => Opcode::FileAccept,
             12 => Opcode::FileReject,
@@ -64,6 +74,8 @@ impl TryFrom<u8> for Opcode {
             21 => Opcode::DiscoverResponse,
             22 => Opcode::PairRequest,
             23 => Opcode::PairResponse,
+            24 => Opcode::ResumeRequest,
+            25 => Opcode::ResumeResponse,
             30 => Opcode::EncryptedFrame,
             other => return Err(ProtocolError::UnknownOpcode(other)),
         })
@@ -129,7 +141,7 @@ impl Header {
 }
 
 /// Wraps a header + payload into one buffer ready to send.
-fn frame(opcode: Opcode, payload: &[u8]) -> Vec<u8> {
+pub(crate) fn frame(opcode: Opcode, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(HEADER_LEN + payload.len());
     Header {
         opcode,
