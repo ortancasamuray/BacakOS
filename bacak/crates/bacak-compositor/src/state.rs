@@ -631,6 +631,13 @@ pub struct BacakState {
     pub flash: Option<(OutputId, std::time::Instant)>,
     /// Active transient notification banner (e.g. "screenshot saved").
     pub toast: Option<Toast>,
+    /// Uzak Yönetim screen monitoring is on (`/run/uzakyonetim/izleniyor`
+    /// exists): draw the "İzleniyor" badge so the person at the machine
+    /// always knows. Polled by the backend loop via [`BacakState::poll_monitor_flag`].
+    pub monitor_active: bool,
+    monitor_checked: Option<Instant>,
+    /// Pre-rasterised badge label (logical w/h), built once.
+    pub monitor_label: Option<(MemoryRenderBuffer, usize, usize)>,
     /// `wp_single_pixel_buffer` — 1×1 solid-colour buffers (GTK4 backgrounds,
     /// solid fills) without an SHM pool. No handler; render path treats it as a
     /// normal buffer.
@@ -1436,6 +1443,9 @@ impl BacakState {
             window_pick: false,
             flash: None,
             toast: None,
+            monitor_active: false,
+            monitor_checked: None,
+            monitor_label: None,
             single_pixel_buffer_state,
             content_type_state,
             presentation_state,
@@ -11227,6 +11237,30 @@ pub(crate) fn fb_load_icon(name: &str, size: u32) -> Option<MemoryRenderBuffer> 
     Some(MemoryRenderBuffer::from_slice(
         &raw, Fourcc::Abgr8888, (size as i32, size as i32), 1, Transform::Normal, None,
     ))
+}
+
+/// Flag file `uzakyonetim-ajan` keeps while screen monitoring is active.
+pub const MONITOR_FLAG: &str = "/run/uzakyonetim/izleniyor";
+
+impl BacakState {
+    /// Re-check [`MONITOR_FLAG`] at most every 2 s. Returns `true` when the
+    /// state flipped (the caller then redraws every output).
+    pub fn poll_monitor_flag(&mut self) -> bool {
+        if self.monitor_checked.is_some_and(|t| t.elapsed() < Duration::from_secs(2)) {
+            return false;
+        }
+        self.monitor_checked = Some(Instant::now());
+        let active = std::path::Path::new(MONITOR_FLAG).exists();
+        if active == self.monitor_active {
+            return false;
+        }
+        self.monitor_active = active;
+        if active && self.monitor_label.is_none() {
+            self.monitor_label = cc_rasterize(self.text.as_ref(), "İzleniyor", 13.0, [255, 255, 255], 200);
+        }
+        tracing::info!(active, "uzak yönetim ekran izleme durumu değişti");
+        true
+    }
 }
 
 #[cfg(test)]

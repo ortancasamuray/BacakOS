@@ -676,6 +676,14 @@ pub fn run() -> Result<()> {
 
         maybe_reload_config(&mut loop_data);
 
+        // Uzak Yönetim monitoring badge: appear/disappear without waiting
+        // for unrelated damage.
+        if loop_data.state.poll_monitor_flag() {
+            for t in loop_data.targets.iter_mut() {
+                t.needs_redraw = true;
+            }
+        }
+
         // Desktop Settings resolution page wrote a new output mode:
         // apply it now rather than waiting on the config watcher (which
         // may be off if the config dir didn't exist at boot).

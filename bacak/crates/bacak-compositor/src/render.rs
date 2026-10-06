@@ -644,6 +644,13 @@ pub fn build_output_frame(
         }
     }
 
+    // Uzak Yönetim "İzleniyor" badge: right under the cursor, above
+    // everything else, on every output — and deliberately also in captures,
+    // so the admin sees exactly what the user sees.
+    if state.monitor_active {
+        render_monitor_badge(state, renderer, o.bounds, output_scale, off_x, off_y, &mut out);
+    }
+
     // Interactive region-screenshot selection rectangle (Shift+PrintScreen):
     // a bright border + faint fill over the drag area. Drawn just under the
     // cursor (above brightness/windows) so it stays crisp while selecting.
@@ -2720,6 +2727,38 @@ pub(crate) fn render_shot_dialog(
         Color32F::new(0.20, 0.22, 0.27, 0.96)
     };
     cc_card(out, renderer, d.panel, panel_col, 22.0, output_scale, off_x, off_y);
+}
+
+/// Top-right pill with a red dot + "İzleniyor" while remote screen
+/// monitoring is active (see `BacakState::poll_monitor_flag`).
+fn render_monitor_badge(
+    state: &BacakState,
+    renderer: &mut GlesRenderer,
+    bounds: Rect,
+    output_scale: i32,
+    off_x: i32,
+    off_y: i32,
+    out: &mut Vec<BacakElements>,
+) {
+    let (lw, lh) = state.monitor_label.as_ref().map(|(_, w, h)| (*w as f32, *h as f32)).unwrap_or((64.0, 16.0));
+    let h = 28.0;
+    let dot = 10.0;
+    let w = 12.0 + dot + 8.0 + lw + 14.0;
+    let x = bounds.x + bounds.w - w - 14.0;
+    let y = bounds.y + 12.0;
+    // Front-to-back: label, dot, pill.
+    cc_blit_label(out, renderer, &state.monitor_label, x + 12.0 + dot + 8.0, y + (h - lh) / 2.0, output_scale, off_x, off_y);
+    cc_card(
+        out,
+        renderer,
+        Rect::new(x + 12.0, y + (h - dot) / 2.0, dot, dot),
+        Color32F::new(0.95, 0.27, 0.23, 1.0),
+        dot / 2.0,
+        output_scale,
+        off_x,
+        off_y,
+    );
+    cc_card(out, renderer, Rect::new(x, y, w, h), Color32F::new(0.05, 0.08, 0.13, 0.86), h / 2.0, output_scale, off_x, off_y);
 }
 
 /// Render the transient notification banner (toast) top-centre, if active on
