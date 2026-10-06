@@ -98,6 +98,21 @@ log "=== turan workspace derleniyor ==="
 )
 
 # ---------------------------------------------------------------------------
+# bacakonay: Turan girişi için iki adımlı doğrulama (bacakonay CLI + PAM modülü)
+# ---------------------------------------------------------------------------
+log "=== bacakonay derleniyor ==="
+BACAKONAY_SRC="$HERE/bacakonay/linux"
+(
+    cd "$BACAKONAY_SRC"
+
+    log "bacakonay derleniyor (CLI + pam_bacakonay.so)…"
+    cargo build --release
+
+    log "bacakonay deb oluşturuluyor"
+    cargo deb --no-build -p bacakonay-cli -o "$DIST"
+)
+
+# ---------------------------------------------------------------------------
 # altay: dosya yöneticisi
 # ---------------------------------------------------------------------------
 log "=== altay derleniyor ==="
