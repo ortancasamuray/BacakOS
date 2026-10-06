@@ -372,71 +372,74 @@ fn card_program(renderer: &mut GlesRenderer) -> Option<GlesPixelProgram> {
 
 // -- Software mouse cursor ---------------------------------------------------
 
-/// Arrow-cursor silhouette, tip (hotspot) at the top-left `(0, 0)` pixel.
-/// `X` is the white fill; every transparent pixel touching the fill gets a
-/// 1px black outline (derived in [`build_cursor_rgba`]) so the cursor stays
-/// visible over any background.
-const CURSOR_FILL: &[&str] = &[
-    "X...........",
-    "XX..........",
-    "XXX.........",
-    "XXXX........",
-    "XXXXX.......",
-    "XXXXXX......",
-    "XXXXXXX.....",
-    "XXXXXXXX....",
-    "XXXXXXXXX...",
-    "XXXXXXXXXX..",
-    "XXXXXXXXXXX.",
-    "XXXXXXXXXXXX",
-    "XXXXXXXX....",
-    "XXXXXXXX....",
-    "XXX..XXX....",
-    "XX....XXX...",
-    ".......XXX..",
-    ".......XXX..",
-    "........X...",
+/// Arrow-cursor outline in logical px, tip (hotspot) at `(0, 0)`. Drawn as a
+/// vector path (white fill + black stroke) and rasterised per output scale,
+/// so on a 4K/2× output it's a smooth anti-aliased arrow instead of a 2×
+/// magnified pixel-art bitmap.
+const CURSOR_PATH: &[(f32, f32)] = &[
+    (0.0, 0.0),
+    (0.0, 16.0),
+    (4.0, 12.3),
+    (6.8, 18.6),
+    (9.4, 17.5),
+    (6.7, 11.4),
+    (11.6, 11.4),
 ];
+/// Logical canvas the arrow is drawn into (path + stroke + margin).
+const CURSOR_W: i32 = 14;
+const CURSOR_H: i32 = 21;
+/// Margin (logical px) so the stroke around the tip isn't clipped; the
+/// element is shifted back by this much so the tip stays on the pointer.
+const CURSOR_PAD: f32 = 1.0;
 
-/// Rasterise [`CURSOR_FILL`] into RGBA8 in `Abgr8888` byte order (same
-/// convention the icon path uses): white fill, derived black outline,
-/// transparent everywhere else.
-fn build_cursor_rgba() -> (Vec<u8>, i32, i32) {
-    let h = CURSOR_FILL.len();
-    let w = CURSOR_FILL.iter().map(|r| r.len()).max().unwrap_or(0);
-    let fill = |x: i32, y: i32| -> bool {
-        if x < 0 || y < 0 || x as usize >= w || y as usize >= h {
-            return false;
-        }
-        CURSOR_FILL[y as usize].as_bytes().get(x as usize) == Some(&b'X')
+/// Rasterise [`CURSOR_PATH`] at `scale` into straight-alpha RGBA8 in
+/// `Abgr8888` byte order (same convention the icon path uses).
+fn build_cursor_rgba(scale: i32) -> (Vec<u8>, i32, i32) {
+    use resvg::tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Stroke, Transform as SkT};
+    let s = scale.max(1);
+    let (w, h) = (CURSOR_W * s, CURSOR_H * s);
+    let Some(mut pixmap) = Pixmap::new(w as u32, h as u32) else {
+        return (vec![0; 4], 1, 1);
     };
-    let mut rgba = vec![0u8; w * h * 4];
-    for y in 0..h as i32 {
-        for x in 0..w as i32 {
-            let i = ((y as usize * w) + x as usize) * 4;
-            if fill(x, y) {
-                rgba[i..i + 4].copy_from_slice(&[255, 255, 255, 255]); // fill
-            } else {
-                // Outline: a transparent pixel adjacent to any fill pixel.
-                let touches = (-1..=1).any(|dy| {
-                    (-1..=1).any(|dx| (dx != 0 || dy != 0) && fill(x + dx, y + dy))
-                });
-                if touches {
-                    rgba[i..i + 4].copy_from_slice(&[0, 0, 0, 255]); // border
-                }
+    let mut pb = PathBuilder::new();
+    for (i, &(x, y)) in CURSOR_PATH.iter().enumerate() {
+        if i == 0 {
+            pb.move_to(x, y);
+        } else {
+            pb.line_to(x, y);
+        }
+    }
+    pb.close();
+    if let Some(path) = pb.finish() {
+        let t = SkT::from_translate(CURSOR_PAD, CURSOR_PAD).post_scale(s as f32, s as f32);
+        let mut paint = Paint::default();
+        paint.anti_alias = true;
+        paint.set_color_rgba8(255, 255, 255, 255);
+        pixmap.fill_path(&path, &paint, FillRule::Winding, t, None);
+        paint.set_color_rgba8(0, 0, 0, 255);
+        let stroke = Stroke { width: 1.0, line_join: resvg::tiny_skia::LineJoin::Round, ..Stroke::default() };
+        pixmap.stroke_path(&path, &paint, &stroke, t, None);
+    }
+    // tiny_skia is premultiplied; the import path expects straight alpha.
+    let mut buf = pixmap.take();
+    for px in buf.chunks_exact_mut(4) {
+        let a = px[3] as u32;
+        if a > 0 && a < 255 {
+            for c in &mut px[..3] {
+                *c = (((*c as u32 * 255) + a / 2) / a).min(255) as u8;
             }
         }
     }
-    (rgba, w as i32, h as i32)
+    (buf, w, h)
 }
 
-// Built once; the imported GPU texture is cached inside the buffer, so
-// reusing the same instance across frames skips the per-frame upload.
-// Single render thread → a thread-local is sound (same rationale as
+// Built once per output scale; the imported GPU texture is cached inside the
+// buffer, so reusing the same instance across frames skips the per-frame
+// upload. Single render thread → a thread-local is sound (same rationale as
 // `CARD_PROGRAM`).
 thread_local! {
-    static CURSOR_BUFFER: std::cell::RefCell<Option<(MemoryRenderBuffer, i32, i32)>> =
-        const { std::cell::RefCell::new(None) };
+    static CURSOR_BUFFERS: std::cell::RefCell<Vec<(i32, MemoryRenderBuffer)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// Build the cursor render elements for this frame, honouring the focused
@@ -504,11 +507,12 @@ fn arrow_cursor_element(
     off_x: i32,
     off_y: i32,
 ) -> Option<BacakElements> {
-    let scale = output_scale as f32;
+    let scale = output_scale.max(1);
     let (gx, gy) = state.pointer_position;
-    CURSOR_BUFFER.with(|cell| {
-        if cell.borrow().is_none() {
-            let (rgba, w, h) = build_cursor_rgba();
+    CURSOR_BUFFERS.with(|cell| {
+        let mut bufs = cell.borrow_mut();
+        if !bufs.iter().any(|(s, _)| *s == scale) {
+            let (rgba, w, h) = build_cursor_rgba(scale);
             let buffer = MemoryRenderBuffer::from_slice(
                 &rgba,
                 Fourcc::Abgr8888,
@@ -517,27 +521,26 @@ fn arrow_cursor_element(
                 Transform::Normal,
                 None,
             );
-            *cell.borrow_mut() = Some((buffer, w, h));
+            bufs.push((scale, buffer));
         }
-        let b = cell.borrow();
-        let (buffer, w, h) = b.as_ref().unwrap();
+        let buffer = &bufs.iter().find(|(s, _)| *s == scale)?.1;
+        let sf = scale as f32;
         let phys = Point::<f64, Physical>::from((
-            ((gx as f32 - off_x as f32) * scale) as f64,
-            ((gy as f32 - off_y as f32) * scale) as f64,
+            ((gx as f32 - off_x as f32 - CURSOR_PAD) * sf).round() as f64,
+            ((gy as f32 - off_y as f32 - CURSOR_PAD) * sf).round() as f64,
         ));
-        // Logical size override (= the buffer's native px). Smithay
-        // multiplies it by the output scale, so on a HiDPI output the
-        // cursor grows with everything else instead of staying tiny.
-        // Pre-scaling here would square the scale (4× at scale 2).
-        let dw = (*w).max(1) as i32;
-        let dh = (*h).max(1) as i32;
+        // The buffer is already `scale`× the logical canvas: pass the full
+        // buffer as `src` and the logical size, so Smithay draws it 1:1.
+        let src = smithay::utils::Rectangle::<f64, smithay::utils::Logical>::from_size(
+            smithay::utils::Size::from(((CURSOR_W * scale) as f64, (CURSOR_H * scale) as f64)),
+        );
         let elem = MemoryRenderBufferRenderElement::from_buffer(
             renderer,
             phys,
             buffer,
             None,
-            None,
-            Some(Size::<i32, smithay::utils::Logical>::from((dw, dh))),
+            Some(src),
+            Some(Size::<i32, smithay::utils::Logical>::from((CURSOR_W, CURSOR_H))),
             Kind::Unspecified,
         )
         .ok()?;
@@ -5519,10 +5522,10 @@ fn switcher_icon_element(
 
 /// Resolve `app`'s desktop icon and place it as a Memory element
 /// filling `dst` (WM-global logical px). The decoded icon is cached
-/// per app id — shared across that app's windows and across the
-/// switcher and dock — so the FS walk + decode + GPU upload happen
-/// once per app per session; `None` is cached too so a missing icon
-/// doesn't re-walk the filesystem every frame. Returns `None` when
+/// per app id *and physical pixel size* — shared across that app's
+/// windows and across the switcher and dock — so the FS walk + decode +
+/// GPU upload happen once per app per size, and the buffer is drawn 1:1
+/// (crisp on HiDPI outputs). Returns `None` when
 /// there's no app id, no usable icon, or the import fails.
 #[allow(clippy::too_many_arguments)]
 fn app_icon_element(
@@ -5539,10 +5542,18 @@ fn app_icon_element(
         return None;
     }
 
+    let scale = output_scale as f32;
+    let dw = dst.w.round().max(1.0) as i32;
+    let dh = dst.h.round().max(1.0) as i32;
+    // Rasterise at the on-screen *physical* size and cache per size: a single
+    // fixed-size source magnified by the GPU went soft on 4K/2× outputs.
+    let px = ((dw.max(dh) as f32) * scale).round().max(1.0) as u32;
+    let key = format!("{app}@{px}");
+
     let mut cache = state.icon_cache.lock();
-    if !cache.contains_key(app) {
-        let resolved = crate::icons::resolve_icon_rgba(app)
-            .or_else(crate::icons::generic_fallback_icon)
+    if !cache.contains_key(&key) {
+        let resolved = crate::icons::resolve_icon_rgba_px(app, px)
+            .or_else(|| crate::icons::generic_fallback_icon_px(px))
             .map(|(rgba, w, h)| {
             let buffer = MemoryRenderBuffer::from_slice(
                 &rgba,
@@ -5555,15 +5566,15 @@ fn app_icon_element(
             crate::state::IconCacheEntry { buffer, w, h }
         });
         if let Some(entry) = resolved {
-            cache.insert(app.to_string(), Some(entry));
+            cache.insert(key.clone(), Some(entry));
         }
     }
-    let entry = cache.get(app)?.as_ref()?;
+    let entry = cache.get(&key)?.as_ref()?;
 
-    let scale = output_scale as f32;
+    // Snap to whole physical pixels so the 1:1 buffer isn't resampled.
     let phys = Point::<f64, Physical>::from((
-        ((dst.x - off_x as f32) * scale) as f64,
-        ((dst.y - off_y as f32) * scale) as f64,
+        ((dst.x - off_x as f32) * scale).round() as f64,
+        ((dst.y - off_y as f32) * scale).round() as f64,
     ));
     // `size` is the destination footprint (switcher glyph or dock tile); it's a
     // *logical* override Smithay multiplies by the output scale, so we must NOT
@@ -5575,8 +5586,6 @@ fn app_icon_element(
     // that crop is just the icon's top-left corner (the blue body of the
     // LibreOffice glyph, the dark corner of foot) — the "blue rectangle" bug.
     // Passing the whole buffer as `src` makes Smithay scale the full icon down.
-    let dw = dst.w.round().max(1.0) as i32;
-    let dh = dst.h.round().max(1.0) as i32;
     let src = smithay::utils::Rectangle::<f64, smithay::utils::Logical>::from_size(
         smithay::utils::Size::from((entry.w as f64, entry.h as f64)),
     );
