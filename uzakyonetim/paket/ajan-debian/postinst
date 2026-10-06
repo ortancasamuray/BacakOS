@@ -1,0 +1,11 @@
+#!/bin/sh
+set -e
+if [ "$1" = "configure" ]; then
+    install -d -m 0755 -o root -g root /etc/uzakyonetim
+    if [ ! -f /etc/uzakyonetim/ajan.crt ]; then
+        echo "uzakyonetim-ajan: makineyi kaydetmek için panelden katılım kodu alıp"
+        echo "  sudo uzakyonetim-ajan kaydol <kod> && sudo systemctl enable --now uzakyonetim-ajan"
+    fi
+fi
+#DEBHELPER#
+exit 0

@@ -1,0 +1,53 @@
+[package]
+name = "uzy-ajan"
+description = "Uzak Yönetim ajanı — BacakOS makinesini yönetim sunucusuna bağlar"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "uzakyonetim-ajan"
+path = "src/main.rs"
+
+[dependencies]
+uzy-proto.workspace = true
+bacakonay-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+base64.workspace = true
+tokio.workspace = true
+tokio-rustls.workspace = true
+rustls.workspace = true
+rustls-pemfile.workspace = true
+rcgen.workspace = true
+sha2.workspace = true
+zeroize.workspace = true
+libc.workspace = true
+log.workspace = true
+env_logger.workspace = true
+
+[package.metadata.deb]
+name = "uzakyonetim-ajan"
+revision = "1"
+maintainer = "Anadolu Panteri <bilgi@anadolupanteri.org.tr>"
+copyright = "2026, Anadolu Panteri <bilgi@anadolupanteri.org.tr>"
+section = "admin"
+priority = "optional"
+depends = "$auto, bacakonay (>= 0.1.0), grim, passwd"
+extended-description = """\
+Connects a BacakOS machine to an Uzak Yönetim server (outbound mTLS, works
+across networks/NAT). Lets authorised administrators create local accounts,
+enroll Bacak Onay two-factor login and view periodic screenshots. No remote
+shell: only a fixed set of operations, each switchable off locally in
+/etc/uzakyonetim/politika.toml. A visible on-screen indicator is shown while
+screen monitoring is active."""
+assets = [
+    ["target/release/uzakyonetim-ajan", "usr/bin/", "755"],
+    ["../../paket/uzakyonetim-ajan.service", "lib/systemd/system/", "644"],
+    ["../../paket/politika.toml", "etc/uzakyonetim/politika.toml", "644"],
+]
+conf-files = ["/etc/uzakyonetim/politika.toml"]
+maintainer-scripts = "../../paket/ajan-debian/"
+systemd-units = { unit-name = "uzakyonetim-ajan", enable = false, start = false }

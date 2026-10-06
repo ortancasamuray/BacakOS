@@ -1,0 +1,59 @@
+:root {
+  --gece: #041c29; --kart: #0a2b3d; --kart2: #0e3550; --cizgi: #2f6378;
+  --metin: #e6f6f8; --soluk: #a8dde6; --ege: #5cb0c4; --ege-orta: #1a6c8a;
+  --pas: #d96c2d; --yesil: #4caf7d; --kirmizi: #ff8a80;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--gece); color: var(--metin); font: 15px/1.45 system-ui, "DejaVu Sans", sans-serif; }
+button, input, select { font: inherit; color: inherit; }
+button { background: var(--kart2); border: 1px solid var(--cizgi); border-radius: 8px; padding: 7px 14px; cursor: pointer; }
+button:hover { border-color: var(--ege); }
+button.birincil { background: var(--ege-orta); border-color: var(--ege); }
+button.tehlike { border-color: var(--kirmizi); color: var(--kirmizi); }
+button:disabled { opacity: .5; cursor: default; }
+input, select { background: var(--gece); border: 1px solid var(--cizgi); border-radius: 8px; padding: 8px 10px; width: 100%; }
+label { display: block; margin: 10px 0; color: var(--soluk); font-size: 13px; }
+label input, label select { margin-top: 4px; color: var(--metin); font-size: 15px; }
+.soluk { color: var(--soluk); }
+.hata { color: var(--kirmizi); }
+.kart { background: var(--kart); border: 1px solid var(--cizgi); border-radius: 14px; padding: 18px; }
+.dar { max-width: 460px; }
+.giris { min-height: 100vh; display: grid; place-items: center; padding: 16px; }
+.giris-kart { width: min(380px, 100%); }
+.giris-kart h1 { margin: 0; }
+.giris-kart button { width: 100%; margin-top: 8px; }
+.ust { display: flex; gap: 10px; align-items: center; padding: 10px 16px; background: var(--kart); border-bottom: 1px solid var(--cizgi); flex-wrap: wrap; }
+.ust nav { display: flex; gap: 6px; }
+.sekme { background: transparent; border-color: transparent; }
+.sekme.etkin { border-color: var(--ege); }
+.bosluk { flex: 1; }
+.icerik { padding: 16px; }
+.izgara { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+.makine { background: var(--kart); border: 1px solid var(--cizgi); border-radius: 14px; overflow: hidden; cursor: pointer; }
+.makine:hover { border-color: var(--ege); }
+.makine.iptal { opacity: .45; }
+.ekran { aspect-ratio: 16 / 9; background: #021219 center / contain no-repeat; display: grid; place-items: center; color: var(--cizgi); width: 100%; object-fit: contain; }
+.makine-bilgi { padding: 10px 12px; }
+.makine-bilgi .ad { font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.nokta { width: 9px; height: 9px; border-radius: 50%; background: var(--cizgi); flex: none; }
+.nokta.acik { background: var(--yesil); box-shadow: 0 0 6px var(--yesil); }
+.kucuk { font-size: 12px; }
+.tablo { width: 100%; border-collapse: collapse; font-size: 13px; }
+.tablo th, .tablo td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--cizgi); vertical-align: top; }
+.tablo th { color: var(--soluk); font-weight: 500; }
+dialog { background: var(--kart); color: var(--metin); border: 1px solid var(--cizgi); border-radius: 16px; padding: 0; width: min(980px, calc(100vw - 32px)); max-height: calc(100vh - 32px); }
+dialog::backdrop { background: rgba(2, 10, 16, .7); }
+#pencere-icerik { padding: 18px; overflow: auto; max-height: calc(100vh - 34px); }
+.pencere-ust { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.pencere-ust h2 { margin: 0; flex: 1; font-size: 18px; }
+.iki-sutun { display: grid; grid-template-columns: 3fr 2fr; gap: 16px; }
+@media (max-width: 760px) { .iki-sutun { grid-template-columns: 1fr; } }
+.gecmis { display: flex; gap: 6px; overflow-x: auto; padding: 6px 0; }
+.gecmis button { padding: 2px 8px; font-size: 12px; white-space: nowrap; }
+.rozet { display: inline-block; padding: 1px 7px; border-radius: 6px; font-size: 11px; background: var(--kart2); border: 1px solid var(--cizgi); }
+.rozet.onay { background: var(--soluk); color: #07334a; border-color: var(--soluk); }
+.rozet.yonetici { border-color: var(--pas); color: var(--pas); }
+.qr { background: #fff; border-radius: 12px; padding: 10px; width: 260px; height: 260px; display: block; margin: 8px auto; }
+.kod-kutu { font-family: "DejaVu Sans Mono", monospace; background: var(--gece); border: 1px solid var(--cizgi); border-radius: 8px; padding: 10px; word-break: break-all; user-select: all; }
+.satir { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.uyari { border-left: 3px solid var(--pas); padding: 6px 10px; background: rgba(217, 108, 45, .08); }
