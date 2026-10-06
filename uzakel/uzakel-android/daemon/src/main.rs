@@ -11,6 +11,8 @@ mod discovery;
 mod file_server;
 mod input_manager;
 mod pairing_state;
+mod pairings;
+mod resume;
 mod trust;
 
 // The encode side of `protocol` (InputPacket::encode, FileMeta::encode,
@@ -100,7 +102,20 @@ async fn main() -> Result<()> {
     // does and doesn't guarantee).
     let trust = trust::TrustStore::new();
 
-    let discovery_task = tokio::spawn(discovery::run(discovery_socket, trust.clone()));
+    let pairings = pairings::Pairings::load(Some(pairings::default_path()));
+    // Hourly sweep of pairings idle > 30 days.
+    let sweeper = pairings.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+            let n = sweeper.prune();
+            if n > 0 {
+                info!(n, "kullanılmayan eşleşmeler silindi");
+            }
+        }
+    });
+
+    let discovery_task = tokio::spawn(discovery::run(discovery_socket, trust.clone(), pairings));
     let input_task = tokio::spawn(input_manager::run(input_socket, virtual_input, trust.clone()));
     let file_task = tokio::spawn(file_server::run(file_listener, downloads, trust));
 

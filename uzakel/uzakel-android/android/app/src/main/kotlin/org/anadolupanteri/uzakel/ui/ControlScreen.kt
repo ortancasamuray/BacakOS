@@ -1,6 +1,10 @@
 package org.anadolupanteri.uzakel.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -8,18 +12,21 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -27,13 +34,13 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import org.anadolupanteri.uzakel.input.KeyCodes
 import org.anadolupanteri.uzakel.input.TrackpadView
 import org.anadolupanteri.uzakel.input.typeChar
 import org.anadolupanteri.uzakel.network.InputChannel
-import org.anadolupanteri.uzakel.network.PairedSession
+import org.anadolupanteri.uzakel.network.ConnState
+import org.anadolupanteri.uzakel.network.Connection
+import org.anadolupanteri.uzakel.ui.theme.BacakColors
 import org.anadolupanteri.uzakel.protocol.MouseButton
 
 /** The hidden field's content is always this single placeholder char with the
@@ -57,20 +64,16 @@ private const val PLACEHOLDER = "​"
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ControlScreen(
-    session: PairedSession,
-    hostName: String,
+    connection: Connection,
     onOpenTransfer: () -> Unit,
     onDisconnect: () -> Unit,
+    onRepair: () -> Unit,
 ) {
-    // Created off the main thread: DatagramSocket construction touches the
-    // network stack, and while creation itself is a local-only op for UDP,
-    // InputChannel's actual per-packet sends need to stay off the main
-    // thread too (see NetworkClient.kt's InputChannel doc) — Android's
-    // StrictMode blocks DatagramSocket I/O there with a
-    // NetworkOnMainThreadException, found via on-device testing.
-    var channel by remember(session) { mutableStateOf<InputChannel?>(null) }
-    LaunchedEffect(session) { channel = withContext(Dispatchers.IO) { InputChannel(session) } }
-    DisposableEffect(session) { onDispose { channel?.close() } }
+    // The channel belongs to the Connection (it outlives this screen while
+    // the user is on the file-transfer screen, and re-keys in place on a
+    // reconnect), so there's nothing to create or close here.
+    val channel: InputChannel? = connection.channel
+    val state by connection.state.collectAsState()
 
     var ctrlHeld by remember { mutableStateOf(false) }
     var altHeld by remember { mutableStateOf(false) }
@@ -91,12 +94,14 @@ fun ControlScreen(
 
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
-            title = { Text(hostName) },
+            title = { Text(connection.device.name) },
             actions = {
                 OutlinedButton(onClick = onOpenTransfer) { Text("Dosyalar") }
                 OutlinedButton(onClick = onDisconnect) { Text("Ayır") }
             },
         )
+
+        ConnectionBanner(state, onRetry = connection::retryNow, onRepair = onRepair)
 
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
@@ -156,5 +161,31 @@ fun ControlScreen(
                 }
             },
         )
+    }
+}
+
+/** Thin status strip under the app bar — hidden while everything is fine. */
+@Composable
+private fun ConnectionBanner(state: ConnState, onRetry: () -> Unit, onRepair: () -> Unit) {
+    val (color, text) = when (state) {
+        ConnState.Connected -> return
+        ConnState.Reconnecting -> BacakColors.Warn to "Bağlantı koptu — yeniden bağlanılıyor…"
+        ConnState.Unreachable -> MaterialTheme.colorScheme.error to "Bilgisayara ulaşılamıyor — arka planda deneniyor"
+        ConnState.NeedsPairing -> MaterialTheme.colorScheme.error to "Bu bilgisayar eşleşmeyi tanımıyor"
+    }
+    Row(
+        modifier = Modifier.fillMaxWidth().background(color.copy(alpha = 0.18f)).padding(horizontal = 12.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (state == ConnState.Reconnecting) {
+            CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = color)
+            Spacer(Modifier.width(8.dp))
+        }
+        Text(text, color = color, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+        when (state) {
+            ConnState.Unreachable -> TextButton(onClick = onRetry) { Text("Şimdi dene") }
+            ConnState.NeedsPairing -> TextButton(onClick = onRepair) { Text("Yeniden eşleştir") }
+            else -> {}
+        }
     }
 }

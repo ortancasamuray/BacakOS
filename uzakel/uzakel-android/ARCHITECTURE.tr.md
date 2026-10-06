@@ -67,6 +67,7 @@ sessizce yanlış yorumlamak yerine eşleşmeyi reddetmesine izin verir.
 | `MOUSE_CLICK` | `button: u8, state: u8` | `button`: sol/sağ/orta; `state`: bas/bırak. |
 | `MOUSE_SCROLL` | `dx: i16, dy: i16` | Göreli kaydırma deltası (trackpad görünümünde iki parmak sürükleme). |
 | `KEY_PRESS` | `keycode: u16, modifiers: u8, state: u8` | `modifiers` bir bit maskesi (Shift/Ctrl/Alt/Super); `state` bas/bırak — basılı tutulan tuşlar ve tekrarlar kablonun değil istemcinin sorumluluğudur. |
+| `PING` / `PONG` | `token: u64` | Canlılık (§2.3.3): istemci şifreli zarf içinde 2 sn'de bir `PING` gönderir; daemon token'ı aynı oturumla `PONG` olarak geri yollar. |
 
 Her girdi paketi ayrıca payload'ında monoton bir `seq: u32` taşır, böylece
 `input_manager.rs` sırası bozuk bir UDP paketini, imleci anlık olarak geri
@@ -153,13 +154,11 @@ karşı bir direnç taşımıyor (gerçek bir PAKE, örneğin SPAKE2, PIN'i anah
 değişiminin kendisine katar, böylece PIN üzerinde çevrimdışı bir
 tahmin-ve-dene saldırısını imkansız kılar; bu şema bunun yerine PIN'i
 yalnızca zaten gerçekleşmiş bir anahtar değişimini doğrulamak için
-kullanır). Oturum güveni de hâlâ **yalnızca bellekte** — daemon yeniden
-başlayınca hayatta kalmaz, bu yüzden Android'in "Bağlan"ı (kayıtlı host'a
-yeniden bağlanma) eski anahtarları yeniden kullanmak yerine her zaman tam
-PIN + ECDH el sıkışmasını yeniden çalıştırıyor, çünkü daemon'ın eski
-oturumu hâlâ hatırlayıp hatırlamadığını bilmenin bir yolu yok (ve daemon
-yeniden başlatmaları arasında anahtarları yeniden kullanmak zaten
-nonce-sayaç tekrarı riski taşırdı). Daha yetenekli bir aktif saldırgana
+kullanır). Canlı oturum anahtarları yalnızca bellekte kalır, ama yeniden
+bağlanmak artık PIN gerektirmez: her bağlantıda *taze* oturum anahtarları
+türeten kalıcı eşleşme sırrı için §2.3.3'e bakın (eski oturum
+anahtarlarını daemon yeniden başladıktan sonra kullanmak nonce
+sayaçlarını tekrarlardı). Daha yetenekli bir aktif saldırgana
 karşı dayanması gerekiyorsa, gerçek bir TLS/PSK ya da SPAKE2 yaklaşımı
 (§5) hâlâ bir sonraki adım.
 
@@ -203,6 +202,48 @@ eşzamanlı olarak sormasına gerek olmamalı), bu doğası gereği *yerel* bir
 mekanizma — onu okumak, daemon'ın çalıştığı aynı BacakOS oturumuna giriş
 yapmış olmayı gerektirir, kabul edilebilir bir güven sınırı (o dosyayı
 okuyabilen biri zaten eşleştirilecek masaüstünü kontrol ediyordur).
+
+#### 2.3.3 PIN'siz yeniden bağlanma, canlılık ve temizlik
+
+İlk (PIN'li) eşleştirme aynı HKDF'den uzun ömürlü bir `resume_key`
+(`"uzakel resume"`) ve 16 baytlık açık bir `client_id`
+(`"uzakel client id"`) de türetir. Daemon `client_id → resume_key`
+eşlemesini `~/.local/state/uzakel/eslesmeler`'de (dizin 0700, dosya 0600,
+`pairings.rs`) tutar; telefon `PairingStore`'da, anahtarı dışarı
+çıkarılamayan bir Android Keystore AES anahtarıyla mühürleyerek
+(`KeystoreBox`). Sonraki her bağlantı — kayıtlı bilgisayarı açmak ya da
+kopmadan kurtulmak — şunu çalıştırır:
+
+```text
+RESUME_REQUEST (24)  client_id | client_nonce[32] | HMAC(rk, "uzakel resume req"  | client_id | client_nonce)
+RESUME_RESPONSE (25) accepted  | daemon_nonce[32] | HMAC(rk, "uzakel resume resp" | client_nonce | daemon_nonce)
+c2s/s2c = HKDF-SHA256(salt "uzakel-resume-v1", ikm rk, info "uzakel c2s"/"uzakel s2c" | client_nonce | daemon_nonce)
+```
+
+Her seferinde taze anahtar üretmek bunu güvenli kılan şey: `Cipher`
+nonce'ları 0'dan başlayan sayaçlar, dolayısıyla *oturum* anahtarlarını
+kaydedip daemon yeniden başladıktan sonra yeniden kullanmak (anahtar,
+nonce) çiftlerini tekrarlardı. Her MAC `resume_key`'e sahip olunduğunu
+kanıtlar; daemon ayrıca o eşleşme için yakın zamanda gördüğü bir
+`client_nonce`'u reddeder. Test vektörleri `resume.rs`/`ResumeCryptoTest`
+içinde sabit (ve bağımsız bir Python hesabıyla çapraz doğrulandı).
+
+**Canlılık:** istemci girdi kanalında 2 sn'de bir şifreli `PING` (5)
+gönderir; daemon aynı oturumla `PONG` (6) yanıtlar. 7 sn yanıt gelmezse
+`Connection` yeniden bağlanır — önce son adreste, sonra keşif yayınının
+bulduğu adreslerde (önce aynı bilgisayar adı) — böylece daemon yeniden
+başlaması, telefonun Wi-Fi değişimi ve PC'nin yeni DHCP adresi PIN
+istemeden toparlanır. Daemon `accepted = 0` dönerse eşleşme yok olmuştur
+ve uygulama yeniden eşleştirme ister.
+
+**Adres başına birden fazla oturum:** `TrustStore` her kaynak IP için en
+fazla 4 oturum tutar; girdi kanalı datagram'ı doğrulayan oturumu bulana
+kadar her birini dener (nedeni için §6'ya bakın).
+
+**Temizlik:** 30 gün kullanılmayan eşleşmeler iki tarafta da silinir
+(daemon: saatlik tarama; telefon: her liste okumasında); telefonda elle
+de silinebilir. **PIN kaba kuvvet:** 5 hatalı PIN'den sonra daemon PIN'i
+değiştirir, yani her PIN en fazla 5 tahmin alır.
 
 ## 3. Daemon (Rust) — modül tasarımı
 
@@ -425,23 +466,12 @@ okunuyordu).
   test oturumunda çalışan bir bildirim servisi yoktu, bu yüzden PIN
   yalnızca daemon'ın kendi logunda görünüyordu — gerçek bir kullanıcı
   deneyimi eksikliği, sadece güzel olur değil.
-- `DeviceListScreen`'in "Bağlan" (kayıtlı host) akışı, önce yeniden
-  taramak yerine kalıcı IP'yi olduğu gibi kullanır; host'un adresi
-  kaydedildiğinden beri değiştiyse, yeniden eşleşme denemesi (artık her
-  seferinde gerekli, bkz. §2.3) taze bir keşif yayınına düşüp yeni adresi
-  bulmak yerine "PIN yanlış veya cihaz yanıt vermedi" ile zaman aşımına
-  uğrar — artık sessiz değil, ama bu özel neden için harika bir hata
-  mesajı da değil.
 - `FileTransferManager`, dosyayı iki kez okuyor (bir kez hash için, bir kez
   gönderim için) çünkü `FILE_META`'nın SHA-256'sı akış başlamadan önce
   bilinmek zorunda (§2.2) — artımlı hash'lenmiş bir gönderim (digest'i
   parçalar giderken hesapla, yalnızca son parçadan sonra bilinen bir
   değere karşı doğrula) doğrulamayı gönderenin hesapladığı bir trailer
   çerçevesine taşıyan bir protokol değişikliği gerektirirdi.
-- Wi-Fi el değiştirmesinde veya daemon oturum ortasında yeniden
-  başladığında Android'in yeniden bağlanma/tekrar deneme davranışı —
-  `InputChannel` şu an gönderim hatalarını sessizce yutuyor (kendi
-  doc-comment'ine bakın), yeniden bağlanma mantığı yok.
 - Uzaktan görünürlük için özel bir imleç (dokunuşta büyüyüp küçülen
   yuvarlak) — bu bir `bacak-compositor` imleç-render özelliği,
   Uzakel'in kendisinin sağlayabileceği bir şey değil; kapsam dışı ama o
@@ -566,3 +596,20 @@ Python yakalama döngüsü (`os.read()` + her parça için anında `write()` +
 `flush()`, `select()` ile non-blocking bir fd üzerinde sürülen) üçüncü
 denemede sorunu çözdü. Bu projede gelecekteki herhangi bir çekirdek-olay
 yakalaması için `cat`'e kabuk çıkışı yapmak yerine bu deseni tercih edin.
+
+### PIN'siz yeniden bağlanma (§2.3.3), gerçek donanımda doğrulandı — bir gerçek bug bulundu
+
+QR ile bir kez eşleştirildi, ardından telefon kontrol ekranındayken daemon
+öldürülüp yeniden başlatıldı: telefon 5–6 sn içinde PIN'siz yeniden
+bağlandı (`session resumed without a PIN`) ve imleç çalışmaya devam etti.
+
+İlk denemede ise yeniden bağlanmadan sonra imleç **hareket etmedi**; daemon
+logu aynı anda telefonun **üç** farklı kaynak portundan girdi ve ~2 sn'de
+bir yeniden bağlanma gösteriyordu. Kontrol ekranından Geri ile çıkmak
+activity'yi bitiriyor ama her eski `Connection`'ın PING/yeniden bağlanma
+döngüsünü süreç içinde çalışır bırakıyordu; daemon IP başına tek oturum
+tuttuğu için her yeniden bağlanma diğer bağlantıların anahtarlarını
+geçersiz kılıyor, onlar da PING'te başarısız olup yeniden bağlanıyordu —
+bitmeyen bir fırtına. İki tarafta düzeltildi: `ActiveConnection` (aynı
+anda tek bağlantı, activity bitince kapanır; kontrol ekranında Geri
+bağlantıyı keser) ve `TrustStore`'un IP başına birden fazla oturum tutması.

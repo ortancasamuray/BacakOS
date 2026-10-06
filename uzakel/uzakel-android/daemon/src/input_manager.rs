@@ -205,7 +205,8 @@ pub async fn run(socket: UdpSocket, input: VirtualInput, trust: TrustStore) -> R
             }
         };
 
-        let Some(session) = trust.session(from.ip()) else {
+        let candidates = trust.sessions(from.ip());
+        if candidates.is_empty() {
             // Not a "malformed packet" — a real client that just hasn't
             // paired (or paired before the last daemon restart, see
             // trust.rs). trace, not warn: this is the expected steady-state
@@ -213,15 +214,29 @@ pub async fn run(socket: UdpSocket, input: VirtualInput, trust: TrustStore) -> R
             // something the operator needs to see by default.
             trace!(%from, "dropping input packet from an unpaired address");
             continue;
+        }
+
+        // Whichever session authenticates the datagram is the sender's
+        // (AEAD failure under the wrong key is cheap and changes no state).
+        let Some((session, decrypted)) = candidates
+            .into_iter()
+            .find_map(|s| decrypt_frame(&s, &buf[..len]).map(|d| (s, d)))
+        else {
+            trace!(%from, "dropping input datagram that wasn't a valid encrypted frame");
+            continue;
         };
 
-        let decrypted = match decrypt_frame(&session, &buf[..len]) {
-            Some(bytes) => bytes,
-            None => {
-                trace!(%from, "dropping input datagram that wasn't a valid encrypted frame");
+        // Liveness probe: answer under the same session so the client knows
+        // its keys are still accepted here.
+        if let Ok(h) = Header::decode(&decrypted) {
+            if h.opcode == Opcode::Ping {
+                let payload = decrypted.get(HEADER_LEN..).unwrap_or(&[]);
+                let inner = crate::protocol::frame(Opcode::Pong, payload);
+                let (nonce, ct) = session.cipher.lock().unwrap().seal(&inner);
+                let _ = socket.send_to(&crate::protocol::encode_encrypted_frame(nonce, &ct), from).await;
                 continue;
             }
-        };
+        }
 
         let packet = match InputPacket::decode(&decrypted) {
             Ok(p) => p,

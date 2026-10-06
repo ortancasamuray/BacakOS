@@ -44,9 +44,18 @@ pub struct Session {
     pub cipher: Mutex<Cipher>,
 }
 
+/// Sessions kept per source IP. More than one is normal: a phone may still
+/// have an older connection winding down while a new one starts, and two
+/// apps (or two users behind one NAT) can share an address. Keeping only
+/// one per IP made every new resume invalidate the other connection's
+/// keys, which then resumed and invalidated the first — an endless
+/// reconnect storm found on real hardware.
+pub const MAX_SESSIONS_PER_IP: usize = 4;
+
 #[derive(Clone, Default)]
 pub struct TrustStore {
-    sessions: Arc<Mutex<HashMap<IpAddr, Arc<Session>>>>,
+    /// Newest first.
+    sessions: Arc<Mutex<HashMap<IpAddr, Vec<Arc<Session>>>>>,
 }
 
 impl TrustStore {
@@ -64,14 +73,26 @@ impl TrustStore {
             opener: Mutex::new(Opener::new(rx_key)),
             cipher: Mutex::new(Cipher::new(tx_key)),
         });
-        self.sessions.lock().unwrap().insert(addr, session);
+        let mut map = self.sessions.lock().unwrap();
+        let list = map.entry(addr).or_default();
+        list.insert(0, session);
+        list.truncate(MAX_SESSIONS_PER_IP);
     }
 
     /// The live session for `addr`, if paired — clone is cheap (an `Arc`
     /// bump); callers lock `.opener`/`.cipher` themselves for as short a
     /// window as the actual encrypt/decrypt call needs.
+    ///
+    /// With several sessions per address this is the newest — for file
+    /// transfers, the connection that just opened is the one sending.
     pub fn session(&self, addr: IpAddr) -> Option<Arc<Session>> {
-        self.sessions.lock().unwrap().get(&addr).cloned()
+        self.sessions.lock().unwrap().get(&addr).and_then(|l| l.first().cloned())
+    }
+
+    /// All sessions for `addr`, newest first — the input channel tries each
+    /// until one authenticates the datagram.
+    pub fn sessions(&self, addr: IpAddr) -> Vec<Arc<Session>> {
+        self.sessions.lock().unwrap().get(&addr).cloned().unwrap_or_default()
     }
 }
 
@@ -102,6 +123,17 @@ mod tests {
         let clone = store.clone();
         clone.trust(addr(), [1u8; 32], [2u8; 32]);
         assert!(store.session(addr()).is_some());
+    }
+
+    #[test]
+    fn several_sessions_per_address_coexist() {
+        let store = TrustStore::new();
+        for i in 0..(MAX_SESSIONS_PER_IP as u8 + 2) {
+            store.trust(addr(), [i; 32], [i; 32]);
+        }
+        let all = store.sessions(addr());
+        assert_eq!(all.len(), MAX_SESSIONS_PER_IP, "oldest sessions are evicted");
+        assert!(Arc::ptr_eq(&all[0], &store.session(addr()).unwrap()));
     }
 
     #[test]

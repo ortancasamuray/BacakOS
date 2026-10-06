@@ -8,9 +8,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import org.anadolupanteri.uzakel.discovery.SavedHostsStore
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.MaterialTheme
+import org.anadolupanteri.uzakel.discovery.PairingStore
+import androidx.activity.compose.BackHandler
+import org.anadolupanteri.uzakel.network.ActiveConnection
+import org.anadolupanteri.uzakel.network.Connection
 import org.anadolupanteri.uzakel.network.NetworkClient
-import org.anadolupanteri.uzakel.network.PairedSession
 import org.anadolupanteri.uzakel.transfer.FileTransferManager
 import org.anadolupanteri.uzakel.ui.theme.UzakelTheme
 
@@ -19,46 +23,63 @@ import org.anadolupanteri.uzakel.ui.theme.UzakelTheme
  * with a small sealed class, is simpler than pulling in Navigation-Compose
  * for a graph this shallow (device list → control → transfer, and back).
  *
- * [Screen.Control]/[Screen.Transfer] carry a [PairedSession], not just an
- * address — the session keys a successful pairing derives (ARCHITECTURE.md
- * §2.3.1) are what [ControlScreen]/[TransferScreen] need to actually
- * encrypt anything; there's no separate "reconnect" step that could
- * re-derive them later.
+ * [Screen.Control]/[Screen.Transfer] share one [Connection]: it keeps the
+ * session alive (PING/PONG) and re-keys it in place after a drop
+ * (ARCHITECTURE.md §2.3.3), so both screens always use current keys.
  */
 private sealed class Screen {
-    object DeviceList : Screen()
-    data class Control(val name: String, val session: PairedSession) : Screen()
-    data class Transfer(val name: String, val session: PairedSession) : Screen()
+    data class DeviceList(val repairName: String? = null) : Screen()
+    data class Control(val connection: Connection) : Screen()
+    data class Transfer(val connection: Connection) : Screen()
 }
 
 @Composable
 fun UzakelApp() {
     val context = LocalContext.current
     val client = remember { NetworkClient() }
-    val savedHosts = remember { SavedHostsStore(context) }
+    val store = remember { PairingStore(context) }
     val transferManager = remember { FileTransferManager(context) }
 
-    var screen by remember { mutableStateOf<Screen>(Screen.DeviceList) }
+    var screen by remember { mutableStateOf<Screen>(Screen.DeviceList()) }
 
     UzakelTheme {
-        Surface(modifier = Modifier) {
+        Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             when (val current = screen) {
                 is Screen.DeviceList -> DeviceListScreen(
                     client = client,
-                    savedHosts = savedHosts,
-                    onConnected = { name, session -> screen = Screen.Control(name, session) },
+                    store = store,
+                    repairName = current.repairName,
+                    onConnected = { conn ->
+                        ActiveConnection.set(conn)
+                        screen = Screen.Control(conn)
+                    },
                 )
-                is Screen.Control -> ControlScreen(
-                    session = current.session,
-                    hostName = current.name,
-                    onOpenTransfer = { screen = Screen.Transfer(current.name, current.session) },
-                    onDisconnect = { screen = Screen.DeviceList },
-                )
-                is Screen.Transfer -> TransferScreen(
-                    session = current.session,
+                is Screen.Control -> {
+                    BackHandler {
+                        ActiveConnection.close()
+                        screen = Screen.DeviceList()
+                    }
+                    ControlScreen(
+                    connection = current.connection,
+                    onOpenTransfer = { screen = Screen.Transfer(current.connection) },
+                    onDisconnect = {
+                        ActiveConnection.close()
+                        screen = Screen.DeviceList()
+                    },
+                    onRepair = {
+                        ActiveConnection.close()
+                        screen = Screen.DeviceList(repairName = current.connection.device.name)
+                    },
+                    )
+                }
+                is Screen.Transfer -> {
+                    BackHandler { screen = Screen.Control(current.connection) }
+                    TransferScreen(
+                    session = { current.connection.session },
                     manager = transferManager,
-                    onBack = { screen = Screen.Control(current.name, current.session) },
-                )
+                    onBack = { screen = Screen.Control(current.connection) },
+                    )
+                }
             }
         }
     }

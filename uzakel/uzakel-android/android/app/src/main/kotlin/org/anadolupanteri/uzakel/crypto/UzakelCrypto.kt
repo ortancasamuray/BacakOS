@@ -53,6 +53,12 @@ object UzakelCrypto {
                 val sk = X25519PrivateKeyParameters(random)
                 return EphemeralKeypair(sk, sk.generatePublicKey().encoded)
             }
+
+            /** Fixed private key, for the known-answer tests only. */
+            internal fun forTest(privateKey: ByteArray): EphemeralKeypair {
+                val sk = X25519PrivateKeyParameters(privateKey, 0)
+                return EphemeralKeypair(sk, sk.generatePublicKey().encoded)
+            }
         }
 
         /**
@@ -90,14 +96,19 @@ object UzakelCrypto {
             val confirmTag = ByteArray(hmac.macSize)
             hmac.doFinal(confirmTag, 0)
 
-            return SessionMaterial(c2sKey, s2cKey, confirmTag)
+            // Long-lived pairing material for PIN-less resumption
+            // (ResumeCrypto / daemon resume.rs).
+            val resumeKey = expand(prk, "uzakel resume".toByteArray(Charsets.UTF_8) + transcript)
+            val clientId = expand(prk, "uzakel client id".toByteArray(Charsets.UTF_8) + transcript, ResumeCrypto.CLIENT_ID_LEN)
+
+            return SessionMaterial(c2sKey, s2cKey, confirmTag, resumeKey, clientId)
         }
 
-        private fun expand(prk: ByteArray, info: ByteArray): ByteArray {
+        private fun expand(prk: ByteArray, info: ByteArray, len: Int = 32): ByteArray {
             val hkdf = HKDFBytesGenerator(SHA256Digest())
             hkdf.init(HKDFParameters.skipExtractParameters(prk, info))
-            val out = ByteArray(32)
-            hkdf.generateBytes(out, 0, 32)
+            val out = ByteArray(len)
+            hkdf.generateBytes(out, 0, len)
             return out
         }
     }
@@ -107,6 +118,10 @@ object UzakelCrypto {
         val c2sKey: ByteArray,
         val s2cKey: ByteArray,
         val confirmTag: ByteArray,
+        /** Persisted (Keystore-encrypted) to resume later without a PIN. */
+        val resumeKey: ByteArray,
+        /** Public handle naming this pairing to the daemon. */
+        val clientId: ByteArray,
     )
 
     /**

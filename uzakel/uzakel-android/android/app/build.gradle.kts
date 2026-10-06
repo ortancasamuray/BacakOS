@@ -96,5 +96,7 @@ dependencies {
     // one feature that silently fails on a Play-Services-less device.
     implementation("com.google.zxing:core:3.5.3")
 
+    testImplementation("junit:junit:4.13.2")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

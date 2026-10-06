@@ -102,10 +102,22 @@ impl EphemeralKeypair {
         mac.update(&transcript);
         let confirm_tag: [u8; TAG_LEN] = mac.finalize().into_bytes().into();
 
+        // Long-lived pairing material for PIN-less resumption (`resume.rs`).
+        // Independent HKDF outputs: knowing a session key reveals nothing
+        // about the resume key and vice versa.
+        let mut resume_key = [0u8; 32];
+        hk.expand_multi_info(&[b"uzakel resume", &transcript], &mut resume_key)
+            .expect("32 bytes is a valid HKDF-SHA256 output length");
+        let mut client_id = [0u8; crate::resume::CLIENT_ID_LEN];
+        hk.expand_multi_info(&[b"uzakel client id", &transcript], &mut client_id)
+            .expect("16 bytes is a valid HKDF-SHA256 output length");
+
         SessionMaterial {
             c2s_key,
             s2c_key,
             confirm_tag,
+            resume_key,
+            client_id,
         }
     }
 }
@@ -120,6 +132,11 @@ pub struct SessionMaterial {
     pub c2s_key: [u8; 32],
     pub s2c_key: [u8; 32],
     pub confirm_tag: [u8; TAG_LEN],
+    /// Persisted by both sides; lets the client start fresh sessions later
+    /// without a PIN (see `resume.rs`).
+    pub resume_key: [u8; 32],
+    /// Public handle the client presents to name its pairing.
+    pub client_id: [u8; crate::resume::CLIENT_ID_LEN],
 }
 
 /// Encrypts outgoing frames for one direction of one paired session.

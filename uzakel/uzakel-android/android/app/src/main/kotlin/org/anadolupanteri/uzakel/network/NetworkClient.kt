@@ -4,8 +4,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.anadolupanteri.uzakel.crypto.ResumeCrypto
 import org.anadolupanteri.uzakel.crypto.UzakelCrypto
 import org.anadolupanteri.uzakel.protocol.DiscoverResponse
 import org.anadolupanteri.uzakel.protocol.FileMeta
@@ -14,6 +16,9 @@ import org.anadolupanteri.uzakel.protocol.InputPacket
 import org.anadolupanteri.uzakel.protocol.MouseButton
 import org.anadolupanteri.uzakel.protocol.Opcode
 import org.anadolupanteri.uzakel.protocol.PairResponse
+import org.anadolupanteri.uzakel.protocol.ResumeResponse
+import org.anadolupanteri.uzakel.protocol.encodePing
+import org.anadolupanteri.uzakel.protocol.encodeResumeRequest
 import org.anadolupanteri.uzakel.protocol.Protocol
 import org.anadolupanteri.uzakel.protocol.decodeEncryptedFramePayload
 import org.anadolupanteri.uzakel.protocol.encode
@@ -48,6 +53,18 @@ data class DiscoveredHost(val response: DiscoverResponse, val address: InetAddre
  */
 data class PairedSession(val address: InetAddress, val txKey: ByteArray, val rxKey: ByteArray)
 
+/** A fresh PIN pairing: the live session plus the long-lived material that
+ * lets later connections skip the PIN (see [NetworkClient.resume]). */
+class PairResult(val session: PairedSession, val clientId: ByteArray, val resumeKey: ByteArray)
+
+sealed class ResumeOutcome {
+    data class Ok(val session: PairedSession) : ResumeOutcome()
+    /** The daemon answered but doesn't (or no longer) know this pairing — a
+     * new PIN pairing is needed (expired after 30 idle days, or forgotten). */
+    object Rejected : ResumeOutcome()
+    object NoResponse : ResumeOutcome()
+}
+
 sealed class FileSendResult {
     object Success : FileSendResult()
     data class Rejected(val reason: String) : FileSendResult()
@@ -66,46 +83,82 @@ sealed class FileSendResult {
  * daemon has no plaintext fallback on this channel, so an unencrypted
  * packet would just be dropped.
  */
-class InputChannel(private val session: PairedSession, private val port: Int = DefaultPorts.INPUT) : AutoCloseable {
+class InputChannel(
+    initial: PairedSession,
+    private val port: Int = DefaultPorts.INPUT,
+    private val onPong: () -> Unit = {},
+) : AutoCloseable {
+    /** Keys + address in use; swapped atomically by [updateSession] when a
+     * resumption re-keys the session or the PC moved to a new address. */
+    private class Keys(val session: PairedSession) {
+        val cipher = UzakelCrypto.Cipher(session.txKey)
+        val opener = UzakelCrypto.Opener(session.rxKey)
+    }
+
+    @Volatile private var keys = Keys(initial)
+    val session: PairedSession get() = keys.session
+
     // Deliberately NOT connect()ed: every send() already carries the
     // destination in its DatagramPacket, so connect() buys nothing here —
     // and on real hardware it turned out to actively break things.
     // `DatagramSocket.connect()` threw `IllegalArgumentException: connect: -1`
     // on a real device (MIUI/Android 11, Redmi Note 8) during on-device
     // testing, killing the whole control session the moment it opened.
-    // A plain unconnected socket sidesteps whatever OS/network-stack
-    // quirk caused that and matches how discoverHosts()/pair() already
-    // talk UDP elsewhere in this file.
-    private val socket = DatagramSocket()
+    private val socket = DatagramSocket().apply { soTimeout = 1000 }
     private val seq = AtomicInteger(1)
-    private val cipher = UzakelCrypto.Cipher(session.txKey)
 
-    // Every mouseMove/mouseClick/etc. call comes straight from a Compose
-    // gesture callback on the main thread — but `DatagramSocket.send()` is
-    // still a real syscall, and Android's StrictMode ThreadPolicy blocks it
-    // there with a `NetworkOnMainThreadException`. On-device testing showed
-    // every single send failing silently this way (the exception was being
-    // swallowed by design — see below) with 0 packets ever reaching the
-    // daemon despite gesture detection working perfectly. A dedicated
-    // background scope moves the actual socket write off the caller's
-    // thread without turning every call site into a suspend function.
+    // Every send comes straight from a Compose gesture callback on the main
+    // thread, where StrictMode forbids socket I/O (NetworkOnMainThread —
+    // found on-device); sends and the PONG listener run on this IO scope.
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    private fun send(packet: InputPacket) {
+    init {
+        // PONG listener: the daemon answers PING under the same session, so
+        // a decryptable PONG proves both ends still agree on the keys.
         scope.launch {
-            try {
-                val innerFrame = packet.encode()
-                val (nonce, ciphertext) = cipher.seal(innerFrame)
-                val outer = encodeEncryptedFrame(nonce, ciphertext)
-                socket.send(DatagramPacket(outer, outer.size, session.address, port))
-            } catch (_: Exception) {
-                // Best-effort by design (see class doc) — a send failure here
-                // (e.g. transient "network unreachable" on Wi-Fi handoff) is not
-                // worth surfacing to the UI, let alone crashing, over one
-                // dropped input packet.
+            val buf = ByteArray(512)
+            while (isActive) {
+                try {
+                    val packet = DatagramPacket(buf, buf.size)
+                    socket.receive(packet)
+                    val datagram = packet.data.copyOfRange(0, packet.length)
+                    val outer = Header.decode(datagram)
+                    if (outer.opcode != Opcode.ENCRYPTED_FRAME) continue
+                    val (nonce, ct) = decodeEncryptedFramePayload(datagram.copyOfRange(Protocol.HEADER_LEN, datagram.size))
+                    val inner = keys.opener.open(nonce, ct) ?: continue
+                    if (Header.decode(inner).opcode == Opcode.PONG) onPong()
+                } catch (_: java.net.SocketTimeoutException) {
+                    // poll slice — loop re-checks isActive
+                } catch (_: java.net.SocketException) {
+                    break // closed
+                } catch (_: Exception) {
+                    // stray/garbled datagram
+                }
             }
         }
     }
+
+    fun updateSession(session: PairedSession) {
+        keys = Keys(session)
+    }
+
+    private fun sendInner(innerFrame: ByteArray) {
+        val k = keys
+        scope.launch {
+            try {
+                val (nonce, ciphertext) = k.cipher.seal(innerFrame)
+                val outer = encodeEncryptedFrame(nonce, ciphertext)
+                socket.send(DatagramPacket(outer, outer.size, k.session.address, port))
+            } catch (_: Exception) {
+                // Best effort: a dropped input packet isn't worth surfacing.
+                // Connectivity itself is tracked by PING/PONG (Connection).
+            }
+        }
+    }
+
+    private fun send(packet: InputPacket) = sendInner(packet.encode())
+
+    fun ping() = sendInner(encodePing(System.nanoTime()))
 
     fun mouseMove(dx: Int, dy: Int) = send(InputPacket.MouseMove(seq.getAndIncrement(), dx, dy))
     fun mouseScroll(dx: Int, dy: Int) = send(InputPacket.MouseScroll(seq.getAndIncrement(), dx, dy))
@@ -186,7 +239,7 @@ class NetworkClient {
         pin: Int,
         port: Int = DefaultPorts.DISCOVERY,
         timeoutMs: Int = 3000,
-    ): PairedSession? = withContext(Dispatchers.IO) {
+    ): PairResult? = withContext(Dispatchers.IO) {
         val keypair = UzakelCrypto.EphemeralKeypair.generate()
         val clientPubkey = keypair.publicBytes
 
@@ -220,7 +273,54 @@ class NetworkClient {
 
             // From the client's side: c2sKey is what *we* encrypt with (tx),
             // s2cKey is what the daemon encrypts with, so it's our rx.
-            PairedSession(host, txKey = material.c2sKey, rxKey = material.s2cKey)
+            PairResult(
+                PairedSession(host, txKey = material.c2sKey, rxKey = material.s2cKey),
+                clientId = material.clientId,
+                resumeKey = material.resumeKey,
+            )
+        }
+    }
+
+    /**
+     * PIN-less reconnect (ARCHITECTURE.md §2.3.3): proves possession of the
+     * pairing's [resumeKey] with a fresh nonce, checks the daemon's proof
+     * in return, and derives brand-new session keys from both nonces.
+     */
+    suspend fun resume(
+        host: InetAddress,
+        clientId: ByteArray,
+        resumeKey: ByteArray,
+        port: Int = DefaultPorts.DISCOVERY,
+        timeoutMs: Int = 1500,
+    ): ResumeOutcome = withContext(Dispatchers.IO) {
+        val clientNonce = ResumeCrypto.newNonce()
+        val request = encodeResumeRequest(clientId, clientNonce, ResumeCrypto.requestMac(resumeKey, clientId, clientNonce))
+        try {
+            DatagramSocket().use { socket ->
+                socket.soTimeout = timeoutMs
+                socket.send(DatagramPacket(request, request.size, host, port))
+                val buf = ByteArray(256)
+                val deadline = System.currentTimeMillis() + timeoutMs
+                while (System.currentTimeMillis() < deadline) {
+                    val packet = DatagramPacket(buf, buf.size)
+                    socket.receive(packet)
+                    val received = packet.data.copyOfRange(0, packet.length)
+                    if (received.size < Protocol.HEADER_LEN) continue
+                    val header = Header.decode(received)
+                    if (header.opcode != Opcode.RESUME_RESPONSE) continue
+                    val resp = ResumeResponse.decodePayload(received.copyOfRange(Protocol.HEADER_LEN, received.size))
+                    if (!resp.accepted) return@withContext ResumeOutcome.Rejected
+                    // Only the real daemon (holder of resumeKey) can produce this.
+                    if (!ResumeCrypto.ctEq(resp.mac, ResumeCrypto.responseMac(resumeKey, clientNonce, resp.daemonNonce))) {
+                        return@withContext ResumeOutcome.NoResponse
+                    }
+                    val (c2s, s2c) = ResumeCrypto.sessionKeys(resumeKey, clientNonce, resp.daemonNonce)
+                    return@withContext ResumeOutcome.Ok(PairedSession(host, txKey = c2s, rxKey = s2c))
+                }
+                ResumeOutcome.NoResponse
+            }
+        } catch (_: Exception) {
+            ResumeOutcome.NoResponse
         }
     }
 
