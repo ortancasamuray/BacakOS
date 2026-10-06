@@ -1,0 +1,8 @@
+#!/bin/sh
+set -e
+if [ "$1" = "purge" ]; then
+    # CA key, database, screenshots — only on explicit purge.
+    rm -rf /var/lib/uzakyonetim-sunucu
+fi
+#DEBHELPER#
+exit 0

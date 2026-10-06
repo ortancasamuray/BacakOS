@@ -1,0 +1,16 @@
+#!/bin/sh
+set -e
+if [ "$1" = "configure" ]; then
+    if ! getent passwd uzakyonetim >/dev/null; then
+        adduser --system --group --home /var/lib/uzakyonetim-sunucu --no-create-home uzakyonetim
+    fi
+    install -d -m 0700 -o uzakyonetim -g uzakyonetim /var/lib/uzakyonetim-sunucu
+    if [ ! -f /var/lib/uzakyonetim-sunucu/ca.key ]; then
+        echo "uzakyonetim-sunucu: kurulum için"
+        echo "  sudo -u uzakyonetim uzakyonetim-sunucu kurulum --adres <ajanların ulaşacağı ad/IP>"
+        echo "  sudo -u uzakyonetim uzakyonetim-sunucu yonetici-ekle <ad>"
+        echo "  sudo systemctl enable --now uzakyonetim-sunucu"
+    fi
+fi
+#DEBHELPER#
+exit 0

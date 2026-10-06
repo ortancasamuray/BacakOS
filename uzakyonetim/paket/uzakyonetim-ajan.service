@@ -1,0 +1,34 @@
+[Unit]
+Description=Uzak Yönetim ajanı (BacakOS filo yönetimi)
+Documentation=file:///usr/share/doc/uzakyonetim-ajan/
+After=network-online.target bacak-display-manager.service
+Wants=network-online.target
+ConditionPathExists=/etc/uzakyonetim/ajan.crt
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/uzakyonetim-ajan calistir
+Restart=always
+RestartSec=10
+# /run/uzakyonetim holds the "İzleniyor" flag; systemd removes it (and so the
+# on-screen badge) whenever the agent stops, even on a crash.
+RuntimeDirectory=uzakyonetim
+RuntimeDirectoryMode=0755
+# Root is needed for useradd/chpasswd, /var/lib/bacakonay and runuser; keep
+# the rest of the system out of reach.
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Uzak Yönetim</title>
+<link rel="stylesheet" href="/app.css">
+<script src="/app.js" defer></script>
+</head>
+<body>
+<main id="giris" class="giris" hidden>
+  <form id="giris-formu" class="kart giris-kart" autocomplete="off">
+    <h1>Uzak Yönetim</h1>
+    <p class="soluk">BacakOS filo yönetimi</p>
+    <label>Kullanıcı adı<input name="kullanici" required autocomplete="username"></label>
+    <label>Parola<input name="parola" type="password" required autocomplete="current-password"></label>
+    <label>Bacak Onay kodu<input name="kod" inputmode="numeric" pattern="[0-9]{6,8}" maxlength="8" required autocomplete="one-time-code"></label>
+    <p id="giris-hata" class="hata" hidden></p>
+    <button type="submit" class="birincil">Giriş</button>
+  </form>
+</main>
+
+<div id="uygulama" hidden>
+  <header class="ust">
+    <strong>Uzak Yönetim</strong>
+    <nav>
+      <button data-sekme="makineler" class="sekme etkin">Makineler</button>
+      <button data-sekme="denetim" class="sekme">Denetim kaydı</button>
+      <button data-sekme="ayarlar" class="sekme">Ayarlar</button>
+    </nav>
+    <span class="bosluk"></span>
+    <button id="makine-ekle" class="birincil">+ Makine ekle</button>
+    <span id="yonetici" class="soluk"></span>
+    <button id="cikis">Çıkış</button>
+  </header>
+
+  <section id="sekme-makineler" class="icerik">
+    <p id="bos-filo" class="soluk" hidden>Henüz makine yok. "+ Makine ekle" ile bir katılım kodu oluşturun.</p>
+    <div id="izgara" class="izgara"></div>
+  </section>
+
+  <section id="sekme-denetim" class="icerik" hidden>
+    <table class="tablo"><thead><tr><th>Zaman</th><th>Yönetici</th><th>Makine</th><th>İşlem</th><th>Ayrıntı</th><th>Sonuç</th></tr></thead>
+    <tbody id="denetim-satirlari"></tbody></table>
+  </section>
+
+  <section id="sekme-ayarlar" class="icerik" hidden>
+    <div class="kart dar">
+      <h2>Ekran izleme</h2>
+      <label>Ekran görüntüsü aralığı
+        <select id="aralik">
+          <option value="0">Kapalı</option>
+          <option value="30">30 saniye</option>
+          <option value="60">1 dakika</option>
+          <option value="300">5 dakika</option>
+          <option value="900">15 dakika</option>
+          <option value="3600">1 saat</option>
+        </select>
+      </label>
+      <p class="soluk">İzleme açıkken makinelerin ekranında "İzleniyor" göstergesi görünür.</p>
+      <button id="aralik-kaydet" class="birincil">Kaydet</button>
+      <p id="aralik-durum" class="soluk"></p>
+    </div>
+  </section>
+</div>
+
+<dialog id="pencere"><div id="pencere-icerik"></div></dialog>
+</body>
+</html>

@@ -1,0 +1,10 @@
+#!/bin/sh
+set -e
+if [ "$1" = "purge" ]; then
+    # Key + certificates: the machine leaves the fleet for good.
+    rm -f /etc/uzakyonetim/ajan.key /etc/uzakyonetim/ajan.crt /etc/uzakyonetim/ca.crt /etc/uzakyonetim/sunucu.json
+    rmdir /etc/uzakyonetim 2>/dev/null || true
+fi
+rm -f /run/uzakyonetim/izleniyor
+#DEBHELPER#
+exit 0

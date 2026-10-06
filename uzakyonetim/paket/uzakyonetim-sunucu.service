@@ -1,0 +1,40 @@
+[Unit]
+Description=Uzak Yönetim sunucusu (web paneli + ajan kapısı)
+Documentation=file:///usr/share/doc/uzakyonetim-sunucu/
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/var/lib/uzakyonetim-sunucu/ca.key
+
+[Service]
+Type=simple
+User=uzakyonetim
+Group=uzakyonetim
+ExecStart=/usr/bin/uzakyonetim-sunucu baslat
+Restart=always
+RestartSec=5
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/uzakyonetim-sunucu
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

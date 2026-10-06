@@ -1,0 +1,36 @@
+[workspace]
+resolver = "2"
+members = ["crates/uzy-proto", "crates/uzy-sunucu", "crates/uzy-ajan"]
+
+[workspace.package]
+version      = "0.1.0"
+edition      = "2021"
+license      = "GPL-3.0-or-later"
+authors      = ["Anadolu Panteri <bilgi@anadolupanteri.org.tr>"]
+homepage     = "https://anadolupanteri.org.tr"
+rust-version = "1.80"
+
+[workspace.dependencies]
+uzy-proto      = { path = "crates/uzy-proto" }
+bacakonay-core = { path = "../bacakonay/linux/crates/bacakonay-core" }
+serde          = { version = "1", features = ["derive"] }
+serde_json     = "1"
+base64         = "0.22"
+tokio          = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "process", "signal", "fs"] }
+tokio-rustls   = { version = "0.26", default-features = false, features = ["ring", "logging", "tls12"] }
+rustls         = { version = "0.23", default-features = false, features = ["ring", "std", "logging", "tls12"] }
+rustls-pemfile = "2"
+rcgen          = { version = "0.13", features = ["pem", "x509-parser"] }
+sha2           = "0.10"
+getrandom      = "0.2"
+zeroize        = "1.8"
+libc           = "0.2"
+log            = "0.4"
+env_logger     = "0.11"
+qrcode         = { version = "0.14", default-features = false, features = ["svg"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true

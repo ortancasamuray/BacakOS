@@ -1,0 +1,13 @@
+# Uzak Yönetim — bu makinenin yerel politikası.
+#
+# Sunucu ne isterse istesin, burada kapatılan işlem bu makinede YAPILMAZ.
+# Değişiklik sonrası: sudo systemctl restart uzakyonetim-ajan
+
+# Panelden yeni (yönetici olmayan) hesap açılabilir.
+hesap_acma = true
+
+# Panelden kullanıcılara Bacak Onay iki adımlı girişi kurulabilir/kaldırılabilir.
+bacakonay = true
+
+# Ekran görüntüsü alınabilir. Açıkken ekranda "İzleniyor" göstergesi görünür.
+ekran_izleme = true
