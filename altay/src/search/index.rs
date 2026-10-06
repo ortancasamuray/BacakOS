@@ -11,7 +11,9 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex, RwLock};
 
 use notify::{RecursiveMode, Watcher};
@@ -32,7 +34,7 @@ pub struct Index {
     map: Arc<RwLock<HashMap<PathBuf, Entry>>>,
     ready: Arc<AtomicBool>,
     // Keeps the filesystem watcher alive for the index's lifetime.
-    _watcher: Arc<Mutex<Option<notify::RecommendedWatcher>>>,
+    _watcher: WatcherSlot,
 }
 
 impl Index {
@@ -43,7 +45,7 @@ impl Index {
         let root = sandbox.resolve(root).ok()?.into_path_buf();
         let map: Arc<RwLock<HashMap<PathBuf, Entry>>> = Arc::new(RwLock::new(HashMap::new()));
         let ready = Arc::new(AtomicBool::new(false));
-        let watcher_slot: Arc<Mutex<Option<notify::RecommendedWatcher>>> = Arc::new(Mutex::new(None));
+        let watcher_slot: WatcherSlot = Arc::new(Mutex::new(None));
 
         // Background thread: load cache first for instant search, then the
         // watcher, then a full walk. Everything here stays off the UI thread —
@@ -69,14 +71,24 @@ impl Index {
                         // watcher setup and full re-walk start thrashing it.
                         std::thread::sleep(REFRESH_DELAY);
                     }
-                    // Filesystem watcher for incremental updates.
-                    *watcher_slot.lock().unwrap() = start_watcher(&root, map.clone());
+                    // Filesystem watcher for incremental updates. Directories
+                    // are added one by one during the walk below.
+                    *watcher_slot.lock().unwrap() =
+                        start_watcher(&root, map.clone(), watcher_slot.clone());
                     // Full walk to refresh the stale cache.
                     let mut local = HashMap::new();
                     for entry in walkdir::WalkDir::new(&root).follow_links(false).into_iter().flatten() {
+                        if entry.file_type().is_dir() && should_watch(&root, entry.path()) {
+                            if let Some(w) = watcher_slot.lock().unwrap().as_mut() {
+                                w.add_dir(entry.path());
+                            }
+                        }
                         if let Some(e) = entry_from_path(entry.path()) {
                             local.insert(entry.path().to_path_buf(), e);
                         }
+                    }
+                    if let Some(w) = watcher_slot.lock().unwrap().as_ref() {
+                        log::info!("search index watching {} directories under {}", w.watched.len(), root.display());
                     }
                     save_map(&root, &local);
                     let n = local.len();
@@ -121,17 +133,93 @@ impl Index {
     }
 }
 
-/// Spawn a recursive watcher that incrementally maintains `map`.
-fn start_watcher(
-    root: &Path,
-    map: Arc<RwLock<HashMap<PathBuf, Entry>>>,
-) -> Option<notify::RecommendedWatcher> {
-    let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+type WatcherSlot = Arc<Mutex<Option<DirWatcher>>>;
+
+/// Directory names never watched live (still indexed by the launch walk):
+/// build output and caches churn constantly and would eat the inotify budget.
+const UNWATCHED_DIRS: &[&str] = &["target", "node_modules", "__pycache__"];
+
+/// A filesystem watcher that tracks directories individually instead of using
+/// `RecursiveMode::Recursive`. notify's recursive inotify mode aborts the whole
+/// watch when a single subdirectory is unreadable (e.g. a root-owned
+/// `.../private` dir in a build cache), and it would also try to watch every
+/// directory under `$HOME` — easily more than `max_user_watches`, starving
+/// every other inotify user in the session.
+struct DirWatcher {
+    watcher: notify::RecommendedWatcher,
+    watched: HashSet<PathBuf>,
+    budget: usize,
+    budget_logged: bool,
+}
+
+impl DirWatcher {
+    /// Watch `dir` (non-recursively). Unreadable dirs are skipped silently;
+    /// once the budget is spent further dirs are only covered by the next
+    /// launch's walk.
+    fn add_dir(&mut self, dir: &Path) {
+        if self.watched.contains(dir) {
+            return;
+        }
+        if self.watched.len() >= self.budget {
+            if !self.budget_logged {
+                self.budget_logged = true;
+                log::info!("search index watch budget ({}) reached; remaining dirs refresh on next launch", self.budget);
+            }
+            return;
+        }
+        match self.watcher.watch(dir, RecursiveMode::NonRecursive) {
+            Ok(()) => {
+                self.watched.insert(dir.to_path_buf());
+            }
+            Err(e) => log::debug!("search index: cannot watch {}: {e}", dir.display()),
+        }
+    }
+}
+
+/// Up to a quarter of the per-user inotify watch limit, leaving the rest for
+/// the compositor and other apps.
+fn watch_budget() -> usize {
+    std::fs::read_to_string("/proc/sys/fs/inotify/max_user_watches")
+        .ok()
+        .and_then(|s| s.trim().parse::<usize>().ok())
+        .map(|max| (max / 4).max(1024))
+        .unwrap_or(8192)
+}
+
+/// Whether `dir` (under `root`) should get a live watch: not inside a hidden
+/// directory or one of [`UNWATCHED_DIRS`].
+fn should_watch(root: &Path, dir: &Path) -> bool {
+    let Ok(rel) = dir.strip_prefix(root) else { return false };
+    rel.components().all(|c| match c {
+        std::path::Component::Normal(name) => {
+            let name = name.to_string_lossy();
+            !name.starts_with('.') && !UNWATCHED_DIRS.contains(&name.as_ref())
+        }
+        _ => true,
+    })
+}
+
+enum DirEvent {
+    Added(PathBuf),
+    Removed(PathBuf),
+}
+
+/// Create the watcher that incrementally maintains `map`. Directories created
+/// later are handed to a helper thread that watches them and indexes whatever
+/// landed inside before the watch existed. (`watch()` can't be called from the
+/// event callback itself: it round-trips through the event-loop thread the
+/// callback runs on.)
+fn start_watcher(root: &Path, map: Arc<RwLock<HashMap<PathBuf, Entry>>>, slot: WatcherSlot) -> Option<DirWatcher> {
+    let (tx, rx) = mpsc::channel::<DirEvent>();
+    let cb_map = map.clone();
+    let cb_root = root.to_path_buf();
+    let watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         let Ok(event) = res else { return };
+        use notify::event::{ModifyKind, RemoveKind};
         use notify::EventKind::*;
         match event.kind {
             Create(_) | Modify(_) => {
-                let mut m = map.write().unwrap();
+                let mut m = cb_map.write().unwrap();
                 for path in &event.paths {
                     if let Some(e) = entry_from_path(path) {
                         m.insert(path.clone(), e);
@@ -139,22 +227,70 @@ fn start_watcher(
                         m.remove(path);
                     }
                 }
+                drop(m);
+                if matches!(event.kind, Create(_) | Modify(ModifyKind::Name(_))) {
+                    for path in &event.paths {
+                        if path.is_dir() && should_watch(&cb_root, path) {
+                            let _ = tx.send(DirEvent::Added(path.clone()));
+                        }
+                    }
+                }
             }
-            Remove(_) => {
-                let mut m = map.write().unwrap();
+            Remove(kind) => {
+                let mut m = cb_map.write().unwrap();
                 for path in &event.paths {
                     m.remove(path);
+                }
+                drop(m);
+                if matches!(kind, RemoveKind::Folder | RemoveKind::Any) {
+                    for path in &event.paths {
+                        let _ = tx.send(DirEvent::Removed(path.clone()));
+                    }
                 }
             }
             _ => {}
         }
     })
     .ok()?;
-    if let Err(e) = watcher.watch(root, RecursiveMode::Recursive) {
-        log::info!("search index watcher unavailable for {}: {e}", root.display());
-        return None;
-    }
-    Some(watcher)
+
+    let root = root.to_path_buf();
+    std::thread::Builder::new()
+        .name("search-index-watch".into())
+        .spawn(move || {
+            for ev in rx {
+                match ev {
+                    DirEvent::Added(dir) => {
+                        let mut found = Vec::new();
+                        {
+                            let mut guard = slot.lock().unwrap();
+                            let Some(w) = guard.as_mut() else { continue };
+                            let walk = walkdir::WalkDir::new(&dir).follow_links(false).into_iter();
+                            for entry in walk.filter_entry(|e| !e.file_type().is_dir() || should_watch(&root, e.path())).flatten() {
+                                if entry.file_type().is_dir() {
+                                    w.add_dir(entry.path());
+                                }
+                                if let Some(e) = entry_from_path(entry.path()) {
+                                    found.push(e);
+                                }
+                            }
+                        }
+                        // Map lock only after releasing the watcher (see above).
+                        let mut m = map.write().unwrap();
+                        for e in found {
+                            m.insert(e.path.clone(), e);
+                        }
+                    }
+                    DirEvent::Removed(dir) => {
+                        if let Some(w) = slot.lock().unwrap().as_mut() {
+                            w.watched.retain(|p| !p.starts_with(&dir));
+                        }
+                    }
+                }
+            }
+        })
+        .ok()?;
+
+    Some(DirWatcher { watcher, watched: HashSet::new(), budget: watch_budget(), budget_logged: false })
 }
 
 fn is_hidden(path: &Path) -> bool {
@@ -284,6 +420,79 @@ mod tests {
         }
         assert!(found, "watcher did not pick up the new file");
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    fn wait_for(idx: &Index, scope: &Path, name: &str) -> bool {
+        for _ in 0..500 {
+            let q = Query { name_contains: Some(name.into()), limit: 10, ..Default::default() };
+            if idx.query(scope, &q).iter().any(|e| e.name == name) {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(4));
+        }
+        false
+    }
+
+    #[test]
+    fn unreadable_subdir_does_not_disable_watching() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = std::env::temp_dir().join(format!("altay-idxperm-{}", std::process::id()));
+        let home = base.join("home");
+        std::fs::create_dir_all(home.join("locked/inner")).unwrap();
+        std::fs::create_dir_all(home.join("docs")).unwrap();
+        std::fs::set_permissions(home.join("locked"), std::fs::Permissions::from_mode(0o000)).unwrap();
+        let canon = std::fs::canonicalize(&home).unwrap();
+        let sb = Sandbox::with_roots(vec![AllowedRoot::home(canon.clone())]);
+
+        let idx = Index::build(&sb, &canon).unwrap();
+        for _ in 0..500 {
+            if idx.is_ready() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        std::fs::write(canon.join("docs/after.txt"), b"x").unwrap();
+        let ok = wait_for(&idx, &canon, "after.txt");
+        std::fs::set_permissions(canon.join("locked"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let _ = std::fs::remove_dir_all(&base);
+        assert!(ok, "watcher died because of an unreadable sibling directory");
+    }
+
+    #[test]
+    fn new_directory_is_watched() {
+        let base = std::env::temp_dir().join(format!("altay-idxnewdir-{}", std::process::id()));
+        let home = base.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let canon = std::fs::canonicalize(&home).unwrap();
+        let sb = Sandbox::with_roots(vec![AllowedRoot::home(canon.clone())]);
+
+        let idx = Index::build(&sb, &canon).unwrap();
+        for _ in 0..500 {
+            if idx.is_ready() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        std::fs::create_dir_all(canon.join("fresh")).unwrap();
+        assert!(wait_for(&idx, &canon, "fresh"), "new dir not indexed");
+        // Give the helper thread a moment to attach the watch, then create a
+        // file inside — it must arrive via the watcher.
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        std::fs::write(canon.join("fresh/late.txt"), b"y").unwrap();
+        let ok = wait_for(&idx, &canon, "late.txt");
+        let _ = std::fs::remove_dir_all(&base);
+        assert!(ok, "file inside a newly created dir was not picked up");
+    }
+
+    #[test]
+    fn should_watch_skips_hidden_and_build_dirs() {
+        let root = Path::new("/home/u");
+        assert!(should_watch(root, Path::new("/home/u")));
+        assert!(should_watch(root, Path::new("/home/u/Belgeler/proje")));
+        assert!(!should_watch(root, Path::new("/home/u/.cache/x")));
+        assert!(!should_watch(root, Path::new("/home/u/kod/target/release")));
+        assert!(!should_watch(root, Path::new("/home/u/web/node_modules")));
+        assert!(!should_watch(Path::new("/home/u"), Path::new("/etc")));
     }
 
     #[test]
