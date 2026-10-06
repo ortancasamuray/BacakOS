@@ -1,0 +1,8 @@
+<resources>
+    <color name="night">#FF041C29</color>
+    <color name="aegean_deep">#FF07334A</color>
+    <color name="aegean_mid">#FF1A6C8A</color>
+    <color name="aegean_soft">#FF5CB0C4</color>
+    <color name="aegean_foam">#FFE6F6F8</color>
+    <color name="rust">#FFD96C2D</color>
+</resources>

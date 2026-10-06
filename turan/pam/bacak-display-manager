@@ -13,6 +13,14 @@ auth     requisite      pam_nologin.so
 auth     required       pam_faillock.so preauth
 auth     [success=1 default=bad] pam_unix.so try_first_pass
 auth     [default=die]  pam_faillock.so authfail
+# Bacak Onay (bacakonay) — TOTP second factor after the password. Users who
+# haven't run `sudo bacakonay kur` get PAM_IGNORE and log in as before; a wrong
+# code falls through to the authfail line below so faillock counts it. The `-`
+# prefix + `module_unknown=1` keep logins working when the bacakonay package
+# isn't installed (a missing module returns PAM_MODULE_UNKNOWN, not IGNORE —
+# verified by bacakonay/linux/crates/pam-bacakonay/tests/pam_stack.rs).
+-auth    [success=1 ignore=1 module_unknown=1 default=bad] pam_bacakonay.so
+auth     [default=die]  pam_faillock.so authfail
 auth     required       pam_faillock.so authsucc
 auth     optional       pam_gnome_keyring.so
 

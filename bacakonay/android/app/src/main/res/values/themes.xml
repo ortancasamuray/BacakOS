@@ -1,0 +1,9 @@
+<resources>
+    <!-- Window theme before the first Compose frame; the UI itself is Compose
+         (ui/theme/Theme.kt). Dark night background avoids a white flash. -->
+    <style name="Theme.BacakOnay" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/night</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>

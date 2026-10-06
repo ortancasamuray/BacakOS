@@ -1,0 +1,38 @@
+[package]
+name = "bacakonay-cli"
+description = "Bacak Onay — enroll BacakOS users for TOTP login and print the pairing QR"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "bacakonay"
+path = "src/main.rs"
+
+[dependencies]
+bacakonay-core.workspace = true
+qrcode.workspace = true
+libc.workspace = true
+zeroize.workspace = true
+
+[package.metadata.deb]
+name = "bacakonay"
+revision = "1"
+maintainer = "Anadolu Panteri <bilgi@anadolupanteri.org.tr>"
+copyright = "2026, Anadolu Panteri <bilgi@anadolupanteri.org.tr>"
+section = "admin"
+priority = "optional"
+depends = "$auto, libpam0g"
+extended-description = """\
+Two-factor (TOTP, RFC 6238) login for BacakOS. Ships the `bacakonay` CLI that
+enrolls a user and prints the pairing QR for the Bacak Onay Android app (or any
+standard authenticator), and the pam_bacakonay.so module that asks for the code
+on the Turan (bacak-display-manager) login screen. Users who have not enrolled
+are not affected."""
+assets = [
+    ["target/release/bacakonay", "usr/bin/", "755"],
+    ["target/release/libpam_bacakonay.so", "usr/lib/x86_64-linux-gnu/security/pam_bacakonay.so", "644"],
+]
+maintainer-scripts = "debian/"

@@ -1,0 +1,8 @@
+#!/bin/sh
+# Enrollments are user secrets: keep them on remove, delete only on purge.
+set -e
+if [ "$1" = "purge" ]; then
+    rm -rf /var/lib/bacakonay
+fi
+#DEBHELPER#
+exit 0

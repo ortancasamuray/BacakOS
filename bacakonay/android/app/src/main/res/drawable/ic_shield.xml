@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Brand mark: Aegean shield, Rust check (DESIGN_SYSTEM.md: one Rust accent). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="96dp" android:height="96dp"
+    android:viewportWidth="24" android:viewportHeight="24">
+    <path android:fillColor="@color/aegean_soft"
+        android:pathData="M12,1L3,5v6c0,5.55 3.84,10.74 9,12 5.16,-1.26 9,-6.45 9,-12V5l-9,-4z" />
+    <path android:fillColor="@color/aegean_mid"
+        android:pathData="M12,2.6L4.4,6v5c0,4.7 3.2,9.1 7.6,10.3V2.6z" />
+    <path android:fillColor="@color/rust"
+        android:pathData="M10,17l-4,-4 1.41,-1.41L10,14.17l6.59,-6.59L18,9l-8,8z" />
+</vector>
