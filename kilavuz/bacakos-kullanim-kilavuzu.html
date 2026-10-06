@@ -302,6 +302,11 @@
       <a href="#uzak-masaustu">Uzak Masaüstü</a>
     </div>
     <div class="group">
+      <div class="group-label">Güvenlik &amp; Yönetim</div>
+      <a href="#bacak-onay">Bacak Onay — İki Adımlı Giriş</a>
+      <a href="#uzak-yonetim">Uzak Yönetim (Filo)</a>
+    </div>
+    <div class="group">
       <div class="group-label">Uygulamalı</div>
       <a href="#etkilesimli-senaryo">Jest Senaryosu (canlı demo)</a>
     </div>
@@ -374,9 +379,10 @@
 
     <section id="ilk-acilis">
       <h2><span class="num">02</span> İlk Açılış &amp; Giriş Ekranı</h2>
-      <p class="lede">Açılışta koyu temalı, akışkan bir giriş ekranı karşılar — bu ekranı <strong>BDM</strong> (Bacak Display Manager) yönetir.</p>
+      <p class="lede">Açılışta koyu temalı, akışkan bir giriş ekranı karşılar — bu ekranı <strong>Turan</strong> (Bacak Display Manager, BDM) yönetir.</p>
       <ul>
         <li>Kullanıcı listesinden hesabınızı seçip parolanızı yazarsınız; son kullanılan kullanıcı ve oturum hatırlanır.</li>
+        <li>Hesabınızda <a href="#bacak-onay">Bacak Onay</a> iki adımlı giriş açıksa, paroladan sonra <strong>"Bacak Onay kodu"</strong> ekranı gelir: telefonunuzdaki 6 haneli kodu yazarsınız.</li>
         <li>Sağ alttaki oturum seçicisinden farklı bir masaüstü oturumu seçebilirsiniz (varsayılan: <strong>bacak</strong>).</li>
         <li>Güç düğmesinden kapat / yeniden başlat / uyku seçenekleri sunulur.</li>
         <li>Erişilebilirlik: ekran ölçeği büyütme, büyük yazı tipi ve yüksek kontrast; dokunmatik ekranlarda ekran klavyesi alan odaklanınca otomatik açılır.</li>
@@ -493,6 +499,8 @@
         <li><strong>Ses:</strong> çıkış seviyesi kaydırıcısı + çıkış cihazı seçimi, mikrofon seviyesi + giriş cihazı seçimi.</li>
         <li><strong>Parlaklık</strong> kaydırıcısı.</li>
         <li><strong>Koyu mod</strong> anahtarı.</li>
+        <li><strong>Uzakel'e Bağlan:</strong> telefonu fare/klavye olarak kullanmak için eşleşme QR'ını gösterir (Uzakel kuruluysa).</li>
+        <li><strong>Uzak Masaüstü:</strong> ekran (monitör) simgeli düğme — bkz. <a href="#uzak-masaustu">Uzak Masaüstü</a>.</li>
         <li>Ekran görüntüsü alma, ve <strong>Kapat / Yeniden Başlat / Oturumu Kapat</strong> düğmeleri.</li>
         <li>"Masaüstü Ayarları" bağlantısı — aşağıdaki genişletilmiş panele götürür.</li>
       </ul>
@@ -515,7 +523,7 @@
 
     <section id="uzak-masaustu">
       <h2><span class="num">08</span> Uzak Masaüstü</h2>
-      <p class="lede">Kontrol Merkezi'ndeki "🖥 Uzak Masaüstü" döşemesinden açılır — bir Windows veya macOS bilgisayarın ekranını BacakOS panelinin içinde izleyip fare/dokunmatik ile kontrol edin.</p>
+      <p class="lede">Kontrol Merkezi'ndeki ekran simgeli <strong>Uzak Masaüstü</strong> düğmesinden açılır — bir Windows veya macOS bilgisayarın ekranını BacakOS panelinin içinde izleyip fare/dokunmatik ile kontrol edin.</p>
 
       <h3>Karşı taraftaki bilgisayarda</h3>
       <p>Kontrol edilecek Windows veya macOS bilgisayara <code>bacak-remote-server</code> kurulur ve çalıştırılır:</p>
@@ -535,8 +543,65 @@
       <p>Eşleşme tamamlanınca karşı bilgisayarın ekranı panelin içinde tam boyutta görünür; tek parmak/tek fare tıklaması gerçek bir dokunuşa/tıklamaya, sürükleme ise sürüklemeye dönüşür. Karşı taraftaki pencereden "Eşleşmeyi Bitir"e basılırsa (Windows/macOS) BacakOS panel otomatik kapanır — sizin bir şey yapmanız gerekmez.</p>
     </section>
 
+    <section id="bacak-onay">
+      <h2><span class="num">09</span> Bacak Onay — İki Adımlı Giriş</h2>
+      <p class="lede">Giriş ekranında paroladan sonra telefondaki <strong>Bacak Onay</strong> uygulamasının ürettiği 6 haneli kodu da isteyerek hesabınızı korur. Parolanız ele geçse bile telefonunuz olmadan oturum açılamaz.</p>
+
+      <h3>Telefon uygulaması</h3>
+      <ul>
+        <li>Android için <strong>Bacak Onay</strong> uygulamasını kurun. İlk açılışta kasa, parmak izi veya ekran kilidi PIN'iyle oluşturulur; kodlar telefonun güvenli donanımında şifreli saklanır.</li>
+        <li>Telefonda ekran kilidi tanımlı olmalıdır. Ekran kilidini kaldırırsanız Android kasa anahtarını siler ve hesapları yeniden eklemeniz gerekir.</li>
+        <li>Uygulama internete bağlanmaz; kodlar yalnızca saatten hesaplanır. Ekran görüntüsü alınamaz, uygulama arka plana geçince kilitlenir.</li>
+        <li>Kodlar 30 saniyede bir değişir. Halka son 5 saniyede turuncuya döner — o zaman bir sonraki kodu bekleyin. Koda dokunmak kopyalar (pano 30 sn sonra temizlenir).</li>
+        <li>Standart <code>otpauth://</code> QR'larını okuduğu için başka servislerin (e-posta, GitHub…) iki adımlı doğrulaması için de kullanılabilir.</li>
+      </ul>
+
+      <h3>Bilgisayarda kayıt</h3>
+      <ol class="steps">
+        <li><strong>Terminali açın</strong><p>Kendi oturumunuzda <code>sudo bacakonay kur</code> komutunu çalıştırın (yönetici parolası istenir).</p></li>
+        <li><strong>QR'ı okutun</strong><p>Terminalde çıkan QR kodunu telefonda Bacak Onay &rarr; <b>QR tara</b> ile okutun. Kamera yoksa altında yazan anahtarı "Elle ekle" ile girin.</p></li>
+        <li><strong>Kodu doğrulayın</strong><p>Uygulamada beliren 6 haneli kodu terminale yazın. Kod tutarsa iki adımlı giriş açılır; tutmazsa hiçbir şey değişmez — yanlış okutma sizi kilitleyemez.</p></li>
+      </ol>
+      <table class="kv">
+        <tr><th>Komut</th><th>İşlev</th></tr>
+        <tr><td class="k"><code>sudo bacakonay durum</code></td><td class="d">İki adımlı girişin açık olup olmadığını gösterir</td></tr>
+        <tr><td class="k"><code>sudo bacakonay dogrula</code></td><td class="d">Telefondaki kodu dener (kodu tüketmez; çıkış yapmadan önce test için)</td></tr>
+        <tr><td class="k"><code>sudo bacakonay kaldir</code></td><td class="d">İki adımlı girişi kapatır</td></tr>
+        <tr><td class="k"><code>sudo bacakonay kur ayse</code></td><td class="d">Başka bir kullanıcı için kayıt (yönetici)</td></tr>
+      </table>
+      <div class="note">
+        <strong>Güvenlik:</strong> Aynı kod iki kez kullanılamaz. Yanlış kodlar yanlış parola gibi sayılır ve çok sayıda hatalı denemede hesap geçici olarak kilitlenir. Kayıtları yalnızca yönetici (root) görebilir. Telefonunuzu kaybederseniz başka bir yönetici hesabıyla <code>sudo bacakonay kaldir &lt;kullanıcı&gt;</code> çalıştırın.
+      </div>
+    </section>
+
+    <section id="uzak-yonetim">
+      <h2><span class="num">10</span> Uzak Yönetim (Filo)</h2>
+      <p class="lede">Okul, laboratuvar veya kurumdaki — farklı ağlarda bile olsa — çok sayıda BacakOS bilgisayarını tek bir <strong>web panelinden</strong> yönetmek için. Yönetici, uzak makinelerde hesap açabilir, Bacak Onay kaydı yapabilir ve belirli aralıklarla ekran görüntülerini izleyebilir.</p>
+
+      <h3>Kullanıcı olarak bilmeniz gerekenler</h3>
+      <div class="card">
+        <h4>"İzleniyor" göstergesi</h4>
+        <p>Ekranın sağ üst köşesinde kırmızı noktalı <strong>"İzleniyor"</strong> etiketi görüyorsanız, bu bilgisayar bir Uzak Yönetim sunucusuna bağlıdır ve ekran görüntüsü belirli aralıklarla yöneticiye iletilmektedir. Gösterge izleme açık olduğu sürece her zaman görünür ve ekran görüntülerinde de yer alır; izleme kapanınca veya ajan durunca kendiliğinden kaybolur.</p>
+      </div>
+      <ul>
+        <li>Uzak Yönetim ajanı uzaktan <strong>komut çalıştıramaz</strong>; yalnızca kullanıcı listeleme, (yönetici olmayan) hesap açma, Bacak Onay kaydı ve ekran görüntüsü alma işlemlerini yapabilir.</li>
+        <li>Her bilgisayarın yöneticisi bu işlemleri <code>/etc/uzakyonetim/politika.toml</code> dosyasından tek tek kapatabilir (örn. <code>ekran_izleme = false</code>); sunucu ne isterse istesin kapalı işlem yapılmaz.</li>
+        <li>Yöneticinin yaptığı her işlem sunucudaki denetim kaydına yazılır.</li>
+      </ul>
+
+      <h3>Yönetici olarak kurulum</h3>
+      <ol class="steps">
+        <li><strong>Sunucu</strong><p>Tüm ağlardan erişilebilen bir makineye <code>uzakyonetim-sunucu</code> paketini kurun, <code>sudo -u uzakyonetim uzakyonetim-sunucu kurulum --adres &lt;alan adı veya IP&gt;</code> ve <code>sudo -u uzakyonetim uzakyonetim-sunucu yonetici-ekle &lt;ad&gt;</code> çalıştırın (panel girişi için parola + Bacak Onay QR'ı). 8443 (panel) ve 8444 (ajan) portlarını açın.</p></li>
+        <li><strong>Makine ekleme</strong><p>Panelde <b>+ Makine ekle</b> tek kullanımlık, 60 dakika geçerli bir komut üretir. Bilgisayarda <code>sudo uzakyonetim-ajan kaydol uzy1.…</code> ve <code>sudo systemctl enable --now uzakyonetim-ajan</code> çalıştırın. Bilgisayar sunucuya kendisi bağlandığı için kendi ağında port açmak gerekmez.</p></li>
+        <li><strong>Kullanım</strong><p>Panel adresine (<code>https://&lt;sunucu&gt;:8443</code>) parola ve Bacak Onay koduyla girin. Makine kartına tıklayarak ekranı, geçmiş görüntüleri ve kullanıcıları görün; <b>Yeni hesap</b> ile hesap açıp aynı anda Bacak Onay QR'ını gösterin. <b>Ayarlar</b>'dan ekran görüntüsü aralığını (Kapalı / 30 sn … 1 sa) seçin.</p></li>
+      </ol>
+      <div class="note">
+        <strong>Kişisel veriler:</strong> Ekran izleme kişisel veri işler. Kullanıcıları önceden bilgilendirin (KVKK); ekrandaki gösterge bu bilgilendirmenin yerini tutmaz, onu tamamlar. Kaybolan veya çalınan bir bilgisayarı panelde <strong>Filodan çıkar</strong> ile anında devre dışı bırakın.
+      </div>
+    </section>
+
     <section id="dosya-yoneticisi">
-      <h2><span class="num">09</span> Dosya Yöneticisi — altay</h2>
+      <h2><span class="num">11</span> Dosya Yöneticisi — altay</h2>
       <p class="lede">Ev dizininizi ve bağlı sürücüleri gezmek için. Sistem dizinlerine erişimi kapalıdır (sandbox).</p>
 
       <h3>Arşivler</h3>
@@ -557,7 +622,7 @@
     </section>
 
     <section id="belge-goruntuleyici">
-      <h2><span class="num">10</span> Belge Görüntüleyici — bacak-belge</h2>
+      <h2><span class="num">12</span> Belge Görüntüleyici — bacak-belge</h2>
       <p class="lede">PDF, EPUB ve resim dosyaları için tek, birleşik görüntüleyici.</p>
       <ul>
         <li><strong>PDF:</strong> sayfa sayfa gezinme, %10–%800 arası yakınlaştırma.</li>
@@ -568,7 +633,7 @@
     </section>
 
     <section id="tahta">
-      <h2><span class="num">11</span> Dijital Tahta — tahta</h2>
+      <h2><span class="num">13</span> Dijital Tahta — tahta</h2>
       <p class="lede">
         Dokunmatik etkileşimli panellerde ders/sunum yapmak için tasarlanmış,
         wgpu tabanlı tam ekran çizim uygulaması. Açılır açılmaz tam ekrana
@@ -595,7 +660,7 @@
     </section>
 
     <section id="varsayilan-uygulamalar">
-      <h2><span class="num">12</span> Varsayılan Uygulamalar</h2>
+      <h2><span class="num">14</span> Varsayılan Uygulamalar</h2>
       <p class="lede">Dock'ta hazır sabitlenmiş gelen uygulamalar:</p>
       <div class="app-list">
         <div class="card"><span class="app-icon">A</span><div><h4>altay</h4><p>Dosya yöneticisi</p></div></div>
@@ -607,7 +672,7 @@
     </section>
 
     <section id="sorun-giderme">
-      <h2><span class="num">13</span> Sorun Giderme</h2>
+      <h2><span class="num">15</span> Sorun Giderme</h2>
 
       <h3>Açılışta ekran siyah kalıyor / sürekli yanıp sönen imleç</h3>
       <p>Ctrl+Alt+F2 ile bir metin konsoluna geçip <code>systemctl status bacak-display-manager</code> ve <code>journalctl -u bacak-display-manager</code> ile hata mesajına bakın. Genellikle giriş ekranı servisinin bir önceki oturumu düzgün kapatamamasından kaynaklanır; <code>sudo systemctl restart bacak-display-manager</code> çoğu zaman yeterlidir.</p>
@@ -615,12 +680,24 @@
       <h3>Bir jest veya kısayol beklediğim gibi çalışmıyor</h3>
       <p>Jest eşikleri (dokunma süresi, sürükleme mesafesi) şu an kullanıcı ayarlarından değiştirilemiyor — sabit değerlerdir. Beklenmedik davranış görüyorsanız dokunmatik yüzeyinizin sürücü ayarlarını (varsa) kontrol edin.</p>
 
+      <h3>4K / yüksek çözünürlüklü ekranda her şey çok küçük veya çok büyük</h3>
+      <p>BacakOS ekranın fiziksel boyutundan yoğunluğu (DPI) hesaplayıp ölçeği kendisi seçer: 150 DPI ve üzerinde 2×, altında 1×. Simgeler ve imleç her ölçekte ekranın gerçek çözünürlüğünde çizilir. Büyük (32" ve üzeri) bir 4K monitörde 1× seçildiği için her şey küçük görünüyorsa, <code>~/.config/bacak/compositor.json</code> içinde ilgili çıkış için <code>"outputs": {"&lt;bağlantı&gt;": {"scale": 2}}</code> ayarlayın; geçici olarak <code>BACAK_SCALE=2</code> ortam değişkeni de kullanılabilir.</p>
+
+      <h3>"Bacak Onay kodu geçersiz" diyor</h3>
+      <p>Telefonun saatinin otomatik ayarlı olduğundan emin olun (30 saniyeden fazla kayma reddedilir). Aynı kod ikinci kez kullanılamaz — bir sonraki kodu bekleyin. Halka turuncuysa kod birazdan değişecektir. Çok sayıda hatalı denemeden sonra hesap geçici olarak kilitlenir: <code>sudo faillock --user &lt;kullanıcı&gt; --reset</code>.</p>
+
+      <h3>Telefonumu kaybettim / değiştirdim</h3>
+      <p>Başka bir yönetici hesabıyla (ya da SSH ile) <code>sudo bacakonay kaldir &lt;kullanıcı&gt;</code> çalıştırın; giriş yalnızca parolayla yapılır hale gelir. Yeni telefonda <code>sudo bacakonay kur --zorla</code> ile yeniden eşleyin.</p>
+
+      <h3>Ekranda "İzleniyor" yazıyor</h3>
+      <p>Bilgisayar bir Uzak Yönetim sunucusuna bağlı ve ekran izleme açık — bkz. <a href="#uzak-yonetim">Uzak Yönetim</a>. Durumu <code>sudo uzakyonetim-ajan durum</code> ile görebilirsiniz; yerel olarak kapatmak için <code>/etc/uzakyonetim/politika.toml</code>'da <code>ekran_izleme = false</code> yapıp <code>sudo systemctl restart uzakyonetim-ajan</code> çalıştırın.</p>
+
       <h3>Bir dosya türü yanlış uygulamayla açılıyor</h3>
       <p>altay'da dosyaya uzun basıp (veya sağ tıklayıp) "Birlikte Aç" &rarr; istediğiniz uygulamayı seçip "Varsayılan yap" işaretleyin.</p>
     </section>
 
     <footer>
-      <span>BacakOS &middot; bacak-compositor / turan / altay / bacak-belge / tahta / kur</span>
+      <span>BacakOS &middot; bacak-compositor / turan / bacakonay / uzakyonetim / altay / bacak-belge / tahta / kur</span>
       <span>Bu kılavuz kod tabanından derlenmiştir, sürüm ilerledikçe güncellenmelidir</span>
     </footer>
   </main>
