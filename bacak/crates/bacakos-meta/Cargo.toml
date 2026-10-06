@@ -11,7 +11,7 @@ repository  = { workspace = true }
 path = "src/lib.rs"
 
 [package.metadata.deb]
-revision = "3"
+revision = "4"
 maintainer = "Bacak Desktop Project <bilgi@anadolupanteri.org.tr>"
 copyright  = "2026, Bacak Desktop Project"
 section    = "metapackages"
@@ -27,6 +27,7 @@ depends = """\
 bacak-compositor (>= 0.1.0), \
 bacak-display-manager (>= 0.1.0), \
 bacakonay (>= 0.1.0), \
+uzakyonetim-ajan (>= 0.1.0), \
 bacak-cli (>= 0.1.0), \
 bacak-plugin-audio (>= 0.1.0), \
 bacak-plugin-network (>= 0.1.0), \

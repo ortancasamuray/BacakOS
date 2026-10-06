@@ -35,7 +35,8 @@ maintainer = "Anadolu Panteri <bilgi@anadolupanteri.org.tr>"
 copyright = "2026, Anadolu Panteri <bilgi@anadolupanteri.org.tr>"
 section = "admin"
 priority = "optional"
-depends = "$auto, bacakonay (>= 0.1.0), grim, passwd"
+# bacak-compositor 0.1.0-5 draws the "İzleniyor" badge; never monitor without it.
+depends = "$auto, bacakonay (>= 0.1.0), bacak-compositor (>= 0.1.0-5), grim, passwd"
 extended-description = """\
 Connects a BacakOS machine to an Uzak Yönetim server (outbound mTLS, works
 across networks/NAT). Lets authorised administrators create local accounts,

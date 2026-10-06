@@ -113,6 +113,24 @@ BACAKONAY_SRC="$HERE/bacakonay/linux"
 )
 
 # ---------------------------------------------------------------------------
+# uzakyonetim: filo yönetimi — ajan (her BacakOS) + sunucu (merkez makine)
+# ---------------------------------------------------------------------------
+log "=== uzakyonetim derleniyor ==="
+UZAKYONETIM_SRC="$HERE/uzakyonetim"
+(
+    cd "$UZAKYONETIM_SRC"
+
+    log "uzakyonetim derleniyor (ajan + sunucu)…"
+    cargo build --release
+
+    log "uzakyonetim-ajan deb oluşturuluyor"
+    cargo deb --no-build -p uzy-ajan -o "$DIST"
+
+    log "uzakyonetim-sunucu deb oluşturuluyor"
+    cargo deb --no-build -p uzy-sunucu -o "$DIST"
+)
+
+# ---------------------------------------------------------------------------
 # altay: dosya yöneticisi
 # ---------------------------------------------------------------------------
 log "=== altay derleniyor ==="
