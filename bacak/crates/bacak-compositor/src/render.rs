@@ -1738,6 +1738,66 @@ fn cc_blit_label(
     }
 }
 
+/// Logical size of the Control Center's monitor glyph (bezel + stand) and its
+/// gap to the label.
+const CC_MONITOR_W: f32 = 20.0;
+const CC_MONITOR_H: f32 = 17.0;
+const CC_MONITOR_GAP: f32 = 9.0;
+
+/// Draw a monochrome monitor (bezel, tinted screen, neck, base) with its
+/// top-left at `(x, y)`, `CC_MONITOR_W`×`CC_MONITOR_H` logical px. Pushed
+/// front-to-back like the rest of the Control Center foreground.
+#[allow(clippy::too_many_arguments)]
+fn push_cc_monitor_glyph(
+    out: &mut Vec<BacakElements>,
+    renderer: &mut GlesRenderer,
+    x: f32,
+    y: f32,
+    output_scale: i32,
+    off_x: i32,
+    off_y: i32,
+) {
+    let frame = Color32F::new(0.92, 0.94, 0.97, 0.95);
+    let screen = Color32F::new(0.30, 0.50, 0.78, 1.0);
+    let bezel_h = 13.0;
+    let inset = 1.8;
+    // Screen in front of the bezel it sits in.
+    cc_card(
+        out,
+        renderer,
+        Rect::new(x + inset, y + inset, CC_MONITOR_W - 2.0 * inset, bezel_h - 2.0 * inset),
+        screen,
+        1.2,
+        output_scale,
+        off_x,
+        off_y,
+    );
+    cc_card(out, renderer, Rect::new(x, y, CC_MONITOR_W, bezel_h), frame, 2.5, output_scale, off_x, off_y);
+    // Neck and base.
+    let neck_w = 3.0;
+    cc_card(
+        out,
+        renderer,
+        Rect::new(x + (CC_MONITOR_W - neck_w) / 2.0, y + bezel_h, neck_w, 2.4),
+        frame,
+        0.0,
+        output_scale,
+        off_x,
+        off_y,
+    );
+    let base_w = 10.0;
+    cc_card(
+        out,
+        renderer,
+        Rect::new(x + (CC_MONITOR_W - base_w) / 2.0, y + CC_MONITOR_H - 1.8, base_w, 1.8),
+        frame,
+        0.9,
+        output_scale,
+        off_x,
+        off_y,
+    );
+}
+
 /// A slider tile's track geometry: `(x, y, width, height)` of the groove
 /// inside the tile. Shared by the fill (pass 1) and the track (pass 2) so
 /// they line up exactly, and matched to the hit-test in `state.rs`.
@@ -1837,8 +1897,19 @@ pub(crate) fn render_control_center(
                 let gap = if sub_h > 0.0 { 2.0 } else { 0.0 };
                 let block_h = label_h + gap + sub_h;
                 let mut ly = r.y + (r.h - block_h) / 2.0;
+                // The UI font (DejaVu) has no monitor glyph, so the Remote
+                // Desktop button draws one as vector shapes left of its label.
+                let icon_w = if tile.action == crate::plugins::control_center::CcAction::RemoteDesktopConnect {
+                    CC_MONITOR_W + CC_MONITOR_GAP
+                } else {
+                    0.0
+                };
                 if let Some((_, w, _)) = &tile.label {
-                    let lx = r.x + (r.w - *w as f32) / 2.0;
+                    let lx = r.x + (r.w - *w as f32 - icon_w) / 2.0 + icon_w;
+                    if icon_w > 0.0 {
+                        let iy = r.y + (r.h - CC_MONITOR_H) / 2.0;
+                        push_cc_monitor_glyph(out, renderer, lx - icon_w, iy, output_scale, off_x, off_y);
+                    }
                     cc_blit_label(out, renderer, &tile.label, lx, ly, output_scale, off_x, off_y);
                 }
                 ly += label_h + gap;

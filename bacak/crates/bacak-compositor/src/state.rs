@@ -4816,7 +4816,7 @@ impl BacakState {
                 rect: Rect::new(cx, y, inner, SH),
                 action: CcAction::RemoteDesktopConnect,
                 kind: CcKind::Button { danger: false },
-                label: cc_rasterize(text, "🖥  Uzak Masaüstü", 15.0, LABEL, iw),
+                label: cc_rasterize(text, "Uzak Masaüstü", 15.0, LABEL, iw),
                 sub: None,
             });
             y += SH + GAP;
