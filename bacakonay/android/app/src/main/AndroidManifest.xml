@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- QR enrollment (ui/scan) — requested at runtime; optional so the app
+         still installs on camera-less devices (manual entry works). -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+    <!-- Deliberately NO internet permission: codes are computed offline and
+         secrets can never leave the phone through this app. -->
+
+    <!-- Backups off: the vault key is wrapped by a non-exportable Keystore key,
+         so a restored vault could never be opened anyway — and secrets must
+         not travel to cloud backups. -->
+    <application
+        android:name=".BacakOnayApplication"
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="@string/app_name"
+        android:theme="@style/Theme.BacakOnay"
+        android:supportsRtl="true">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:excludeFromRecents="false"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.BacakOnay">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

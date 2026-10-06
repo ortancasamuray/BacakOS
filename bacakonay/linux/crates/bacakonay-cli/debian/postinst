@@ -1,0 +1,8 @@
+#!/bin/sh
+# Enrollment store: root-only. pam_bacakonay refuses anything looser.
+set -e
+if [ "$1" = "configure" ]; then
+    install -d -m 0700 -o root -g root /var/lib/bacakonay
+fi
+#DEBHELPER#
+exit 0

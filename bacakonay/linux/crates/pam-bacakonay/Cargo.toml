@@ -1,0 +1,22 @@
+[package]
+name = "pam-bacakonay"
+description = "Bacak Onay — PAM module asking for the TOTP code at BacakOS login"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "pam_bacakonay"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+bacakonay-core.workspace = true
+libc.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+bacakonay-core.workspace = true
+libc.workspace = true
+zeroize.workspace = true

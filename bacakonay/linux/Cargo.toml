@@ -1,0 +1,35 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/bacakonay-core",
+    "crates/bacakonay-cli",
+    "crates/pam-bacakonay",
+]
+
+[workspace.package]
+version      = "0.1.0"
+edition      = "2021"
+license      = "GPL-3.0-or-later"
+authors      = ["Anadolu Panteri <bilgi@anadolupanteri.org.tr>"]
+homepage     = "https://anadolupanteri.org.tr"
+rust-version = "1.80"
+
+[workspace.dependencies]
+bacakonay-core = { path = "crates/bacakonay-core" }
+hmac     = "0.13"
+sha1     = "0.11"
+sha2     = "0.11"
+subtle   = "2.6"
+zeroize  = "1.8"
+getrandom = "0.4"
+libc     = "0.2"
+qrcode   = { version = "0.14", default-features = false }
+
+# The PAM module runs inside a long-lived root daemon (bacak-display-manager);
+# a panic must unwind into `catch_unwind` and become PAM_SERVICE_ERR, never
+# abort the login daemon. So no `panic = "abort"` here.
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true

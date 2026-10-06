@@ -1,0 +1,12 @@
+# Lines Bacak Onay needs in /etc/pam.d/bacak-display-manager (Turan), right
+# after `pam_unix.so` and its `authfail` line. Already present in
+# turan/pam/bacak-display-manager; kept here for other PAM services (e.g. a
+# screen locker) that want the same second factor.
+#
+#   auth  [success=1 default=bad] pam_unix.so try_first_pass
+#   auth  [default=die]           pam_faillock.so authfail
+-auth    [success=1 ignore=1 module_unknown=1 default=bad] pam_bacakonay.so
+auth     [default=die]  pam_faillock.so authfail
+#   auth  required                pam_faillock.so authsucc
+#
+# Options: zorunlu | pencere=N | istem=Metin_ile_alt_çizgi | dizin=/yol

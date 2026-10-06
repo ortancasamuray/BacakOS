@@ -1,0 +1,17 @@
+[package]
+name = "bacakonay-core"
+description = "Bacak Onay — RFC 4226/6238 OTP core, otpauth URIs and the root-owned enrollment store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+hmac.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+zeroize.workspace = true
+getrandom.workspace = true
+libc.workspace = true
