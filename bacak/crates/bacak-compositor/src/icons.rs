@@ -41,6 +41,16 @@ const ICON_LOOKUP_SIZE: u16 = 64;
 /// or `None` if no usable PNG icon could be found. Callers must treat
 /// the icon as optional.
 pub fn resolve_icon_rgba(app_id: &str) -> Option<(Vec<u8>, u32, u32)> {
+    resolve_icon_rgba_px(app_id, SVG_RASTER_PX)
+}
+
+/// [`resolve_icon_rgba`] at an explicit target size: the theme lookup is
+/// biased toward `px` and the result is always a `px`×`px` square, so the
+/// render path can draw it 1:1 in physical pixels. On a HiDPI output (4K at
+/// 2×) a fixed 64/128px source upscaled by the GPU looked blurry; asking for
+/// the on-screen pixel size picks a large PNG / rasterises the SVG natively.
+pub fn resolve_icon_rgba_px(app_id: &str, px: u32) -> Option<(Vec<u8>, u32, u32)> {
+    let px = px.clamp(MIN_ICON_PX, MAX_ICON_PX);
     let app_id = app_id.trim();
     if app_id.is_empty() {
         return None;
@@ -49,8 +59,8 @@ pub fn resolve_icon_rgba(app_id: &str) -> Option<(Vec<u8>, u32, u32)> {
     //    — this is what the apps menu (whose ids are `.desktop` basenames) uses.
     if let Some(rgba) = find_desktop_file(app_id)
         .and_then(|desktop| parse_icon_key(&desktop))
-        .and_then(|icon| resolve_icon_path(&icon))
-        .and_then(|path| decode_icon(&path))
+        .and_then(|icon| resolve_icon_path(&icon, px))
+        .and_then(|path| decode_icon(&path, px))
     {
         return Some(rgba);
     }
@@ -58,9 +68,9 @@ pub fn resolve_icon_rgba(app_id: &str) -> Option<(Vec<u8>, u32, u32)> {
     //    (firefox-esr, chromium, kate, …), which matches no `.desktop` basename.
     //    Try the id itself as an icon name — this fills in most running-window
     //    dock/switcher tiles whose `.desktop` lookup in step 1 missed.
-    if let Some(rgba) = resolve_icon_path(app_id)
-        .or_else(|| resolve_icon_path(&app_id.to_lowercase()))
-        .and_then(|path| decode_icon(&path))
+    if let Some(rgba) = resolve_icon_path(app_id, px)
+        .or_else(|| resolve_icon_path(&app_id.to_lowercase(), px))
+        .and_then(|path| decode_icon(&path, px))
     {
         return Some(rgba);
     }
@@ -68,7 +78,7 @@ pub fn resolve_icon_rgba(app_id: &str) -> Option<(Vec<u8>, u32, u32)> {
     //    the *client* (e.g. `foot --server` → windows have app_id `footclient`,
     //    which has no `.desktop`/icon of its own). Strip a trailing `client` and
     //    retry, but only adopt the result if the base actually resolves.
-    app_id_alias(app_id).and_then(|base| resolve_icon_rgba(&base))
+    app_id_alias(app_id).and_then(|base| resolve_icon_rgba_px(&base, px))
 }
 
 /// Map a window `app_id` to a base app id for known launcher/window mismatches.
@@ -106,13 +116,14 @@ pub fn themed_icon_path(theme: &str, name: &str) -> Option<String> {
 /// separate from [`resolve_icon_rgba`] so that stays a pure resolver; the render
 /// layer applies this fallback so a tile is never blank. Tries the standard
 /// generic names in order; resolved through the same theme candidates.
-pub fn generic_fallback_icon() -> Option<(Vec<u8>, u32, u32)> {
+pub fn generic_fallback_icon_px(px: u32) -> Option<(Vec<u8>, u32, u32)> {
+    let px = px.clamp(MIN_ICON_PX, MAX_ICON_PX);
     for name in [
         "application-x-executable",
         "applications-other",
         "application-default-icon",
     ] {
-        if let Some(rgba) = resolve_icon_path(name).and_then(|p| decode_icon(&p)) {
+        if let Some(rgba) = resolve_icon_path(name, px).and_then(|p| decode_icon(&p, px)) {
             return Some(rgba);
         }
     }
@@ -123,6 +134,11 @@ pub fn generic_fallback_icon() -> Option<(Vec<u8>, u32, u32)> {
 /// ~18px, but rendering large and letting the GPU downscale keeps
 /// edges crisp; a square box preserves aspect via centred padding.
 const SVG_RASTER_PX: u32 = 128;
+
+/// Bounds for [`resolve_icon_rgba_px`]'s target size — keeps a degenerate or
+/// huge on-screen rect from allocating an absurd buffer.
+const MIN_ICON_PX: u32 = 8;
+const MAX_ICON_PX: u32 = 512;
 
 /// Standard data roots, in priority order, per the Base Directory
 /// spec: `$XDG_DATA_HOME` (or `~/.local/share`), then `$XDG_DATA_DIRS`
@@ -465,7 +481,8 @@ fn expand_field_codes(tok: &str) -> String {
 /// theme sizes (PNG), the `scalable` dir (SVG), and the legacy
 /// pixmaps dir. PNG is preferred over SVG at the same precedence
 /// level — it's cheaper to decode and already pixel-perfect.
-fn resolve_icon_path(icon: &str) -> Option<PathBuf> {
+fn resolve_icon_path(icon: &str, px: u32) -> Option<PathBuf> {
+    let lookup_size = px.min(u16::MAX as u32) as u16;
     let p = Path::new(icon);
     if p.is_absolute() {
         let ext_ok = matches!(
@@ -483,7 +500,7 @@ fn resolve_icon_path(icon: &str) -> Option<PathBuf> {
     // `.desktop` names a standard icon living in Breeze/Adwaita) had no icon.
     for theme in icon_theme_candidates() {
         if let Some(path) = freedesktop_icons::lookup(icon)
-            .with_size(ICON_LOOKUP_SIZE)
+            .with_size(lookup_size)
             .with_theme(&theme)
             .with_cache()
             .find()
@@ -496,8 +513,14 @@ fn resolve_icon_path(icon: &str) -> Option<PathBuf> {
     // in case the resolver misses on an unusual data-dir layout.
     for root in data_dirs() {
         let hicolor = root.join("icons/hicolor");
-        // Sized raster first.
-        for size in ICON_SIZES {
+        // Sized raster first — a source at least as large as the target
+        // (downscales cleanly), else the biggest available.
+        let mut sizes: Vec<&str> = ICON_SIZES.to_vec();
+        sizes.sort_by_key(|s| {
+            let n: u32 = s.split('x').next().and_then(|n| n.parse().ok()).unwrap_or(0);
+            if n >= px { (0, n) } else { (1, u32::MAX - n) }
+        });
+        for size in sizes {
             let c = hicolor.join(size).join("apps").join(format!("{icon}.png"));
             if c.is_file() {
                 return Some(c);
@@ -643,12 +666,34 @@ fn icon_theme_candidates() -> Vec<String> {
 /// Decode an icon file to tightly-packed straight-alpha RGBA8888,
 /// dispatching on extension: SVG → rasterise via `resvg`, anything
 /// else → PNG via the `image` crate.
-fn decode_icon(path: &Path) -> Option<(Vec<u8>, u32, u32)> {
+/// Either way the result is a `px`×`px` square ready to draw 1:1.
+fn decode_icon(path: &Path, px: u32) -> Option<(Vec<u8>, u32, u32)> {
     if path.extension().and_then(|e| e.to_str()) == Some("svg") {
-        rasterize_svg(path)
+        rasterize_svg(path, px)
     } else {
-        decode_png_rgba(path)
+        decode_png_rgba(path).and_then(|(rgba, w, h)| fit_square(rgba, w, h, px))
     }
+}
+
+/// Resample a straight-alpha RGBA buffer to fit a `px`×`px` square
+/// (aspect-preserving, transparent padding). Lanczos keeps edges sharp both
+/// when shrinking a 256px source and when a theme only ships a small PNG.
+fn fit_square(rgba: Vec<u8>, w: u32, h: u32, px: u32) -> Option<(Vec<u8>, u32, u32)> {
+    use image::imageops::{self, FilterType};
+    if w == px && h == px {
+        return Some((rgba, w, h));
+    }
+    let img = image::RgbaImage::from_raw(w, h, rgba)?;
+    let s = (px as f32 / w as f32).min(px as f32 / h as f32);
+    let nw = ((w as f32 * s).round() as u32).clamp(1, px);
+    let nh = ((h as f32 * s).round() as u32).clamp(1, px);
+    let scaled = imageops::resize(&img, nw, nh, FilterType::Lanczos3);
+    if nw == px && nh == px {
+        return Some((scaled.into_raw(), px, px));
+    }
+    let mut canvas = image::RgbaImage::new(px, px);
+    imageops::overlay(&mut canvas, &scaled, ((px - nw) / 2) as i64, ((px - nh) / 2) as i64);
+    Some((canvas.into_raw(), px, px))
 }
 
 /// Decode a PNG into tightly-packed RGBA8888. Delegates colour-type
@@ -664,11 +709,11 @@ fn decode_png_rgba(path: &Path) -> Option<(Vec<u8>, u32, u32)> {
     Some((rgba.into_raw(), w, h))
 }
 
-/// Rasterise an SVG into a square [`SVG_RASTER_PX`] buffer, scaled to
+/// Rasterise an SVG into a square `px`-sized buffer, scaled to
 /// fit while preserving aspect (transparent padding), then convert
 /// `tiny_skia`'s premultiplied output to the straight-alpha RGBA the
 /// rest of the icon pipeline expects.
-fn rasterize_svg(path: &Path) -> Option<(Vec<u8>, u32, u32)> {
+fn rasterize_svg(path: &Path, px: u32) -> Option<(Vec<u8>, u32, u32)> {
     use resvg::{tiny_skia, usvg};
 
     let data = std::fs::read(path).ok()?;
@@ -681,7 +726,7 @@ fn rasterize_svg(path: &Path) -> Option<(Vec<u8>, u32, u32)> {
         return None;
     }
 
-    let box_px = SVG_RASTER_PX;
+    let box_px = px;
     let mut pixmap = tiny_skia::Pixmap::new(box_px, box_px)?;
     // Uniform scale to fit the longer side, centred in the square.
     let scale = (box_px as f32 / sw).min(box_px as f32 / sh);
@@ -841,7 +886,7 @@ mod tests {
         )
         .unwrap();
 
-        let (buf, w, h) = rasterize_svg(&f).expect("valid svg should rasterize");
+        let (buf, w, h) = rasterize_svg(&f, SVG_RASTER_PX).expect("valid svg should rasterize");
         assert_eq!((w, h), (SVG_RASTER_PX, SVG_RASTER_PX));
         assert_eq!(buf.len() as u32, w * h * 4);
 
