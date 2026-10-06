@@ -81,7 +81,7 @@ codegen-units = 1
 
 # `cargo deb` packaging (cargo install cargo-deb && cargo deb)
 [package.metadata.deb]
-revision = "2"
+revision = "3"
 maintainer = "Anadolu Panteri <bilgi@anadolupanteri.org.tr>"
 copyright = "2026, Anadolu Panteri <bilgi@anadolupanteri.org.tr>"
 changelog = "debian/changelog"
