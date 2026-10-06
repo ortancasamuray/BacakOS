@@ -300,6 +300,7 @@
       <a href="#kontrol-merkezi">Kontrol Merkezi</a>
       <a href="#masaustu-ayarlari">Masaüstü Ayarları</a>
       <a href="#uzak-masaustu">Uzak Masaüstü</a>
+      <a href="#uzakel">Uzakel — Telefonla Kontrol</a>
     </div>
     <div class="group">
       <div class="group-label">Güvenlik &amp; Yönetim</div>
@@ -543,8 +544,40 @@
       <p>Eşleşme tamamlanınca karşı bilgisayarın ekranı panelin içinde tam boyutta görünür; tek parmak/tek fare tıklaması gerçek bir dokunuşa/tıklamaya, sürükleme ise sürüklemeye dönüşür. Karşı taraftaki pencereden "Eşleşmeyi Bitir"e basılırsa (Windows/macOS) BacakOS panel otomatik kapanır — sizin bir şey yapmanız gerekmez.</p>
     </section>
 
+    <section id="uzakel">
+      <h2><span class="num">09</span> Uzakel — Telefonla Kontrol</h2>
+      <p class="lede">Android telefonunuzu BacakOS için kablosuz bir <strong>trackpad, klavye ve dosya gönderici</strong>ye çevirir — örneğin tahtanın başında ders anlatırken bilgisayara gitmeden. Telefon ile bilgisayar aynı Wi-Fi ağında olmalıdır; trafik uçtan uca şifrelidir.</p>
+
+      <h3>İlk eşleştirme</h3>
+      <ol class="steps">
+        <li><strong>Bilgisayarda</strong><p>Kontrol Merkezi &rarr; <b>Uzakel'e Bağlan</b> ekranını açın; bir QR kod ve 6 haneli PIN görünür.</p></li>
+        <li><strong>Telefonda</strong><p>Uzakel'i açıp <b>QR kodu ile eşleştir</b>'e basın ve QR'ı okutun. Kamera kullanmak istemezseniz "Ağda bulunanlar" listesinden bilgisayarı seçip PIN'i yazın ya da IP adresini elle girin.</p></li>
+        <li><strong>Bitti</strong><p>Bilgisayar "Bilgisayarlarım" listesine kaydedilir ve kontrol ekranı açılır.</p></li>
+      </ol>
+
+      <h3>Sonraki bağlantılar — PIN gerekmez</h3>
+      <ul>
+        <li>"Bilgisayarlarım" listesinde bilgisayarın kartına dokunmanız yeterli; PIN sorulmaz. Yeşil nokta bilgisayarın şu an ağda göründüğünü gösterir.</li>
+        <li>Bağlantı koparsa (Wi-Fi değişti, bilgisayar yeniden başladı, IP adresi değişti) uygulama birkaç saniye içinde <strong>kendiliğinden yeniden bağlanır</strong>. Kontrol ekranının üstündeki şerit durumu gösterir: <em>yeniden bağlanılıyor</em>, <em>ulaşılamıyor</em> (arka planda denemeye devam eder; "Şimdi dene" ile hemen dener) ya da <em>yeniden eşleştirme gerekli</em>.</li>
+        <li>Kontrol ekranında <kbd>Geri</kbd> bağlantıyı keser ve listeye döner.</li>
+      </ul>
+
+      <h3>Kontrol ekranı</h3>
+      <div class="card-grid">
+        <div class="card"><h4>1 parmak sürükleme</h4><p>İmleci hareket ettirir</p></div>
+        <div class="card"><h4>1 parmak dokunma</h4><p>Sol tık (ve telefon klavyesini açar)</p></div>
+        <div class="card"><h4>2 parmak dokunma</h4><p>Sağ tık</p></div>
+        <div class="card"><h4>2 parmak sürükleme</h4><p>Kaydırma</p></div>
+      </div>
+      <p>Üstteki düğmeler <kbd>Ctrl</kbd>, <kbd>Alt</kbd>, <kbd>Super</kbd> (basılı tutulur, tekrar dokununca bırakılır), <kbd>Esc</kbd>, <kbd>Tab</kbd>, ok tuşları, <kbd>⌫</kbd> ve <kbd>⏎</kbd> gönderir. Telefonun kendi klavyesiyle yazdıklarınız bilgisayara yazılır. <b>Dosyalar</b> ile telefondan bir dosya seçip gönderebilirsiniz; dosya bilgisayarda <code>İndirilenler</code> klasörüne iner ve SHA-256 ile doğrulanır.</p>
+
+      <div class="note">
+        <strong>Güvenlik ve temizlik:</strong> Eşleşme sırasında PIN yalnızca anahtar değişimini doğrulamak için kullanılır; sonraki bağlantılarda her seferinde yeni şifreleme anahtarları üretilir. Yanlış PIN 5 kez denenirse bilgisayar PIN'i değiştirir. <strong>30 gün kullanılmayan eşleşmeler</strong> hem telefondan hem bilgisayardan otomatik silinir; bir bilgisayarı listeden çöp kutusu simgesiyle elle de silebilirsiniz.
+      </div>
+    </section>
+
     <section id="bacak-onay">
-      <h2><span class="num">09</span> Bacak Onay — İki Adımlı Giriş</h2>
+      <h2><span class="num">10</span> Bacak Onay — İki Adımlı Giriş</h2>
       <p class="lede">Giriş ekranında paroladan sonra telefondaki <strong>Bacak Onay</strong> uygulamasının ürettiği 6 haneli kodu da isteyerek hesabınızı korur. Parolanız ele geçse bile telefonunuz olmadan oturum açılamaz.</p>
 
       <h3>Telefon uygulaması</h3>
@@ -575,7 +608,7 @@
     </section>
 
     <section id="uzak-yonetim">
-      <h2><span class="num">10</span> Uzak Yönetim (Filo)</h2>
+      <h2><span class="num">11</span> Uzak Yönetim (Filo)</h2>
       <p class="lede">Okul, laboratuvar veya kurumdaki — farklı ağlarda bile olsa — çok sayıda BacakOS bilgisayarını tek bir <strong>web panelinden</strong> yönetmek için. Yönetici, uzak makinelerde hesap açabilir, Bacak Onay kaydı yapabilir ve belirli aralıklarla ekran görüntülerini izleyebilir.</p>
 
       <h3>Kullanıcı olarak bilmeniz gerekenler</h3>
@@ -601,7 +634,7 @@
     </section>
 
     <section id="dosya-yoneticisi">
-      <h2><span class="num">11</span> Dosya Yöneticisi — altay</h2>
+      <h2><span class="num">12</span> Dosya Yöneticisi — altay</h2>
       <p class="lede">Ev dizininizi ve bağlı sürücüleri gezmek için. Sistem dizinlerine erişimi kapalıdır (sandbox).</p>
 
       <h3>Arşivler</h3>
@@ -622,7 +655,7 @@
     </section>
 
     <section id="belge-goruntuleyici">
-      <h2><span class="num">12</span> Belge Görüntüleyici — bacak-belge</h2>
+      <h2><span class="num">13</span> Belge Görüntüleyici — bacak-belge</h2>
       <p class="lede">PDF, EPUB ve resim dosyaları için tek, birleşik görüntüleyici.</p>
       <ul>
         <li><strong>PDF:</strong> sayfa sayfa gezinme, %10–%800 arası yakınlaştırma.</li>
@@ -633,7 +666,7 @@
     </section>
 
     <section id="tahta">
-      <h2><span class="num">13</span> Dijital Tahta — tahta</h2>
+      <h2><span class="num">14</span> Dijital Tahta — tahta</h2>
       <p class="lede">
         Dokunmatik etkileşimli panellerde ders/sunum yapmak için tasarlanmış,
         wgpu tabanlı tam ekran çizim uygulaması. Açılır açılmaz tam ekrana
@@ -660,7 +693,7 @@
     </section>
 
     <section id="varsayilan-uygulamalar">
-      <h2><span class="num">14</span> Varsayılan Uygulamalar</h2>
+      <h2><span class="num">15</span> Varsayılan Uygulamalar</h2>
       <p class="lede">Dock'ta hazır sabitlenmiş gelen uygulamalar:</p>
       <div class="app-list">
         <div class="card"><span class="app-icon">A</span><div><h4>altay</h4><p>Dosya yöneticisi</p></div></div>
@@ -672,13 +705,16 @@
     </section>
 
     <section id="sorun-giderme">
-      <h2><span class="num">15</span> Sorun Giderme</h2>
+      <h2><span class="num">16</span> Sorun Giderme</h2>
 
       <h3>Açılışta ekran siyah kalıyor / sürekli yanıp sönen imleç</h3>
       <p>Ctrl+Alt+F2 ile bir metin konsoluna geçip <code>systemctl status bacak-display-manager</code> ve <code>journalctl -u bacak-display-manager</code> ile hata mesajına bakın. Genellikle giriş ekranı servisinin bir önceki oturumu düzgün kapatamamasından kaynaklanır; <code>sudo systemctl restart bacak-display-manager</code> çoğu zaman yeterlidir.</p>
 
       <h3>Bir jest veya kısayol beklediğim gibi çalışmıyor</h3>
       <p>Jest eşikleri (dokunma süresi, sürükleme mesafesi) şu an kullanıcı ayarlarından değiştirilemiyor — sabit değerlerdir. Beklenmedik davranış görüyorsanız dokunmatik yüzeyinizin sürücü ayarlarını (varsa) kontrol edin.</p>
+
+      <h3>Uzakel bilgisayarı bulamıyor ya da bağlanmıyor</h3>
+      <p>Telefon ile bilgisayarın aynı Wi-Fi ağında olduğundan emin olun (misafir ağları cihazları birbirinden ayırabilir). Bilgisayarda Uzakel servisinin çalıştığını <code>systemctl --user status uzakel-daemon</code> ile kontrol edin; kapalıysa <code>systemctl --user restart uzakel-daemon</code>. Uygulama "bu bilgisayar eşleşmeyi tanımıyor" diyorsa (30 gün kullanılmamış olabilir) Kontrol Merkezi &rarr; Uzakel'e Bağlan ile yeniden eşleştirin.</p>
 
       <h3>4K / yüksek çözünürlüklü ekranda her şey çok küçük veya çok büyük</h3>
       <p>BacakOS ekranın fiziksel boyutundan yoğunluğu (DPI) hesaplayıp ölçeği kendisi seçer: 150 DPI ve üzerinde 2×, altında 1×. Simgeler ve imleç her ölçekte ekranın gerçek çözünürlüğünde çizilir. Büyük (32" ve üzeri) bir 4K monitörde 1× seçildiği için her şey küçük görünüyorsa, <code>~/.config/bacak/compositor.json</code> içinde ilgili çıkış için <code>"outputs": {"&lt;bağlantı&gt;": {"scale": 2}}</code> ayarlayın; geçici olarak <code>BACAK_SCALE=2</code> ortam değişkeni de kullanılabilir.</p>
@@ -697,7 +733,7 @@
     </section>
 
     <footer>
-      <span>BacakOS &middot; bacak-compositor / turan / bacakonay / uzakyonetim / altay / bacak-belge / tahta / kur</span>
+      <span>BacakOS &middot; bacak-compositor / turan / uzakel / bacakonay / uzakyonetim / altay / bacak-belge / tahta / kur</span>
       <span>Bu kılavuz kod tabanından derlenmiştir, sürüm ilerledikçe güncellenmelidir</span>
     </footer>
   </main>
