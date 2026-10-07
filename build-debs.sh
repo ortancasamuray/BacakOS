@@ -73,6 +73,9 @@ log "=== bacak workspace derleniyor ==="
     log "bacak-plymouth-theme deb oluşturuluyor"
     cargo deb --no-build -p bacak-plymouth-theme -o "$DIST"
 
+    log "bacak-plugin-uzakel deb oluşturuluyor"
+    cargo deb --no-build -p bacak-plugin-uzakel -o "$DIST"
+
     log "bacak (CLI) deb oluşturuluyor"
     cargo deb --no-build -p bacak-cli -o "$DIST"
 )
@@ -128,6 +131,21 @@ UZAKYONETIM_SRC="$HERE/uzakyonetim"
 
     log "uzakyonetim-sunucu deb oluşturuluyor"
     cargo deb --no-build -p uzy-sunucu -o "$DIST"
+)
+
+# ---------------------------------------------------------------------------
+# uzakel-daemon: Uzakel telefon uygulamasının BacakOS tarafı (girdi + dosya)
+# ---------------------------------------------------------------------------
+log "=== uzakel-daemon derleniyor ==="
+UZAKEL_SRC="$HERE/uzakel/uzakel-android/daemon"
+(
+    cd "$UZAKEL_SRC"
+
+    log "uzakel-daemon derleniyor…"
+    cargo build --release
+
+    log "uzakel-daemon deb oluşturuluyor"
+    cargo deb --no-build -o "$DIST"
 )
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,3 @@
+# Uzakel: seat0'da etkin oturumu olan kullanıcıya /dev/uinput erişimi ver
+# (logind uaccess ACL'i). 73-seat-late.rules'tan önce çalışmalı.
+KERNEL=="uinput", SUBSYSTEM=="misc", TAG+="uaccess", OPTIONS+="static_node=uinput"

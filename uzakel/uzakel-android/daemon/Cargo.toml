@@ -30,3 +30,25 @@ hmac = "0.13.0"
 [profile.release]
 panic = "abort"
 lto = true
+
+[package.metadata.deb]
+revision = "1"
+maintainer = "Anadolu Panteri <bilgi@anadolupanteri.org.tr>"
+copyright = "2026, Anadolu Panteri <bilgi@anadolupanteri.org.tr>"
+section = "net"
+priority = "optional"
+depends = "$auto, libnotify-bin"
+recommends = "bacak-plugin-uzakel"
+extended-description = """\
+BacakOS side of Uzakel: lets the Uzakel Android app act as a trackpad and
+keyboard for this desktop and send files to it over the local network.
+Pairing is PIN/QR based with end-to-end encryption; input is replayed via
+/dev/uinput, which the active seat user is granted through logind (uaccess).
+Runs as a per-user systemd service, enabled globally on install."""
+assets = [
+    ["target/release/uzakel-daemon", "usr/bin/", "755"],
+    ["paket/uzakel-daemon.service", "usr/lib/systemd/user/", "644"],
+    ["paket/70-uzakel-uinput.rules", "usr/lib/udev/rules.d/", "644"],
+    ["paket/uzakel-uinput.conf", "usr/lib/modules-load.d/", "644"],
+]
+maintainer-scripts = "paket/debian/"
