@@ -13,7 +13,7 @@ use base64::Engine;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::{api, auth, files, App};
+use crate::{admins, api, auth, files, App};
 
 const INDEX_HTML: &str = include_str!("../../../web/index.html");
 const APP_JS: &str = include_str!("../../../web/app.js");
@@ -78,6 +78,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/denetim", get(audit))
         .route("/api/katilim-kodu", post(join_code))
         .merge(api::routes())
+        .merge(admins::routes())
         .layer(axum::middleware::map_response(security_headers))
         .with_state(app)
 }
@@ -137,11 +138,16 @@ async fn login(
     }
     app.login_limit.success(ip, &req.kullanici);
     app.db.audit(&req.kullanici, "-", "giris", &ip.to_string(), "tamam");
-    let (token, csrf) = app.sessions.create(&req.kullanici);
+    session_response(&app, &req.kullanici)
+}
+
+/// Starts a session for `admin`: cookie plus the CSRF token for the UI.
+pub fn session_response(app: &App, admin: &str) -> Response {
+    let (token, csrf) = app.sessions.create(admin);
     let cookie = format!("{}={token}; Path=/; HttpOnly; Secure; SameSite=Strict", auth::COOKIE);
     (
         [(header::SET_COOKIE, cookie)],
-        Json(json!({ "yonetici": req.kullanici, "csrf": csrf })),
+        Json(json!({ "yonetici": admin, "csrf": csrf })),
     )
         .into_response()
 }

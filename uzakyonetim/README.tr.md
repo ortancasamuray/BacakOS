@@ -31,7 +31,7 @@ erişilebilir olmalıdır.
 | Sahte makinenin filoya katılması | Yalnızca panelin ürettiği **tek kullanımlık, süreli katılım koduyla** kayıt. Ajan anahtarını kendisi üretir; sunucu yalnızca CSR'ın açık anahtarını alır, sertifikanın tüm alanlarını (CN = makine kimliği, yalnız `clientAuth`, CA değil) kendisi belirler. Jetonun yalnızca SHA-256'sı saklanır. |
 | Sahte sunucu / araya girme (MITM) | Katılım kodu sunucu CA'sının SHA-256 parmak izini taşır; ajan **ilk bağlantıda bile** yalnızca bu CA'ya güvenir. Sonrasında karşılıklı TLS (mTLS). |
 | Panele yetkisiz giriş | Argon2id parola **ve** zorunlu Bacak Onay kodu (tekrar kullanılamaz). IP ve kullanıcı başına 5 hatada 15 dk kilit. Sunucu tarafı oturum (30 dk hareketsizlik / 8 sa üst sınır), `HttpOnly; Secure; SameSite=Strict` çerez, her değiştirici istekte CSRF jetonu, sıkı CSP. |
-| Sunucunun ele geçirilmesi | Ajan **keyfi komut çalıştırmaz**; yalnızca sabit işlemler: kullanıcı listele, hesap aç (asla `sudo` grubuna değil), Bacak Onay başlat/onayla/kaldır, ekran al. Her makinede `/etc/uzakyonetim/politika.toml` bu işlemleri tek tek kapatabilir. |
+| Sunucunun ele geçirilmesi | Ajan **keyfi komut çalıştırmaz**; yalnızca sabit işlemler: kullanıcı listele, hesap aç (asla `sudo` grubuna değil), hesap sil (yönetici ve sistem hesapları asla; ev dizini de silinir), Bacak Onay başlat/onayla/kaldır, ekran al. Her makinede `/etc/uzakyonetim/politika.toml` bu işlemleri tek tek kapatabilir. |
 | Gizli anahtarların sızması | Bacak Onay anahtarı **ajanda** üretilir, QR panelde bir kez gösterilir, sunucuda saklanmaz; telefon doğru kodu gönderene kadar etkinleşmez. Parolalar `chpasswd`'ye stdin'den verilir (argv'de görünmez). |
 | Ele geçen/çalınan makine | Panelden **"Filodan çıkar"**: sertifika iptal edilir, bağlantı anında kesilir, bir daha bağlanamaz. |
 | Gizli izleme | İzleme açıkken ekranda "İzleniyor" göstergesi (compositor çizer, ajan durunca systemd göstergeyi kaldırır). Göstergenin kendisi ekran görüntüsünde de görünür. |
@@ -59,11 +59,19 @@ paket/               systemd servisleri, politika dosyası, deb betikleri
 ### 1. Sunucu (internetten ya da tüm ağlardan erişilebilir bir Debian/BacakOS makinesi)
 
 ```sh
-sudo apt install ./uzakyonetim-sunucu_0.1.0-1_amd64.deb
-sudo -u uzakyonetim uzakyonetim-sunucu kurulum --adres yonetim.okul.tr --adres 203.0.113.7
-sudo -u uzakyonetim uzakyonetim-sunucu yonetici-ekle mudur     # parola + Bacak Onay QR
-sudo systemctl enable --now uzakyonetim-sunucu
+sudo apt install uzakyonetim-sunucu
 ```
+
+Paket CA'yı, sertifikaları ve veritabanını kendisi oluşturur (ajan adresleri:
+varsayılan yolun IP'si, diğer IPv4'ler ve makine adı), servisi başlatır ve tek
+kullanımlık bir bağlantı yazar: `https://<ip>:8443/#kurulum=<jeton>`. Bu
+bağlantıyı tarayıcıda açıp ilk yöneticiyi oluşturun (parola + Bacak Onay QR);
+bir yönetici oluşunca bağlantı geçersizleşir. Kaybettiyseniz: `sudo cat
+/var/lib/uzakyonetim-sunucu/kurulum-jetonu`. Başka yöneticiler: panel →
+**Ayarlar → Yöneticiler** (herkes kendi QR'ını okutur) ya da `sudo -u
+uzakyonetim uzakyonetim-sunucu yonetici-ekle <ad>`. Farklı adresler için
+paketi `purge` edip `sudo -u uzakyonetim uzakyonetim-sunucu kurulum --adres …`
+komutunu elle çalıştırın.
 
 `--adres`: ajanların sunucuya ulaşacağı alan adı/IP'ler (sertifikaya yazılır;
 ilki katılım kodlarında kullanılır). Güvenlik duvarında 8443/tcp (panel) ve
@@ -78,7 +86,7 @@ ekleyebilirsiniz). Genel geçer bir sertifika (ör. Let's Encrypt) için
 1. Panel → **+ Makine ekle** → komutu kopyalayın (tek kullanımlık, 60 dk geçerli).
 2. Makinede:
    ```sh
-   sudo apt install ./uzakyonetim-ajan_0.1.0-1_amd64.deb     # bacakonay ve grim'i de çeker
+   sudo apt install uzakyonetim-ajan     # bacakonay ve grim'i de çeker
    sudo uzakyonetim-ajan kaydol uzy1.eyJ…                    # panelden kopyalanan komut
    sudo systemctl enable --now uzakyonetim-ajan
    ```

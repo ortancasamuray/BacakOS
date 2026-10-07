@@ -21,7 +21,7 @@ no open ports; only the server's 8444 (agents) and 8443 (panel) must be reachabl
 | Rogue machine joining | Enrollment only with a **single-use, expiring join code** from the panel. The agent generates its own key; the server takes only the CSR's public key and sets every certificate field itself (CN = machine id, `clientAuth` only, not a CA). Only the token's SHA-256 is stored. |
 | Fake server / MITM | The join code carries the SHA-256 of the server CA; the agent trusts only that CA **even on first contact**. Mutual TLS afterwards. |
 | Unauthorised panel login | Argon2id password **and** mandatory Bacak Onay code (no replay). 5 failures per IP or user → 15 min lock. Server-side sessions (30 min idle / 8 h max), `HttpOnly; Secure; SameSite=Strict` cookie, CSRF token on every state change, strict CSP. |
-| Compromised server | The agent runs **no arbitrary commands** — only: list users, create account (never in `sudo`), Bacak Onay begin/confirm/remove, screenshot. `/etc/uzakyonetim/politika.toml` on each machine can switch any of these off. |
+| Compromised server | The agent runs **no arbitrary commands** — only: list users, create account (never in `sudo`), delete account (never admins or system accounts; removes the home directory), Bacak Onay begin/confirm/remove, screenshot. `/etc/uzakyonetim/politika.toml` on each machine can switch any of these off. |
 | Secret leakage | Bacak Onay secrets are generated **on the agent**, shown once as a QR, never stored on the server, and only activated after the phone returns a valid code. Passwords reach `chpasswd` via stdin, never argv. |
 | Stolen machine | **"Filodan çıkar"** revokes its certificate and drops the connection immediately. |
 | Covert monitoring | Visible "İzleniyor" badge drawn by the compositor while monitoring is on; systemd removes it whenever the agent stops. The badge is part of the screenshots too. |
@@ -49,11 +49,18 @@ The badge lives in `bacak-compositor` (drawn top-right while
 **Server** (reachable from all networks):
 
 ```sh
-sudo apt install ./uzakyonetim-sunucu_0.1.0-1_amd64.deb
-sudo -u uzakyonetim uzakyonetim-sunucu kurulum --adres manage.school.example --adres 203.0.113.7
-sudo -u uzakyonetim uzakyonetim-sunucu yonetici-ekle principal    # password + Bacak Onay QR
-sudo systemctl enable --now uzakyonetim-sunucu
+sudo apt install uzakyonetim-sunucu
 ```
+
+The package creates the CA, certificates and database itself (agent
+addresses: the default-route IP, the other IPv4s and the host name), starts
+the service and prints a one-time link `https://<ip>:8443/#kurulum=<token>`.
+Open it to create the first admin (password + Bacak Onay QR); the link stops
+working once an admin exists. Lost it? `sudo cat
+/var/lib/uzakyonetim-sunucu/kurulum-jetonu`. More admins: panel → **Ayarlar →
+Yöneticiler** (each scans their own QR), or `sudo -u uzakyonetim
+uzakyonetim-sunucu yonetici-ekle <name>`. Other addresses: purge and run
+`sudo -u uzakyonetim uzakyonetim-sunucu kurulum --adres …` yourself.
 
 Open 8443/tcp and 8444/tcp. The panel uses a certificate from the server's own
 CA by default; set `panel_sertifika` / `panel_anahtar` in
@@ -62,7 +69,7 @@ CA by default; set `panel_sertifika` / `panel_anahtar` in
 **Each BacakOS machine:** panel → **+ Makine ekle** → copy the command, then
 
 ```sh
-sudo apt install ./uzakyonetim-ajan_0.1.0-1_amd64.deb
+sudo apt install uzakyonetim-ajan
 sudo uzakyonetim-ajan kaydol uzy1.eyJ…
 sudo systemctl enable --now uzakyonetim-ajan
 ```

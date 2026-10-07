@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Machine endpoints: list, screenshots, accounts, Bacak Onay, revoke.
+//! Machine endpoints: list, screenshots, accounts (create/delete), Bacak Onay, revoke.
 //! Every state change is written to the audit log.
 
 use std::sync::Arc;
@@ -29,6 +29,7 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/makineler/{id}/ekran-al", post(take_screenshot))
         .route("/api/makineler/{id}/kullanicilar", get(users))
         .route("/api/makineler/{id}/hesap", post(create_account))
+        .route("/api/makineler/{id}/hesap/sil", post(delete_account))
         .route("/api/makineler/{id}/bacakonay", post(totp_begin))
         .route("/api/makineler/{id}/bacakonay/onayla", post(totp_confirm))
         .route("/api/makineler/{id}/bacakonay/kaldir", post(totp_remove))
@@ -129,7 +130,7 @@ async fn users(State(app): State<Arc<App>>, _a: Admin, Path(id): Path<String>) -
 
 /// QR of the `otpauth://` URI as an SVG data URL + the base32 key for manual
 /// entry. Shown once, never stored on the server.
-fn qr_payload(uri: &str) -> Result<serde_json::Value, ApiError> {
+pub fn qr_payload(uri: &str) -> Result<serde_json::Value, ApiError> {
     let code = qrcode::QrCode::new(uri.as_bytes()).map_err(|e| bad(e.to_string()))?;
     let svg = code
         .render::<qrcode::render::svg::Color>()
@@ -206,6 +207,13 @@ async fn totp_confirm(State(app): State<Arc<App>>, admin: Admin, Path(id): Path<
     }
     let cmd = Command::BacakonayOnayla { kullanici: req.kullanici.clone(), kod: req.kod };
     call(&app, &admin.name, &id, "bacakonay_onayla", &req.kullanici, cmd).await?;
+    Ok(Json(json!({ "tamam": true })))
+}
+
+async fn delete_account(State(app): State<Arc<App>>, admin: Admin, Path(id): Path<String>, Json(req): Json<UserReq>) -> ApiResult {
+    check_user(&req.kullanici)?;
+    let cmd = Command::HesapSil { kullanici: req.kullanici.clone() };
+    call(&app, &admin.name, &id, "hesap_sil", &req.kullanici, cmd).await?;
     Ok(Json(json!({ "tamam": true })))
 }
 

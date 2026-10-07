@@ -4,6 +4,8 @@
   --pas: #d96c2d; --yesil: #4caf7d; --kirmizi: #ff8a80;
 }
 * { box-sizing: border-box; }
+/* Class rules like .giris { display: grid } would otherwise override the hidden attribute. */
+[hidden] { display: none !important; }
 body { margin: 0; background: var(--gece); color: var(--metin); font: 15px/1.45 system-ui, "DejaVu Sans", sans-serif; }
 button, input, select { font: inherit; color: inherit; }
 button { background: var(--kart2); border: 1px solid var(--cizgi); border-radius: 8px; padding: 7px 14px; cursor: pointer; }
@@ -12,12 +14,14 @@ button.birincil { background: var(--ege-orta); border-color: var(--ege); }
 button.tehlike { border-color: var(--kirmizi); color: var(--kirmizi); }
 button:disabled { opacity: .5; cursor: default; }
 input, select { background: var(--gece); border: 1px solid var(--cizgi); border-radius: 8px; padding: 8px 10px; width: 100%; }
+input[type="checkbox"] { width: auto; margin: 0; }
 label { display: block; margin: 10px 0; color: var(--soluk); font-size: 13px; }
 label input, label select { margin-top: 4px; color: var(--metin); font-size: 15px; }
 .soluk { color: var(--soluk); }
 .hata { color: var(--kirmizi); }
 .kart { background: var(--kart); border: 1px solid var(--cizgi); border-radius: 14px; padding: 18px; }
 .dar { max-width: 460px; }
+.kart + .kart { margin-top: 16px; }
 .giris { min-height: 100vh; display: grid; place-items: center; padding: 16px; }
 .giris-kart { width: min(380px, 100%); }
 .giris-kart h1 { margin: 0; }

@@ -10,6 +10,7 @@
 //! Data lives in `/var/lib/uzakyonetim-sunucu` (0700): CA key, server
 //! certificate, SQLite DB and screenshots. `UZY_VERI` overrides it.
 
+mod admins;
 mod api;
 mod auth;
 mod ca;
@@ -54,6 +55,7 @@ pub struct App {
     pub enroll_limit: gateway::EnrollLimiter,
     pub sessions: auth::Sessions,
     pub login_limit: auth::LoginLimiter,
+    pub pending_admins: admins::Pending,
     pub cfg: Config,
     pub data: PathBuf,
 }
@@ -78,7 +80,7 @@ Kullanım:
   uzakyonetim-sunucu kurulum --adres AD_YA_DA_IP [--adres …] [--panel 0.0.0.0:8443] [--ajan-portu 8444]
       CA'yı, sunucu sertifikasını ve ayarları oluşturur (bir kez).
   uzakyonetim-sunucu yonetici-ekle AD
-      Panel yöneticisi ekler/günceller: parola + Bacak Onay QR'ı.
+      Panel yöneticisi ekler/günceller: parola + Bacak Onay QR'ı (panelden de eklenebilir).
   uzakyonetim-sunucu baslat
       Web panelini ve ajan kapısını çalıştırır (systemd servisi).";
 
@@ -137,10 +139,20 @@ fn setup(args: &[String]) -> Result<(), String> {
     };
     files::write_private(&dir.join("ayar.json"), &serde_json::to_vec_pretty(&cfg).unwrap())?;
     db::Db::open(&dir.join("uzakyonetim.db"))?;
+    let token = admins::write_setup_token(&dir)?;
     println!("✓ Kurulum tamam: {}", dir.display());
     println!("  CA parmak izi (SHA-256): {}", ca.fingerprint());
-    println!("  Sıradaki adım: sudo uzakyonetim-sunucu yonetici-ekle <ad>");
+    println!("  İlk yöneticiyi tarayıcıdan oluşturun: {}", setup_link(&cfg, &token));
     Ok(())
+}
+
+/// Panel link that opens the first-admin screen. The token rides in the
+/// fragment, so it never reaches server or proxy logs.
+fn setup_link(cfg: &Config, token: &str) -> String {
+    let host = cfg.adresler.first().map(String::as_str).unwrap_or("localhost");
+    let host = if host.contains(':') { format!("[{host}]") } else { host.to_string() };
+    let port = cfg.panel_adresi.rsplit(':').next().unwrap_or("8443");
+    format!("https://{host}:{port}/#kurulum={token}")
 }
 
 fn read_line_hidden(prompt: &str) -> Result<zeroize::Zeroizing<String>, String> {
@@ -199,6 +211,7 @@ fn add_admin(name: Option<&String>) -> Result<(), String> {
         if otp::verify_totp(&secret, &params, &code, db::now() as u64, 1, None).is_some() {
             db.add_admin(name, &auth::hash_password(&pw)?, &base32::encode(&secret))?;
             db.audit("yerel", "-", "yonetici_ekle", name, "tamam");
+            admins::remove_setup_token(&dir);
             println!("✓ {name} panel yöneticisi olarak eklendi.");
             return Ok(());
         }
@@ -218,7 +231,7 @@ async fn serve() -> Result<(), String> {
     let ca = ca::Ca::load(&dir)?;
     let db = db::Db::open(&dir.join("uzakyonetim.db"))?;
     if db.admin_count() == 0 {
-        log::warn!("hiç yönetici yok — `uzakyonetim-sunucu yonetici-ekle <ad>` çalıştırın");
+        log::warn!("hiç yönetici yok — panelde ilk yöneticiyi oluşturun (bağlantı: kurulum-jetonu)");
     }
     let read = |n: &str| std::fs::read_to_string(dir.join(n)).map_err(|e| format!("{n}: {e}"));
     let (crt, key) = (read("sunucu.crt")?, read("sunucu.key")?);
@@ -233,6 +246,7 @@ async fn serve() -> Result<(), String> {
         enroll_limit: Default::default(),
         sessions: Default::default(),
         login_limit: Default::default(),
+        pending_admins: Default::default(),
         cfg: cfg.clone(),
         data: dir.clone(),
     });

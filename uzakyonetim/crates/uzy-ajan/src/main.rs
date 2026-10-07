@@ -126,8 +126,9 @@ fn status() -> Result<(), String> {
     let p = config::policy();
     let yn = |b: bool| if b { "izinli" } else { "KAPALI" };
     println!(
-        "Yerel politika : hesap açma {}, Bacak Onay {}, ekran izleme {}",
+        "Yerel politika : hesap açma {}, hesap silme {}, Bacak Onay {}, ekran izleme {}",
         yn(p.hesap_acma),
+        yn(p.hesap_silme),
         yn(p.bacakonay),
         yn(p.ekran_izleme)
     );
@@ -260,6 +261,8 @@ async fn execute(cmd: Command, policy: uzy_proto::Policy, pending: &ops::Pending
             }
             ops::create_account(&kullanici, &tam_ad, &parola).await
         }
+        Command::HesapSil { kullanici } if policy.hesap_silme => ops::delete_account(pending, &kullanici).await,
+        Command::HesapSil { .. } => denied("hesap silme"),
         Command::BacakonayBaslat { kullanici } if policy.bacakonay => ops::totp_begin(pending, &kullanici),
         Command::BacakonayOnayla { kullanici, kod } if policy.bacakonay => ops::totp_confirm(pending, &kullanici, &kod),
         Command::BacakonayKaldir { kullanici } if policy.bacakonay => ops::totp_remove(&kullanici),

@@ -34,6 +34,7 @@ async fn start() -> Fixture {
         enroll_limit: Default::default(),
         sessions: auth::Sessions::default(),
         login_limit: Default::default(),
+        pending_admins: Default::default(),
         cfg: Config {
             adresler: vec!["127.0.0.1".into()],
             ajan_portu: 0,

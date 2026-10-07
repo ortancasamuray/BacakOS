@@ -68,16 +68,90 @@ pub async fn capture() -> Result<Screenshot, String> {
         .args(["-u", &t.user, "--", "env"])
         .arg(format!("XDG_RUNTIME_DIR=/run/user/{}", t.uid))
         .arg(format!("WAYLAND_DISPLAY={name}"))
-        .args(["grim", "-t", "jpeg", "-q", "60", "-s", "0.5", "-"])
+        // Debian's grim is built without libjpeg ("jpeg support disabled"),
+        // so take raw PPM and encode the JPEG here.
+        .args(["grim", "-t", "ppm", "-s", "0.5", "-"])
         .output()
         .await
         .map_err(|e| format!("grim çalıştırılamadı: {e}"))?;
     if !out.status.success() || out.stdout.is_empty() {
         return Err(format!("grim: {}", String::from_utf8_lossy(&out.stderr).trim()));
     }
+    let jpeg = tokio::task::spawn_blocking(move || ppm_to_jpeg(&out.stdout))
+        .await
+        .map_err(|e| format!("JPEG kodlama: {e}"))??;
     Ok(Screenshot {
         zaman: SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
         oturum: (t.class != "greeter").then_some(t.user),
-        jpeg_b64: base64::engine::general_purpose::STANDARD.encode(out.stdout),
+        jpeg_b64: base64::engine::general_purpose::STANDARD.encode(jpeg),
     })
+}
+
+/// Parses a binary PPM (P6, maxval 255) as written by grim.
+fn parse_ppm(data: &[u8]) -> Result<(u16, u16, &[u8]), String> {
+    let mut pos = 0;
+    let mut field = || -> Result<&[u8], String> {
+        loop {
+            match data.get(pos) {
+                Some(b'#') => while data.get(pos).is_some_and(|&b| b != b'\n') { pos += 1 },
+                Some(b) if b.is_ascii_whitespace() => pos += 1,
+                Some(_) => break,
+                None => return Err("PPM başlığı eksik".into()),
+            }
+        }
+        let start = pos;
+        while data.get(pos).is_some_and(|b| !b.is_ascii_whitespace()) {
+            pos += 1;
+        }
+        Ok(&data[start..pos])
+    };
+    if field()? != b"P6" {
+        return Err("PPM değil (P6 bekleniyordu)".into());
+    }
+    let mut num = || -> Result<u16, String> {
+        std::str::from_utf8(field()?).ok().and_then(|s| s.parse().ok()).ok_or_else(|| "PPM başlığı bozuk".to_string())
+    };
+    let (w, h, max) = (num()?, num()?, num()?);
+    if max != 255 || w == 0 || h == 0 {
+        return Err(format!("desteklenmeyen PPM: {w}x{h}, maxval {max}"));
+    }
+    // Exactly one whitespace byte separates the header from the pixels.
+    let pixels = data.get(pos + 1..).unwrap_or_default();
+    let need = w as usize * h as usize * 3;
+    if pixels.len() < need {
+        return Err(format!("PPM kısa: {} / {need} bayt", pixels.len()));
+    }
+    Ok((w, h, &pixels[..need]))
+}
+
+fn ppm_to_jpeg(ppm: &[u8]) -> Result<Vec<u8>, String> {
+    let (w, h, rgb) = parse_ppm(ppm)?;
+    let mut jpeg = Vec::new();
+    jpeg_encoder::Encoder::new(&mut jpeg, 60)
+        .encode(rgb, w, h, jpeg_encoder::ColorType::Rgb)
+        .map_err(|e| format!("JPEG kodlama: {e}"))?;
+    Ok(jpeg)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ppm_header_with_comment() {
+        let mut ppm = b"P6\n# grim\n2 1\n255\n".to_vec();
+        ppm.extend_from_slice(&[255, 0, 0, 0, 0, 255]);
+        let (w, h, px) = parse_ppm(&ppm).unwrap();
+        assert_eq!((w, h, px.len()), (2, 1, 6));
+        // The server rejects anything that doesn't start with the JPEG SOI marker.
+        assert!(ppm_to_jpeg(&ppm).unwrap().starts_with(&[0xFF, 0xD8, 0xFF]));
+    }
+
+    #[test]
+    fn ppm_rejects_bad_input() {
+        assert!(parse_ppm(b"P5\n1 1\n255\n\0").is_err());
+        assert!(parse_ppm(b"P6\n2 2\n255\n\0\0\0").is_err());
+        assert!(parse_ppm(b"P6\n1 1\n65535\n\0\0\0\0\0\0").is_err());
+        assert!(parse_ppm(b"P6\n").is_err());
+    }
 }
