@@ -1,15 +1,43 @@
 #!/bin/sh
 set -e
+VERI=/var/lib/uzakyonetim-sunucu
+
+# Addresses agents can reach this server at: the source IP of the default
+# route first (it goes into join codes), then the other IPv4s and the name.
+adresler() {
+    birincil=$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p')
+    for a in $birincil $(hostname -I 2>/dev/null); do
+        case "$a" in *:*|127.*) continue ;; esac
+        echo "$a"
+    done | awk '!g[$0]++'
+    hostname
+}
+
 if [ "$1" = "configure" ]; then
     if ! getent passwd uzakyonetim >/dev/null; then
-        adduser --system --group --home /var/lib/uzakyonetim-sunucu --no-create-home uzakyonetim
+        adduser --system --group --home "$VERI" --no-create-home uzakyonetim
     fi
-    install -d -m 0700 -o uzakyonetim -g uzakyonetim /var/lib/uzakyonetim-sunucu
-    if [ ! -f /var/lib/uzakyonetim-sunucu/ca.key ]; then
-        echo "uzakyonetim-sunucu: kurulum için"
-        echo "  sudo -u uzakyonetim uzakyonetim-sunucu kurulum --adres <ajanların ulaşacağı ad/IP>"
-        echo "  sudo -u uzakyonetim uzakyonetim-sunucu yonetici-ekle <ad>"
-        echo "  sudo systemctl enable --now uzakyonetim-sunucu"
+    install -d -m 0700 -o uzakyonetim -g uzakyonetim "$VERI"
+    if [ ! -f "$VERI/ca.key" ]; then
+        args=""
+        for a in $(adresler); do args="$args --adres $a"; done
+        # Prints the panel link that opens the first-admin screen.
+        # shellcheck disable=SC2086
+        runuser -u uzakyonetim -- uzakyonetim-sunucu kurulum $args ||
+            echo "uzakyonetim-sunucu: otomatik kurulum başarısız; elle: sudo -u uzakyonetim uzakyonetim-sunucu kurulum --adres <IP>"
+    elif [ -f "$VERI/kurulum-jetonu" ]; then
+        echo "uzakyonetim-sunucu: henüz yönetici yok. Kurulum bağlantısının jetonu:"
+        echo "  sudo cat $VERI/kurulum-jetonu   (https://<sunucu>:8443/#kurulum=<jeton>)"
+    fi
+    # cargo-deb doesn't see the unit (it stays in /lib, see Cargo.toml), so
+    # start it here: enable on first install, restart on upgrade.
+    if [ -d /run/systemd/system ] && [ -f "$VERI/ca.key" ]; then
+        systemctl daemon-reload || true
+        if [ -z "$2" ]; then
+            systemctl enable --now uzakyonetim-sunucu.service || true
+        else
+            systemctl try-restart uzakyonetim-sunucu.service || true
+        fi
     fi
 fi
 #DEBHELPER#

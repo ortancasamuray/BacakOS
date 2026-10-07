@@ -6,6 +6,9 @@
 # Panelden yeni (yönetici olmayan) hesap açılabilir.
 hesap_acma = true
 
+# Panelden normal (yönetici olmayan) hesap silinebilir. Ev dizini de silinir.
+hesap_silme = true
+
 # Panelden kullanıcılara Bacak Onay iki adımlı girişi kurulabilir/kaldırılabilir.
 bacakonay = true
 

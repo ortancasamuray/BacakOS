@@ -46,14 +46,21 @@ pub struct Hello {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Policy {
     pub hesap_acma: bool,
+    /// Missing in messages from agents older than account deletion.
+    #[serde(default = "enabled")]
+    pub hesap_silme: bool,
     pub bacakonay: bool,
     pub ekran_izleme: bool,
 }
 
 impl Default for Policy {
     fn default() -> Self {
-        Policy { hesap_acma: true, bacakonay: true, ekran_izleme: true }
+        Policy { hesap_acma: true, hesap_silme: true, bacakonay: true, ekran_izleme: true }
     }
+}
+
+fn enabled() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -83,6 +90,8 @@ pub enum Command {
     KullanicilariListele,
     /// Create a normal (non-admin) local account.
     HesapAc { kullanici: String, tam_ad: String, parola: String },
+    /// Delete a normal (non-admin) local account with its home directory.
+    HesapSil { kullanici: String },
     /// Start a Bacak Onay enrollment: a fresh secret is held **in the agent's
     /// memory** and its `otpauth://` URI returned for the QR. Nothing is
     /// written until [`Command::BacakonayOnayla`] proves the phone has it.
@@ -159,6 +168,13 @@ mod tests {
         for bad in ["", "Ayse", "1ali", "a b", "../x", "-x", "ş", "averyveryveryveryveryverylongname1"] {
             assert!(!valid_username(bad), "{bad}");
         }
+    }
+
+    #[test]
+    fn policy_from_older_agent() {
+        // Agents before account deletion don't send `hesap_silme`.
+        let p: Policy = serde_json::from_str(r#"{"hesap_acma":false,"bacakonay":true,"ekran_izleme":true}"#).unwrap();
+        assert!(!p.hesap_acma && p.hesap_silme);
     }
 
     #[tokio::test]

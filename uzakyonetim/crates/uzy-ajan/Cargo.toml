@@ -27,10 +27,11 @@ zeroize.workspace = true
 libc.workspace = true
 log.workspace = true
 env_logger.workspace = true
+jpeg-encoder.workspace = true
 
 [package.metadata.deb]
 name = "uzakyonetim-ajan"
-revision = "1"
+revision = "3"
 maintainer = "Anadolu Panteri <bilgi@anadolupanteri.org.tr>"
 copyright = "2026, Anadolu Panteri <bilgi@anadolupanteri.org.tr>"
 section = "admin"

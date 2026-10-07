@@ -53,11 +53,13 @@ function ago(s) {
 function showLogin() {
   clearInterval(refreshTimer);
   $("uygulama").hidden = true;
+  $("kurulum").hidden = true;
   $("giris").hidden = false;
 }
 
 function showApp(name) {
   $("giris").hidden = true;
+  $("kurulum").hidden = true;
   $("uygulama").hidden = false;
   $("yonetici").textContent = name;
   loadMachines();
@@ -94,7 +96,7 @@ document.querySelectorAll(".sekme").forEach((b) => b.addEventListener("click", (
   document.querySelectorAll(".sekme").forEach((x) => x.classList.toggle("etkin", x === b));
   for (const s of ["makineler", "denetim", "ayarlar"]) $(`sekme-${s}`).hidden = s !== b.dataset.sekme;
   if (b.dataset.sekme === "denetim") loadAudit();
-  if (b.dataset.sekme === "ayarlar") loadSettings();
+  if (b.dataset.sekme === "ayarlar") { loadSettings(); loadAdmins(); }
 }));
 
 // ---- machines grid ---------------------------------------------------------
@@ -112,65 +114,76 @@ function screenImg(m, cls = "ekran") {
 }
 
 function machineCard(m) {
-  return el("div", { class: `makine${m.iptal ? " iptal" : ""}`, onclick: () => openMachine(m) },
+  const users = el("button", { disabled: !m.cevrimici || m.iptal, onclick: (e) => { e.stopPropagation(); openUsers(m); } }, "Kullanıcılar");
+  return el("div", { class: `makine${m.iptal ? " iptal" : ""}`, onclick: () => openScreen(m) },
     screenImg(m),
     el("div", { class: "makine-bilgi" },
       el("div", { class: "ad" }, el("span", { class: `nokta${m.cevrimici ? " acik" : ""}` }), m.ad, m.iptal ? el("span", { class: "rozet" }, "iptal") : null),
       el("div", { class: "soluk kucuk" },
         m.cevrimici ? "Çevrimiçi" : `Son görülme: ${ago(m.son_gorulme)}`,
         " · ", m.son_ekran ? (m.son_ekran_oturum ? `Oturum: ${m.son_ekran_oturum}` : "Giriş ekranı") : "—"),
-      el("div", { class: "soluk kucuk" }, m.isletim_sistemi || "")));
+      el("div", { class: "soluk kucuk" }, m.isletim_sistemi || ""),
+      el("div", { class: "satir" }, users)));
 }
 
 // ---- dialog ----------------------------------------------------------------
 
 function openDialog(...content) {
-  $("pencere-icerik").replaceChildren(...content);
+  $("pencere-icerik").replaceChildren(...content.filter((c) => c !== null && c !== undefined));
   if (!$("pencere").open) $("pencere").showModal();
 }
 const closeDialog = () => $("pencere").close();
 const header = (title, ...extra) =>
   el("div", { class: "pencere-ust" }, el("h2", {}, title), ...extra, el("button", { onclick: closeDialog }, "Kapat"));
 
-async function openMachine(m) {
-  const big = screenImg(m);
+/** Screen window: live/history screenshots and the machine itself. */
+async function openScreen(m) {
+  let big = screenImg(m);
   const history = el("div", { class: "gecmis" });
-  const users = el("div", {}, el("p", { class: "soluk" }, m.cevrimici ? "Kullanıcılar yükleniyor…" : "Makine çevrimdışı."));
   const status = el("p", { class: "soluk kucuk" });
   const shoot = el("button", { disabled: !m.cevrimici, onclick: async () => {
     shoot.disabled = true;
     try {
       const r = await api("POST", `/api/makineler/${m.id}/ekran-al`);
       m.son_ekran = r.zaman;
-      big.replaceWith(Object.assign(screenImg(m), {}));
-      openMachine(m);
+      openScreen(m);
     } catch (e) { status.textContent = e.message; shoot.disabled = false; }
   } }, "Şimdi ekran al");
+  const users = el("button", { disabled: !m.cevrimici || m.iptal, onclick: () => openUsers(m) }, "Kullanıcılar");
   const revoke = el("button", { class: "tehlike", disabled: m.iptal, onclick: async () => {
     if (!confirm(`${m.ad} filodan çıkarılsın mı? Ajanın sertifikası iptal edilir; yeniden eklemek için yeni katılım kodu gerekir.`)) return;
     try { await api("POST", `/api/makineler/${m.id}/iptal`); closeDialog(); loadMachines(); } catch (e) { status.textContent = e.message; }
   } }, "Filodan çıkar");
 
   openDialog(
-    header(m.ad, shoot, revoke),
-    el("div", { class: "iki-sutun" },
-      el("div", {}, big, history, status,
-        el("p", { class: "soluk kucuk" }, `${m.isletim_sistemi || ""} · ajan ${m.ajan_surumu || "?"} · kayıt ${fmtTime(m.kayit_zamani)}`),
-        policyLine(m.politika)),
-      el("div", {}, el("h3", {}, "Kullanıcılar"), users, m.cevrimici && !m.iptal ? accountForm(m) : null)));
+    header(`${m.ad} — Ekran`, shoot, users, revoke),
+    big, history, status,
+    el("p", { class: "soluk kucuk" }, `${m.isletim_sistemi || ""} · ajan ${m.ajan_surumu || "?"} · kayıt ${fmtTime(m.kayit_zamani)}`),
+    policyLine(m.politika));
 
   api("GET", `/api/makineler/${m.id}/gecmis`).then((ts) => {
     history.replaceChildren(...ts.slice(0, 30).map((t) => el("button", { onclick: () => {
-      big.replaceWith(Object.assign(el("img", { class: "ekran", alt: "geçmiş", src: `/api/makineler/${m.id}/gecmis/${t}` }), {}));
+      const img = el("img", { class: "ekran", alt: "geçmiş", src: `/api/makineler/${m.id}/gecmis/${t}` });
+      big.replaceWith(img);
+      big = img;
     } }, new Date(t * 1000).toLocaleTimeString("tr-TR"))));
   }).catch(() => {});
-  if (m.cevrimici && !m.iptal) loadUsers(m, users);
+}
+
+/** Users window: accounts on the machine, Bacak Onay, new account. */
+function openUsers(m) {
+  const box = el("div", {}, el("p", { class: "soluk" }, "Kullanıcılar yükleniyor…"));
+  openDialog(
+    header(`${m.ad} — Kullanıcılar`, el("button", { onclick: () => openScreen(m) }, "Ekran")),
+    policyLine(m.politika),
+    el("div", { class: "iki-sutun" }, box, accountForm(m)));
+  loadUsers(m, box);
 }
 
 function policyLine(p) {
   if (!p || p.hesap_acma === undefined) return null;
-  const off = [["hesap_acma", "hesap açma"], ["bacakonay", "Bacak Onay"], ["ekran_izleme", "ekran izleme"]]
-    .filter(([k]) => !p[k]).map(([, v]) => v);
+  const off = [["hesap_acma", "hesap açma"], ["hesap_silme", "hesap silme"], ["bacakonay", "Bacak Onay"], ["ekran_izleme", "ekran izleme"]]
+    .filter(([k]) => p[k] === false).map(([, v]) => v);
   return off.length ? el("p", { class: "uyari kucuk" }, `Bu makinenin yerel politikası kapalı tutuyor: ${off.join(", ")}`) : null;
 }
 
@@ -181,9 +194,10 @@ async function loadUsers(m, box) {
       el("td", {}, u.kullanici, u.tam_ad ? el("div", { class: "soluk kucuk" }, u.tam_ad) : null),
       el("td", {}, u.bacakonay ? el("span", { class: "rozet onay" }, "Bacak Onay") : el("span", { class: "rozet" }, "yalnız parola"),
         u.yonetici ? el("span", { class: "rozet yonetici" }, " yönetici") : null),
-      el("td", {}, u.bacakonay
-        ? el("button", { class: "tehlike", onclick: () => removeTotp(m, u.kullanici, box) }, "Kaldır")
-        : el("button", { onclick: () => beginTotp(m, u.kullanici) }, "Bacak Onay kur"))));
+      el("td", { class: "satir" }, u.bacakonay
+        ? el("button", { onclick: () => removeTotp(m, u.kullanici, box) }, "Bacak Onay kaldır")
+        : el("button", { onclick: () => beginTotp(m, u.kullanici) }, "Bacak Onay kur"),
+        u.yonetici ? null : el("button", { class: "tehlike", onclick: () => deleteAccount(m, u.kullanici, box) }, "Sil"))));
     box.replaceChildren(rows.length
       ? el("table", { class: "tablo" }, el("tbody", {}, rows))
       : el("p", { class: "soluk" }, "Normal kullanıcı yok."));
@@ -195,6 +209,12 @@ async function loadUsers(m, box) {
 async function removeTotp(m, user, box) {
   if (!confirm(`${user} için Bacak Onay kaldırılsın mı? Giriş yalnız parolayla yapılır.`)) return;
   try { await api("POST", `/api/makineler/${m.id}/bacakonay/kaldir`, { kullanici: user }); loadUsers(m, box); }
+  catch (e) { alert(e.message); }
+}
+
+async function deleteAccount(m, user, box) {
+  if (!confirm(`${user} hesabı ${m.ad} makinesinden silinsin mi?\nEv dizini ve içindeki tüm dosyalar da silinir; geri alınamaz.`)) return;
+  try { await api("POST", `/api/makineler/${m.id}/hesap/sil`, { kullanici: user }); loadUsers(m, box); }
   catch (e) { alert(e.message); }
 }
 
@@ -217,7 +237,7 @@ function accountForm(m) {
         kullanici: user, tam_ad: f.get("tam_ad").trim(), parola: f.get("parola"), bacakonay: f.get("bacakonay") === "on",
       });
       form.reset();
-      if (r.qr) showQr(m, user, r); else openMachine(m);
+      if (r.qr) showQr(m, user, r); else openUsers(m);
     } catch (ex) { err.textContent = ex.message; }
   });
   return form;
@@ -237,7 +257,7 @@ function showQr(m, user, r) {
     try {
       await api("POST", `/api/makineler/${m.id}/bacakonay/onayla`, { kullanici: user, kod: code.value.trim() });
       openDialog(header(`${user} — Bacak Onay`), el("p", {}, `✓ ${user}@${m.ad} için iki adımlı giriş etkin. Turan giriş ekranı paroladan sonra kodu soracak.`),
-        el("button", { onclick: () => openMachine(m) }, "Makineye dön"));
+        el("button", { onclick: () => openUsers(m) }, "Kullanıcılara dön"));
     } catch (e) { msg.textContent = e.message; }
   } }, "Onayla ve etkinleştir");
   openDialog(header(`${user}@${m.ad} — Bacak Onay kaydı`),
@@ -287,6 +307,100 @@ async function loadAudit() {
   } catch (_) { /* 401 handled */ }
 }
 
+// ---- admins ----------------------------------------------------------------
+
+async function loadAdmins() {
+  try {
+    const list = await api("GET", "/api/yoneticiler");
+    $("yonetici-satirlari").replaceChildren(...list.map((a) => el("tr", {},
+      el("td", {}, a.ad, a.sen ? el("span", { class: "rozet" }, "siz") : null),
+      el("td", { class: "soluk kucuk" }, fmtTime(a.olusturma)),
+      el("td", {}, a.sen ? null : el("button", { class: "tehlike", onclick: () => removeAdmin(a.ad) }, "Sil")))));
+  } catch (_) { /* 401 handled */ }
+}
+
+async function removeAdmin(name) {
+  if (!confirm(`${name} yöneticiliği silinsin mi? Açık oturumu hemen kapanır.`)) return;
+  try { await api("POST", `/api/yoneticiler/${encodeURIComponent(name)}/sil`); loadAdmins(); }
+  catch (e) { alert(e.message); }
+}
+
+/** QR step shared by first-run setup and adding an admin. */
+function adminQr(box, name, r, confirmFn) {
+  const msg = el("p", { class: "hata" });
+  const code = el("input", { inputmode: "numeric", maxlength: 8, placeholder: "Telefondaki 6 haneli kod", autocomplete: "one-time-code" });
+  const ok = el("button", { class: "birincil", onclick: async () => {
+    msg.textContent = "";
+    ok.disabled = true;
+    try { await confirmFn(code.value.trim()); } catch (e) { msg.textContent = e.message; ok.disabled = false; }
+  } }, "Onayla");
+  box.replaceChildren(
+    el("p", {}, `${name}, telefonunda Bacak Onay → QR tara ile bu kodu okutsun, ardından uygulamadaki kodu girin.`),
+    el("img", { class: "qr", alt: "Bacak Onay QR kodu", src: r.qr }),
+    el("p", { class: "soluk kucuk" }, "Kamera yoksa elle giriş anahtarı:"), el("div", { class: "kod-kutu" }, r.anahtar),
+    el("p", { class: "uyari kucuk" }, "10 dakika içinde onaylanmazsa geçersiz olur."),
+    el("label", {}, "Doğrulama kodu", code), msg, ok);
+  code.focus();
+}
+
+$("yonetici-formu").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = new FormData(e.target);
+  const name = f.get("ad").trim();
+  $("yonetici-hata").textContent = "";
+  try {
+    const r = await api("POST", "/api/yoneticiler", { ad: name, parola: f.get("parola") });
+    e.target.reset();
+    const box = el("div");
+    openDialog(header(`${name} — yeni yönetici`), box);
+    adminQr(box, name, r, async (kod) => {
+      await api("POST", "/api/yoneticiler/onayla", { ad: name, kod });
+      box.replaceChildren(el("p", {}, `✓ ${name} artık panele giriş yapabilir.`));
+      loadAdmins();
+    });
+  } catch (ex) { $("yonetici-hata").textContent = ex.message; }
+});
+
+// ---- first-run setup ---------------------------------------------------------
+
+function showSetup() {
+  $("giris").hidden = true;
+  $("uygulama").hidden = true;
+  $("kurulum").hidden = false;
+  const box = $("kurulum-icerik");
+  const token = new URLSearchParams(location.hash.slice(1)).get("kurulum");
+  if (!token) {
+    box.replaceChildren(el("p", { class: "hata" }, "Henüz yönetici yok. Paket kurulumunun yazdığı kurulum bağlantısıyla açın."),
+      el("p", { class: "soluk kucuk" }, "Bağlantıyı sunucuda görmek için:"),
+      el("div", { class: "kod-kutu" }, "sudo cat /var/lib/uzakyonetim-sunucu/kurulum-jetonu"),
+      el("p", { class: "soluk kucuk" }, "ve adresin sonuna #kurulum=<jeton> ekleyin."));
+    return;
+  }
+  const err = el("p", { class: "hata" });
+  const form = el("form", { autocomplete: "off" },
+    el("label", {}, "Kullanıcı adı", el("input", { name: "ad", required: true, pattern: "[a-z_][a-z0-9_\\-]{0,31}", placeholder: "mustafa" })),
+    el("label", {}, "Parola (en az 12 karakter)", el("input", { name: "parola", type: "password", required: true, minlength: 12, autocomplete: "new-password" })),
+    el("label", {}, "Parola (tekrar)", el("input", { name: "parola2", type: "password", required: true, autocomplete: "new-password" })),
+    err, el("button", { class: "birincil", type: "submit" }, "Devam"));
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const f = new FormData(form);
+    const name = f.get("ad").trim();
+    err.textContent = "";
+    if (f.get("parola") !== f.get("parola2")) { err.textContent = "Parolalar eşleşmiyor."; return; }
+    try {
+      const r = await api("POST", "/api/kurulum", { jeton: token, ad: name, parola: f.get("parola") });
+      adminQr(box, name, r, async (kod) => {
+        const s = await api("POST", "/api/kurulum/onayla", { jeton: token, ad: name, kod });
+        history.replaceState(null, "", location.pathname);
+        csrf = s.csrf;
+        showApp(s.yonetici);
+      });
+    } catch (ex) { err.textContent = ex.message; }
+  });
+  box.replaceChildren(form);
+}
+
 // ---- boot ------------------------------------------------------------------
 
 (async () => {
@@ -294,5 +408,10 @@ async function loadAudit() {
     const r = await api("GET", "/api/oturum");
     csrf = r.csrf;
     showApp(r.yonetici);
-  } catch (_) { showLogin(); }
+    return;
+  } catch (_) { /* not logged in */ }
+  try {
+    if ((await api("GET", "/api/kurulum")).gerekli) { showSetup(); return; }
+  } catch (_) { /* fall back to login */ }
+  showLogin();
 })();

@@ -56,6 +56,7 @@ pub fn policy() -> Policy {
         let on = v.trim() == "true";
         match k.trim() {
             "hesap_acma" => p.hesap_acma = on,
+            "hesap_silme" => p.hesap_silme = on,
             "bacakonay" => p.bacakonay = on,
             "ekran_izleme" => p.ekran_izleme = on,
             _ => {}

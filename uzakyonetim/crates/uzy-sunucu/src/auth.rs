@@ -70,6 +70,11 @@ impl Sessions {
     pub fn remove(&self, token: &str) {
         self.0.lock().unwrap().remove(&files::sha256_hex(token));
     }
+
+    /// Ends every session of a removed admin.
+    pub fn remove_admin(&self, admin: &str) {
+        self.0.lock().unwrap().retain(|_, s| s.admin != admin);
+    }
 }
 
 /// 5 failures per IP or per user name within 15 min → locked for the rest

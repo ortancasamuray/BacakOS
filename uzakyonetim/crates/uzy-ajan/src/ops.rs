@@ -141,6 +141,22 @@ pub async fn create_account(user: &str, full_name: &str, password: &str) -> Resu
     Ok(Payload::Tamam)
 }
 
+/// Never touches admins (sudo & co.) or system accounts. `userdel` itself
+/// refuses while the user still has running processes (logged in).
+pub async fn delete_account(pending: &PendingTotp, user: &str) -> Result<Payload, String> {
+    human_user(user)?;
+    if admin_members().iter().any(|m| m == user) {
+        return Err(format!("{user} bu makinede yönetici; panelden silinemez"));
+    }
+    run("userdel", &["--remove", "--", user], None).await?;
+    pending.map.lock().unwrap().remove(user);
+    if let Err(e) = Store::system().remove(user) {
+        log::warn!("{user} silindi ama Bacak Onay kaydı kaldırılamadı: {e}");
+    }
+    log::info!("hesap silindi: {user}");
+    Ok(Payload::Tamam)
+}
+
 fn hostname() -> String {
     std::fs::read_to_string("/etc/hostname").map(|s| s.trim().to_string()).unwrap_or_else(|_| "bacakos".into())
 }

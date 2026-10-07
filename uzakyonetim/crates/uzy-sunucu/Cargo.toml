@@ -39,12 +39,12 @@ tempfile = "3"
 
 [package.metadata.deb]
 name = "uzakyonetim-sunucu"
-revision = "1"
+revision = "3"
 maintainer = "Anadolu Panteri <bilgi@anadolupanteri.org.tr>"
 copyright = "2026, Anadolu Panteri <bilgi@anadolupanteri.org.tr>"
 section = "admin"
 priority = "optional"
-depends = "$auto, adduser"
+depends = "$auto, adduser, iproute2, sqlite3"
 extended-description = """\
 Central server for managing a fleet of BacakOS machines across networks:
 web panel (HTTPS, password + Bacak Onay two-factor login) and an mTLS
@@ -56,4 +56,6 @@ assets = [
     ["../../paket/uzakyonetim-sunucu.service", "lib/systemd/system/", "644"],
 ]
 maintainer-scripts = "../../paket/sunucu-debian/"
+# The unit stays in /lib: moving it to /usr/lib within this package can lose
+# it on upgrade under usrmerge (DEP17). postinst/prerm enable and stop it.
 systemd-units = { unit-name = "uzakyonetim-sunucu", enable = false, start = false }

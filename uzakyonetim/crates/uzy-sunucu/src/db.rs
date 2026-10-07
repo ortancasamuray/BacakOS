@@ -121,6 +121,37 @@ impl Db {
         self.c().query_row("SELECT COUNT(*) FROM yoneticiler", [], |r| r.get(0)).unwrap_or(0)
     }
 
+    /// Unlike `add_admin`, never overwrites: one panel admin must not be able
+    /// to replace another's password and TOTP secret.
+    pub fn insert_admin(&self, name: &str, hash: &str, totp_b32: &str) -> Result<(), String> {
+        let n = self
+            .c()
+            .execute(
+                "INSERT OR IGNORE INTO yoneticiler (ad, parola_hash, totp_b32, olusturma) VALUES (?1, ?2, ?3, ?4)",
+                params![name, hash, totp_b32, now()],
+            )
+            .map_err(|e| e.to_string())?;
+        if n == 0 {
+            return Err(format!("{name} zaten yönetici"));
+        }
+        Ok(())
+    }
+
+    /// `(name, created)` pairs, oldest first.
+    pub fn admins(&self) -> Vec<(String, i64)> {
+        let c = self.c();
+        let Ok(mut st) = c.prepare("SELECT ad, olusturma FROM yoneticiler ORDER BY olusturma, ad") else {
+            return Vec::new();
+        };
+        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .map(|rows| rows.filter_map(Result::ok).collect())
+            .unwrap_or_default()
+    }
+
+    pub fn remove_admin(&self, name: &str) -> bool {
+        self.c().execute("DELETE FROM yoneticiler WHERE ad=?1", params![name]).is_ok_and(|n| n > 0)
+    }
+
     // --- join tokens (only the SHA-256 is stored) ---
 
     pub fn add_token(&self, hash: &str, ttl_secs: i64, by: &str) -> Result<(), String> {

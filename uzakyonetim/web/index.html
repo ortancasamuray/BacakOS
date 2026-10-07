@@ -20,6 +20,14 @@
   </form>
 </main>
 
+<main id="kurulum" class="giris" hidden>
+  <div class="kart giris-kart">
+    <h1>Uzak Yönetim</h1>
+    <p class="soluk">İlk kurulum — panel yöneticisini oluşturun</p>
+    <div id="kurulum-icerik"></div>
+  </div>
+</main>
+
 <div id="uygulama" hidden>
   <header class="ust">
     <strong>Uzak Yönetim</strong>
@@ -60,6 +68,18 @@
       <p class="soluk">İzleme açıkken makinelerin ekranında "İzleniyor" göstergesi görünür.</p>
       <button id="aralik-kaydet" class="birincil">Kaydet</button>
       <p id="aralik-durum" class="soluk"></p>
+    </div>
+    <div class="kart dar">
+      <h2>Yöneticiler</h2>
+      <p class="soluk kucuk">Panele giriş yapabilen kişiler. Her biri kendi parolası ve Bacak Onay koduyla girer.</p>
+      <table class="tablo"><tbody id="yonetici-satirlari"></tbody></table>
+      <form id="yonetici-formu" autocomplete="off">
+        <h3>Yeni yönetici</h3>
+        <label>Kullanıcı adı<input name="ad" required pattern="[a-z_][a-z0-9_\-]{0,31}" placeholder="ayse"></label>
+        <label>Parola (en az 12 karakter)<input name="parola" type="password" required minlength="12" autocomplete="new-password"></label>
+        <p id="yonetici-hata" class="hata"></p>
+        <button type="submit" class="birincil">Ekle</button>
+      </form>
     </div>
   </section>
 </div>

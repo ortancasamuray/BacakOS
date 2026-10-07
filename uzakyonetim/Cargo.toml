@@ -28,6 +28,7 @@ libc           = "0.2"
 log            = "0.4"
 env_logger     = "0.11"
 qrcode         = { version = "0.14", default-features = false, features = ["svg"] }
+jpeg-encoder   = "0.7"
 
 [profile.release]
 opt-level = 3
