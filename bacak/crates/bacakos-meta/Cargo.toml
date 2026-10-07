@@ -11,7 +11,7 @@ repository  = { workspace = true }
 path = "src/lib.rs"
 
 [package.metadata.deb]
-revision = "4"
+revision = "5"
 maintainer = "Bacak Desktop Project <bilgi@anadolupanteri.org.tr>"
 copyright  = "2026, Bacak Desktop Project"
 section    = "metapackages"
@@ -21,17 +21,19 @@ extended-description = """\
 bir bağımlılık listesiyle kurdurur. `sudo apt install ./bacakos_*.deb`
 tek komutuyla derleyici, giriş ekranı (Bacak Onay iki adımlı doğrulama
 desteğiyle), dosya yöneticisi, belge
-görüntüleyici, dijital tahta, masaüstü eklentileri, marka temaları ve
+görüntüleyici, dijital tahta, Uzakel telefonla kontrol, masaüstü eklentileri, marka temaları ve
 varsayılan ayarların tamamı kurulur."""
 depends = """\
 bacak-compositor (>= 0.1.0), \
 bacak-display-manager (>= 0.1.0), \
 bacakonay (>= 0.1.0), \
 uzakyonetim-ajan (>= 0.1.0), \
+uzakel-daemon (>= 0.1.0), \
 bacak-cli (>= 0.1.0), \
 bacak-plugin-audio (>= 0.1.0), \
 bacak-plugin-network (>= 0.1.0), \
 bacak-plugin-desktop-settings (>= 0.1.0), \
+bacak-plugin-uzakel (>= 0.1.0), \
 bacak-icons (>= 0.1.0), \
 bacak-desktop-defaults (>= 0.1.0), \
 bacak-grub-theme (>= 0.1.0), \

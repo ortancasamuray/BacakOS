@@ -1,0 +1,16 @@
+[Unit]
+Description=Uzakel remote-control daemon
+# Bacak oturumu graphical-session.target'ı hiç etkinleştirmiyor; servis bu
+# yüzden default.target'a bağlı. /dev/uinput erişimi logind'in uaccess ACL'i
+# ile geliyor ve kullanıcı seat0'da etkin oturum açana kadar yok — o ana kadar
+# açılış başarısız olur ve Restart ile yeniden denenir.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/uzakel-daemon
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
