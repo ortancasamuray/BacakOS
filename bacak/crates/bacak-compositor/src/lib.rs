@@ -89,6 +89,11 @@ pub mod remote_desktop;
 #[cfg(feature = "runtime")]
 pub mod plugins;
 
+/// BacakOS IPC socket (`bacak-ipc` protocol from BacakOsSDK): notifications,
+/// desktop-wide dark mode, window/output lists for applications.
+#[cfg(feature = "runtime")]
+pub mod ipc;
+
 #[cfg(feature = "runtime")]
 pub mod runtime;
 

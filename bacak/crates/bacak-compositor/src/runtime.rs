@@ -125,6 +125,7 @@ pub fn run() -> Result<()> {
     // clients we launch attach to this (nested) compositor, not the host.
     std::env::set_var("WAYLAND_DISPLAY", &socket_name);
     info!(socket = %socket_name, "exported WAYLAND_DISPLAY for child clients");
+    state.ipc = crate::ipc::IpcServer::bind(&socket_name);
     // Hand off to the session manager's startup client ($BACAK_STARTUP), e.g.
     // the BDM greeter, now that the (nested) Wayland socket is live.
     crate::launcher::spawn_startup();
@@ -277,6 +278,9 @@ pub fn run() -> Result<()> {
         xwm_loop
             .dispatch(Some(Duration::ZERO), &mut state)
             .map_err(|e| anyhow::anyhow!("xwm dispatch: {e}"))?;
+
+        // ----- 1d. BacakOS IPC (winit redraws every frame anyway) ----------
+        state.poll_ipc();
 
         // ----- 2. tick window animations -----------------------------------
         // This is where post-drag spring physics drives the WM geometry —

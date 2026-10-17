@@ -433,10 +433,16 @@ pub fn run() -> Result<()> {
     let socket = ListeningSocket::bind(SOCKET)?;
     std::env::set_var("WAYLAND_DISPLAY", SOCKET);
     info!(socket = SOCKET, "wayland listening socket bound");
+    // BacakOS IPC next to it; sets $BACAK_IPC for our children.
+    state.ipc = crate::ipc::IpcServer::bind(SOCKET);
     // Make native-Wayland apps started by D-Bus activation / systemd-user (not
     // by our own launcher) see the socket. DISPLAY is exported later, once
     // XWayland is ready. See launcher::export_to_session.
-    crate::launcher::export_to_session(&["WAYLAND_DISPLAY"]);
+    if state.ipc.is_some() {
+        crate::launcher::export_to_session(&["WAYLAND_DISPLAY", bacak_ipc::SOCKET_ENV]);
+    } else {
+        crate::launcher::export_to_session(&["WAYLAND_DISPLAY"]);
+    }
 
     // ---- 9. libinput pump ----------------------------------------------
     let mut libinput =
@@ -678,6 +684,12 @@ pub fn run() -> Result<()> {
 
         // Uzak Yönetim monitoring badge: appear/disappear without waiting
         // for unrelated damage.
+        if loop_data.state.poll_ipc() {
+            for t in loop_data.targets.iter_mut() {
+                t.needs_redraw = true;
+            }
+        }
+
         if loop_data.state.poll_monitor_flag() {
             for t in loop_data.targets.iter_mut() {
                 t.needs_redraw = true;

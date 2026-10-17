@@ -1102,9 +1102,15 @@ pub struct BacakState {
     /// output with a translucent black overlay scaled by `1.0 - brightness`.
     pub brightness: f32,
 
-    /// Dark-mode flag toggled from the Control Center. Tints the
-    /// compositor's own chrome (panels/cards); clients are unaffected.
+    /// Desktop-wide dark mode. Tints the compositor's own chrome
+    /// (panels/cards); applications follow it through `gorunum.json` and the
+    /// IPC `gorunum` event. Change it only via [`BacakState::set_dark_mode`].
     pub dark_mode: bool,
+
+    /// BacakOS IPC socket (see [`crate::ipc`]); `None` when it couldn't bind.
+    pub ipc: Option<crate::ipc::IpcServer>,
+    /// Last focused window announced to IPC subscribers.
+    ipc_last_focus: Option<u64>,
 
     /// Decoded wallpaper image pixels (ABGR8, output-size), cached per
     /// logical resolution.  Rebuilt when the path or output size changes.
@@ -1578,7 +1584,9 @@ impl BacakState {
             apps_menu_touch_slot: None,
             touch_pointer_slot: None,
             brightness: 1.0,
-            dark_mode: true,
+            dark_mode: bacak_ipc::Gorunum::load().koyu,
+            ipc: None,
+            ipc_last_focus: None,
             maximize_restore: HashMap::new(),
             wallpaper_cache: HashMap::new(),
             wallpaper_rx: None,
@@ -7257,7 +7265,7 @@ impl BacakState {
                 }
             }
             CcAction::DarkToggle => {
-                self.dark_mode = !self.dark_mode;
+                self.set_dark_mode(!self.dark_mode);
             }
             CcAction::Volume => {
                 let level = slider_level();
@@ -7532,6 +7540,137 @@ impl BacakState {
 
     /// Show a transient two-line notification banner (top-centre). The panel
     /// auto-sizes to the wider of the two pre-rasterised lines.
+    /// Sets dark mode desktop-wide: saves `~/.config/bacak/gorunum.json` (read
+    /// by applications at start-up), announces it to IPC subscribers and keeps
+    /// the Desktop Settings toggle row in sync.
+    pub fn set_dark_mode(&mut self, koyu: bool) {
+        self.dark_mode = koyu;
+        if let Err(e) = (bacak_ipc::Gorunum { koyu }).save() {
+            tracing::warn!(error = %e, "gorunum.json yazılamadı");
+        }
+        if let Some(ipc) = self.ipc.as_mut() {
+            ipc.broadcast(&bacak_ipc::Olay::Gorunum { koyu });
+        }
+        if let Some(ds) = self.desktop_settings.as_mut() {
+            for row in &mut ds.rows {
+                if matches!(row.action, DsAction::ToggleDarkMode) {
+                    row.toggled = koyu;
+                }
+            }
+        }
+    }
+
+    /// Serves pending IPC requests and pushes the focus event. Called once
+    /// per main-loop tick by both backends; returns `true` when something on
+    /// screen changed (toast, Control Center, theme).
+    pub fn poll_ipc(&mut self) -> bool {
+        let Some(ipc) = self.ipc.as_mut() else { return false };
+        let requests = ipc.poll();
+        let mut redraw = false;
+        for (client, m) in requests {
+            let reply = self.ipc_handle(client, m, &mut redraw);
+            if let Some(ipc) = self.ipc.as_mut() {
+                ipc.reply(client, reply);
+            }
+        }
+        if self.ipc.as_ref().is_some_and(|i| i.has_subscribers()) {
+            let focus = self.wm.all_windows().into_iter().find(|w| w.focused).map(|w| w.id);
+            if focus != self.ipc_last_focus {
+                self.ipc_last_focus = focus;
+                if let Some(ipc) = self.ipc.as_mut() {
+                    ipc.broadcast(&bacak_ipc::Olay::Odak { pencere: focus });
+                }
+            }
+        }
+        if let Some(ipc) = self.ipc.as_mut() {
+            ipc.flush();
+        }
+        redraw
+    }
+
+    fn ipc_handle(&mut self, client: crate::ipc::ClientId, m: bacak_ipc::Mesaj, redraw: &mut bool) -> bacak_ipc::Yanit {
+        use bacak_ipc::{Istek, Yanit};
+        let clip = |t: String| -> String { t.chars().filter(|c| !c.is_control()).take(bacak_ipc::BILDIRIM_MAX).collect() };
+        match m.istek {
+            Istek::Surum => Yanit::ok(
+                m.id,
+                Some(serde_json::json!({
+                    "protokol": bacak_ipc::PROTOCOL_VERSION,
+                    "compositor": env!("CARGO_PKG_VERSION"),
+                })),
+            ),
+            Istek::Bildirim { baslik, ayrinti } => {
+                let (baslik, ayrinti) = (clip(baslik), clip(ayrinti));
+                if baslik.trim().is_empty() {
+                    return Yanit::err(m.id, "başlık boş olamaz");
+                }
+                let Some(out) = self.pointer_output() else { return Yanit::err(m.id, "ekran yok") };
+                self.show_toast(out, &baslik, &ayrinti);
+                *redraw = true;
+                Yanit::ok(m.id, None)
+            }
+            Istek::GorunumAl => Yanit::ok(m.id, serde_json::to_value(bacak_ipc::Gorunum { koyu: self.dark_mode }).ok()),
+            Istek::KoyuModAyarla { koyu } => {
+                if koyu != self.dark_mode {
+                    self.set_dark_mode(koyu);
+                    *redraw = true;
+                }
+                Yanit::ok(m.id, None)
+            }
+            Istek::KontrolMerkezi { ac } => {
+                let open = self.control_center.is_some();
+                match ac {
+                    Some(false) => self.close_control_center(),
+                    Some(true) if open => {}
+                    _ => {
+                        let Some(out) = self.pointer_output() else { return Yanit::err(m.id, "ekran yok") };
+                        self.toggle_control_center(out);
+                    }
+                }
+                *redraw = true;
+                Yanit::ok(m.id, None)
+            }
+            Istek::Pencereler => {
+                let list: Vec<bacak_ipc::Pencere> = self
+                    .wm
+                    .all_windows()
+                    .into_iter()
+                    .map(|w| bacak_ipc::Pencere {
+                        id: w.id,
+                        uygulama: w.app,
+                        baslik: w.title,
+                        calisma_alani: w.workspace,
+                        odakli: w.focused,
+                    })
+                    .collect();
+                Yanit::ok(m.id, serde_json::to_value(list).ok())
+            }
+            Istek::Ekranlar => {
+                let list: Vec<bacak_ipc::Ekran> = self
+                    .wm
+                    .outputs()
+                    .into_iter()
+                    .map(|o| bacak_ipc::Ekran {
+                        id: o.id,
+                        x: o.bounds.x as f64,
+                        y: o.bounds.y as f64,
+                        genislik: o.bounds.w as f64,
+                        yukseklik: o.bounds.h as f64,
+                        olcek: o.scale,
+                    })
+                    .collect();
+                Yanit::ok(m.id, serde_json::to_value(list).ok())
+            }
+            Istek::Abone => {
+                if let Some(ipc) = self.ipc.as_mut() {
+                    ipc.subscribe(client);
+                }
+                self.ipc_last_focus = self.wm.all_windows().into_iter().find(|w| w.focused).map(|w| w.id);
+                Yanit::ok(m.id, None)
+            }
+        }
+    }
+
     pub fn show_toast(&mut self, output: OutputId, title: &str, sub: &str) {
         let text = self.text.as_ref();
         const T: [u8; 3] = [236, 240, 248];
@@ -10156,15 +10295,7 @@ impl BacakState {
 
         match action {
             DsAction::ToggleDarkMode => {
-                self.dark_mode = !self.dark_mode;
-                let dark = self.dark_mode;
-                if let Some(ds) = self.desktop_settings.as_mut() {
-                    for row in &mut ds.rows {
-                        if matches!(row.action, DsAction::ToggleDarkMode) {
-                            row.toggled = dark;
-                        }
-                    }
-                }
+                self.set_dark_mode(!self.dark_mode);
             }
             DsAction::SetWallpaper(i) => {
                 let color = crate::plugins::desktop_settings::WALLPAPER_PRESETS[i];

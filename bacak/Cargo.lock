@@ -352,6 +352,7 @@ name = "bacak-compositor"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bacak-ipc",
  "bacak-remote-proto",
  "calloop 0.14.4",
  "cosmic-text",
@@ -389,6 +390,14 @@ version = "0.1.0"
 [[package]]
 name = "bacak-icons"
 version = "0.1.0"
+
+[[package]]
+name = "bacak-ipc"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "bacak-plugin-audio"
