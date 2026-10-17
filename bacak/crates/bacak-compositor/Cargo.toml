@@ -126,7 +126,7 @@ udev = [
 #     cargo deb --no-build -p bacak-compositor
 # ---------------------------------------------------------------------------
 [package.metadata.deb]
-revision = "5"
+revision = "6"
 maintainer = "Bacak Desktop Project <bilgi@anadolupanteri.org.tr>"
 copyright = "2026, Bacak Desktop Project"
 section = "x11"
