@@ -376,6 +376,10 @@
       <div class="note">
         <strong>Not:</strong> Otomatik bölümleme seçili diskin <em>tamamını</em> siler. Diskte başka bir işletim sistemi veya veri varsa Elle mod ile mevcut bölümleri koruyun.
       </div>
+
+      <div class="note">
+        <strong>Desteklenen önyükleme türleri:</strong> Kurulum USB'si/DVD'si eski BIOS'lu, 64 bit UEFI'li ve <strong>32 bit UEFI'li</strong> bilgisayarlarda açılır. Sonuncusu, işlemcisi 64 bit olduğu hâlde firmware'i 32 bit olan bazı tablet ve mini bilgisayarlardır (Intel Atom Bay Trail / Cherry Trail). kur firmware türünü kendisi algılar ve önyükleyiciyi ona göre kurar; sizin bir şey seçmeniz gerekmez. 32 bit UEFI'li cihazlarda <strong>Secure Boot</strong> kapalı olmalıdır (firmware ayarlarından kapatın).
+      </div>
     </section>
 
     <section id="ilk-acilis">
@@ -505,6 +509,7 @@
         <li>Ekran görüntüsü alma, ve <strong>Kapat / Yeniden Başlat / Oturumu Kapat</strong> düğmeleri.</li>
         <li>"Masaüstü Ayarları" bağlantısı — aşağıdaki genişletilmiş panele götürür.</li>
       </ul>
+      <p>Panel ekranın sağ üst köşesinde açılır ve boyutunu ekrana göre ayarlar: yüksek çözünürlüklü büyük ekranlarda (ör. 4K tahta) orantılı olarak büyür, 1366×768 gibi alçak ekranlarda ise tamamı — en alttaki Kapat / Yeniden / Çıkış düğmeleri dahil — ekrana sığacak kadar küçülür.</p>
     </section>
 
     <section id="masaustu-ayarlari">
@@ -617,17 +622,25 @@
         <p>Ekranın sağ üst köşesinde kırmızı noktalı <strong>"İzleniyor"</strong> etiketi görüyorsanız, bu bilgisayar bir Uzak Yönetim sunucusuna bağlıdır ve ekran görüntüsü belirli aralıklarla yöneticiye iletilmektedir. Gösterge izleme açık olduğu sürece her zaman görünür ve ekran görüntülerinde de yer alır; izleme kapanınca veya ajan durunca kendiliğinden kaybolur.</p>
       </div>
       <ul>
-        <li>Uzak Yönetim ajanı uzaktan <strong>komut çalıştıramaz</strong>; yalnızca kullanıcı listeleme, (yönetici olmayan) hesap açma, Bacak Onay kaydı ve ekran görüntüsü alma işlemlerini yapabilir.</li>
-        <li>Her bilgisayarın yöneticisi bu işlemleri <code>/etc/uzakyonetim/politika.toml</code> dosyasından tek tek kapatabilir (örn. <code>ekran_izleme = false</code>); sunucu ne isterse istesin kapalı işlem yapılmaz.</li>
+        <li>Uzak Yönetim ajanı uzaktan <strong>komut çalıştıramaz</strong>; yalnızca kullanıcı listeleme, (yönetici olmayan) hesap açma ve silme, Bacak Onay kaydı ve ekran görüntüsü alma işlemlerini yapabilir. Yönetici (sudo) ve sistem hesapları ile o anda oturumu açık olan hesap silinemez; silinen hesabın ev dizini de silinir.</li>
+        <li>Her bilgisayarın yöneticisi bu işlemleri <code>/etc/uzakyonetim/politika.toml</code> dosyasından tek tek kapatabilir (örn. <code>ekran_izleme = false</code>, <code>hesap_silme = false</code>); sunucu ne isterse istesin kapalı işlem yapılmaz.</li>
         <li>Yöneticinin yaptığı her işlem sunucudaki denetim kaydına yazılır.</li>
       </ul>
 
       <h3>Yönetici olarak kurulum</h3>
       <ol class="steps">
-        <li><strong>Sunucu</strong><p>Tüm ağlardan erişilebilen bir makineye <code>uzakyonetim-sunucu</code> paketini kurun, <code>sudo -u uzakyonetim uzakyonetim-sunucu kurulum --adres &lt;alan adı veya IP&gt;</code> ve <code>sudo -u uzakyonetim uzakyonetim-sunucu yonetici-ekle &lt;ad&gt;</code> çalıştırın (panel girişi için parola + Bacak Onay QR'ı). 8443 (panel) ve 8444 (ajan) portlarını açın.</p></li>
+        <li><strong>Sunucu</strong><p>Tüm ağlardan erişilebilen bir makineye <code>sudo apt install ./uzakyonetim-sunucu_*.deb</code> ile paketi kurun. Paket sunucunun IP adreslerini kendisi bulup kurulumu yapar, servisi başlatır ve ekrana bir bağlantı yazar: <code>https://&lt;sunucu&gt;:8443/#kurulum=&lt;jeton&gt;</code>. Bu bağlantıyı tarayıcıda açıp ilk yöneticiyi oluşturun (kullanıcı adı, en az 12 karakterli parola ve telefonla okutulan Bacak Onay QR'ı). Bağlantıyı kaçırdıysanız jetonu <code>sudo cat /var/lib/uzakyonetim-sunucu/kurulum-jetonu</code> ile görebilirsiniz. Ajanlar başka ağlardan bir alan adıyla bağlanacaksa kurulumu elle yapın: <code>sudo -u uzakyonetim uzakyonetim-sunucu kurulum --adres &lt;alan adı&gt;</code>. 8443 (panel) ve 8444 (ajan) portlarını açın.</p></li>
         <li><strong>Makine ekleme</strong><p>Panelde <b>+ Makine ekle</b> tek kullanımlık, 60 dakika geçerli bir komut üretir. Bilgisayarda <code>sudo uzakyonetim-ajan kaydol uzy1.…</code> ve <code>sudo systemctl enable --now uzakyonetim-ajan</code> çalıştırın. Bilgisayar sunucuya kendisi bağlandığı için kendi ağında port açmak gerekmez.</p></li>
         <li><strong>Kullanım</strong><p>Panel adresine (<code>https://&lt;sunucu&gt;:8443</code>) parola ve Bacak Onay koduyla girin. Makine kartına tıklayarak ekranı, geçmiş görüntüleri ve kullanıcıları görün; <b>Yeni hesap</b> ile hesap açıp aynı anda Bacak Onay QR'ını gösterin. <b>Ayarlar</b>'dan ekran görüntüsü aralığını (Kapalı / 30 sn … 1 sa) seçin.</p></li>
+        <li><strong>Hesaplar</strong><p>Makine penceresindeki <b>Kullanıcılar</b> düğmesi ayrı bir pencere açar: hesapları, Bacak Onay durumlarını görür, yeni hesap açar ya da <b>Sil</b> ile hesap silersiniz (onay istenir).</p></li>
+        <li><strong>Diğer yöneticiler</strong><p><b>Ayarlar &rarr; Yöneticiler</b>'den panele girebilecek başka kişileri ekleyin; her biri kendi parolası ve kendi Bacak Onay QR'ıyla kaydolur. Gereksiz yöneticiyi buradan kaldırın (açık oturumları da kapanır).</p></li>
       </ol>
+
+      <h3>Panel parolasını unuttum</h3>
+      <p>Giriş ekranındaki <b>Parolamı unuttum</b> bağlantısına tıklayın. Kullanıcı adınızı, telefonunuzdaki <strong>Bacak Onay kodunu</strong> ve iki kez yeni parolanızı (en az 12 karakter) girin. Kod doğruysa yeni parola kaydedilir ve panele girersiniz; eski parolayla açılmış tüm oturumlar kapanır. Bu yol yeni parola belirlemeden panele girmeye izin vermez ve tek doğrulamayla çalıştığı için daha sıkı korunur: 3 hatalı denemeden sonra 15 dakika beklemeniz gerekir. Her deneme denetim kaydına <code>parola_kurtarma</code> olarak yazılır.</p>
+      <div class="note">
+        <strong>Telefonu da kaybettiyseniz</strong> bu yol kullanılamaz: başka bir panel yöneticisi sizi <b>Ayarlar &rarr; Yöneticiler</b>'den kaldırıp yeniden ekleyebilir; tek yönetici sizseniz sunucuda <code>sudo -u uzakyonetim uzakyonetim-sunucu yonetici-ekle &lt;ad&gt;</code> ile parolanızı ve Bacak Onay kaydınızı yenileyin.
+      </div>
       <div class="note">
         <strong>Kişisel veriler:</strong> Ekran izleme kişisel veri işler. Kullanıcıları önceden bilgilendirin (KVKK); ekrandaki gösterge bu bilgilendirmenin yerini tutmaz, onu tamamlar. Kaybolan veya çalınan bir bilgisayarı panelde <strong>Filodan çıkar</strong> ile anında devre dışı bırakın.
       </div>
@@ -724,6 +737,9 @@
 
       <h3>Telefonumu kaybettim / değiştirdim</h3>
       <p>Başka bir yönetici hesabıyla (ya da SSH ile) <code>sudo bacakonay kaldir &lt;kullanıcı&gt;</code> çalıştırın; giriş yalnızca parolayla yapılır hale gelir. Yeni telefonda <code>sudo bacakonay kur --zorla</code> ile yeniden eşleyin.</p>
+
+      <h3>Uzak Yönetim paneline giremiyorum, parolamı unuttum</h3>
+      <p>Giriş ekranında <b>Parolamı unuttum</b>'u kullanın; Bacak Onay koduyla yeni parola belirlersiniz — bkz. <a href="#uzak-yonetim">Uzak Yönetim</a>. "Çok fazla hatalı deneme" diyorsa 15 dakika bekleyin.</p>
 
       <h3>Ekranda "İzleniyor" yazıyor</h3>
       <p>Bilgisayar bir Uzak Yönetim sunucusuna bağlı ve ekran izleme açık — bkz. <a href="#uzak-yonetim">Uzak Yönetim</a>. Durumu <code>sudo uzakyonetim-ajan durum</code> ile görebilirsiniz; yerel olarak kapatmak için <code>/etc/uzakyonetim/politika.toml</code>'da <code>ekran_izleme = false</code> yapıp <code>sudo systemctl restart uzakyonetim-ajan</code> çalıştırın.</p>
