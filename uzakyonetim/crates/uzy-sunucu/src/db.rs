@@ -113,6 +113,13 @@ impl Db {
             .flatten()
     }
 
+    /// Replaces a forgotten password; `false` if no such admin.
+    pub fn set_admin_password(&self, name: &str, hash: &str) -> bool {
+        self.c()
+            .execute("UPDATE yoneticiler SET parola_hash=?2 WHERE ad=?1", params![name, hash])
+            .is_ok_and(|n| n == 1)
+    }
+
     pub fn set_admin_totp_step(&self, name: &str, step: u64) {
         let _ = self.c().execute("UPDATE yoneticiler SET totp_son_adim=?2 WHERE ad=?1", params![name, step as i64]);
     }

@@ -39,7 +39,7 @@ tempfile = "3"
 
 [package.metadata.deb]
 name = "uzakyonetim-sunucu"
-revision = "3"
+revision = "4"
 maintainer = "Anadolu Panteri <bilgi@anadolupanteri.org.tr>"
 copyright = "2026, Anadolu Panteri <bilgi@anadolupanteri.org.tr>"
 section = "admin"

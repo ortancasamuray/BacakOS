@@ -55,6 +55,8 @@ pub struct App {
     pub enroll_limit: gateway::EnrollLimiter,
     pub sessions: auth::Sessions,
     pub login_limit: auth::LoginLimiter,
+    /// "Parolamı unuttum" attempts: code only, so stricter than `login_limit`.
+    pub recover_limit: auth::LoginLimiter,
     pub pending_admins: admins::Pending,
     pub cfg: Config,
     pub data: PathBuf,
@@ -246,6 +248,7 @@ async fn serve() -> Result<(), String> {
         enroll_limit: Default::default(),
         sessions: Default::default(),
         login_limit: Default::default(),
+        recover_limit: auth::LoginLimiter::with_max(3),
         pending_admins: Default::default(),
         cfg: cfg.clone(),
         data: dir.clone(),

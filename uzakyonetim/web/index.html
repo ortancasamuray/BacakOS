@@ -17,6 +17,18 @@
     <label>Bacak Onay kodu<input name="kod" inputmode="numeric" pattern="[0-9]{6,8}" maxlength="8" required autocomplete="one-time-code"></label>
     <p id="giris-hata" class="hata" hidden></p>
     <button type="submit" class="birincil">Giriş</button>
+    <button type="button" id="unuttum" class="baglanti">Parolamı unuttum</button>
+  </form>
+  <form id="kurtarma-formu" class="kart giris-kart" autocomplete="off" hidden>
+    <h1>Parolamı unuttum</h1>
+    <p class="soluk kucuk">Telefonunuzdaki Bacak Onay koduyla kimliğinizi doğrulayın ve yeni bir parola belirleyin. Panele yeni parola kaydedildikten sonra girilir; eski parolayla açılmış oturumlar kapanır.</p>
+    <label>Kullanıcı adı<input name="kullanici" required autocomplete="username"></label>
+    <label>Bacak Onay kodu<input name="kod" inputmode="numeric" pattern="[0-9]{6,8}" maxlength="8" required autocomplete="one-time-code"></label>
+    <label>Yeni parola (en az 12 karakter)<input name="yeni_parola" type="password" required minlength="12" autocomplete="new-password"></label>
+    <label>Yeni parola (tekrar)<input name="yeni_parola2" type="password" required minlength="12" autocomplete="new-password"></label>
+    <p id="kurtarma-hata" class="hata" hidden></p>
+    <button type="submit" class="birincil">Parolayı değiştir ve gir</button>
+    <button type="button" id="girise-don" class="baglanti">Girişe dön</button>
   </form>
 </main>
 

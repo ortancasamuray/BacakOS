@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Panel login: password (Argon2id) **and** a Bacak Onay TOTP code, then a
 //! server-side session in an `HttpOnly; Secure; SameSite=Strict` cookie plus
-//! a CSRF token required on every state-changing request.
+//! a CSRF token required on every state-changing request. A forgotten
+//! password is replaced with the TOTP code alone ([`verify_code_only`]).
 
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -77,34 +78,45 @@ impl Sessions {
     }
 }
 
-/// 5 failures per IP or per user name within 15 min → locked for the rest
-/// of the window.
-#[derive(Default)]
-pub struct LoginLimiter(Mutex<HashMap<String, (u32, Instant)>>);
+/// `max` failures (5 by default) per IP or per user name within 15 min →
+/// locked for the rest of the window.
+pub struct LoginLimiter {
+    map: Mutex<HashMap<String, (u32, Instant)>>,
+    max: u32,
+}
+
+impl Default for LoginLimiter {
+    fn default() -> Self {
+        Self::with_max(5)
+    }
+}
 
 impl LoginLimiter {
-    const MAX: u32 = 5;
     const WINDOW: Duration = Duration::from_secs(15 * 60);
+
+    pub fn with_max(max: u32) -> Self {
+        LoginLimiter { map: Mutex::new(HashMap::new()), max }
+    }
 
     fn keys(ip: IpAddr, user: &str) -> [String; 2] {
         [format!("ip:{ip}"), format!("u:{}", user.to_lowercase())]
     }
 
     pub fn blocked(&self, ip: IpAddr, user: &str) -> bool {
-        let mut m = self.0.lock().unwrap();
+        let mut m = self.map.lock().unwrap();
         m.retain(|_, (_, t)| t.elapsed() < Self::WINDOW);
-        Self::keys(ip, user).iter().any(|k| m.get(k).is_some_and(|(n, _)| *n >= Self::MAX))
+        Self::keys(ip, user).iter().any(|k| m.get(k).is_some_and(|(n, _)| *n >= self.max))
     }
 
     pub fn fail(&self, ip: IpAddr, user: &str) {
-        let mut m = self.0.lock().unwrap();
+        let mut m = self.map.lock().unwrap();
         for k in Self::keys(ip, user) {
             m.entry(k).or_insert((0, Instant::now())).0 += 1;
         }
     }
 
     pub fn success(&self, ip: IpAddr, user: &str) {
-        let mut m = self.0.lock().unwrap();
+        let mut m = self.map.lock().unwrap();
         for k in Self::keys(ip, user) {
             m.remove(&k);
         }
@@ -121,10 +133,21 @@ pub fn verify_login(db: &Db, user: &str, password: &str, code: &str) -> bool {
     if !verify_password(password, &admin.password_hash) {
         return false;
     }
+    check_totp(db, &admin, code)
+}
+
+/// Password-recovery check: the Bacak Onay code alone. Only a password reset
+/// may follow, never a plain session (see `web::recover`).
+pub fn verify_code_only(db: &Db, user: &str, code: &str) -> bool {
+    db.admin(user).is_some_and(|admin| check_totp(db, &admin, code))
+}
+
+/// Accepts each code once: the matched step is stored and older ones refused.
+fn check_totp(db: &Db, admin: &db::Admin, code: &str) -> bool {
     let Some(secret) = base32::decode(&admin.totp_b32) else { return false };
     match otp::verify_totp(&secret, &OtpParams::default(), code, db::now() as u64, 1, admin.totp_last_step) {
         Some(step) => {
-            db.set_admin_totp_step(user, step);
+            db.set_admin_totp_step(&admin.name, step);
             true
         }
         None => false,
@@ -147,6 +170,31 @@ mod tests {
         assert!(!verify_login(&db, "yok", "dogru-parola-123", &code));
         assert!(verify_login(&db, "yonetici", "dogru-parola-123", &code));
         assert!(!verify_login(&db, "yonetici", "dogru-parola-123", &code), "aynı kod ikinci kez geçmemeli");
+    }
+
+    #[test]
+    fn recovery_needs_only_a_fresh_code() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(&dir.path().join("t.db")).unwrap();
+        let secret = otp::generate_secret(20).unwrap();
+        db.add_admin("yonetici", &hash_password("unutulan-parola-1").unwrap(), &base32::encode(&secret)).unwrap();
+        let code = otp::totp(&secret, &OtpParams::default(), db::now() as u64);
+
+        assert!(!verify_code_only(&db, "yok", &code));
+        assert!(verify_code_only(&db, "yonetici", &code));
+        assert!(!verify_code_only(&db, "yonetici", &code), "aynı kod ikinci kez geçmemeli");
+        assert!(!verify_login(&db, "yonetici", "unutulan-parola-1", &code), "kurtarmada kullanılan kod girişte de geçmemeli");
+    }
+
+    #[test]
+    fn stricter_limiter_blocks_after_three() {
+        let l = LoginLimiter::with_max(3);
+        let ip: IpAddr = "10.0.0.9".parse().unwrap();
+        for _ in 0..3 {
+            assert!(!l.blocked(ip, "a"));
+            l.fail(ip, "a");
+        }
+        assert!(l.blocked(ip, "a"));
     }
 
     #[test]
