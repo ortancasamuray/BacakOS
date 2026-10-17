@@ -29,7 +29,7 @@ async function api(method, path, body) {
     opts.body = JSON.stringify(body);
   }
   const r = await fetch(path, opts);
-  if (r.status === 401 && path !== "/api/giris") {
+  if (r.status === 401 && path !== "/api/giris" && path !== "/api/parola-kurtar") {
     showLogin();
     throw new Error("Oturum sona erdi");
   }
@@ -55,6 +55,14 @@ function showLogin() {
   $("uygulama").hidden = true;
   $("kurulum").hidden = true;
   $("giris").hidden = false;
+  showRecovery(false);
+}
+
+function showRecovery(on) {
+  $("giris-formu").hidden = on;
+  $("kurtarma-formu").hidden = !on;
+  $("giris-hata").hidden = true;
+  $("kurtarma-hata").hidden = true;
 }
 
 function showApp(name) {
@@ -81,6 +89,27 @@ $("giris-formu").addEventListener("submit", async (e) => {
   } catch (err) {
     $("giris-hata").textContent = err.message;
     $("giris-hata").hidden = false;
+  }
+});
+
+$("unuttum").addEventListener("click", () => showRecovery(true));
+$("girise-don").addEventListener("click", () => showRecovery(false));
+
+$("kurtarma-formu").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = new FormData(e.target);
+  const hata = (msg) => { $("kurtarma-hata").textContent = msg; $("kurtarma-hata").hidden = false; };
+  $("kurtarma-hata").hidden = true;
+  if (f.get("yeni_parola") !== f.get("yeni_parola2")) return hata("Yeni parolalar aynı değil.");
+  try {
+    const r = await api("POST", "/api/parola-kurtar", {
+      kullanici: f.get("kullanici").trim(), kod: f.get("kod").trim(), yeni_parola: f.get("yeni_parola"),
+    });
+    csrf = r.csrf;
+    e.target.reset();
+    showApp(r.yonetici);
+  } catch (err) {
+    hata(err.message);
   }
 });
 

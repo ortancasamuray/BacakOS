@@ -72,6 +72,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/app.js", get(|| async { static_file("text/javascript; charset=utf-8", APP_JS) }))
         .route("/app.css", get(|| async { static_file("text/css; charset=utf-8", APP_CSS) }))
         .route("/api/giris", post(login))
+        .route("/api/parola-kurtar", post(recover))
         .route("/api/cikis", post(logout))
         .route("/api/oturum", get(whoami))
         .route("/api/ayarlar", get(get_settings).post(set_settings))
@@ -138,6 +139,51 @@ async fn login(
     }
     app.login_limit.success(ip, &req.kullanici);
     app.db.audit(&req.kullanici, "-", "giris", &ip.to_string(), "tamam");
+    session_response(&app, &req.kullanici)
+}
+
+#[derive(Deserialize)]
+struct RecoverReq {
+    kullanici: String,
+    kod: String,
+    yeni_parola: String,
+}
+
+/// "Parolamı unuttum": the Bacak Onay code alone identifies the admin, but
+/// only to replace the password — the session starts once the new one is
+/// stored, and every session opened with the old password ends. Single factor,
+/// so its own, stricter limiter (3 failures / 15 min).
+async fn recover(
+    State(app): State<Arc<App>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Json(req): Json<RecoverReq>,
+) -> Response {
+    let ip = peer.ip();
+    if app.recover_limit.blocked(ip, &req.kullanici) {
+        return ApiError(StatusCode::TOO_MANY_REQUESTS, "Çok fazla hatalı deneme. 15 dakika sonra tekrar deneyin.".into())
+            .into_response();
+    }
+    let new_pw = zeroize::Zeroizing::new(req.yeni_parola);
+    // Checked before the code, so a rejected password doesn't burn it.
+    if new_pw.chars().count() < 12 {
+        return bad("yeni parola en az 12 karakter olmalı").into_response();
+    }
+    if !auth::verify_code_only(&app.db, &req.kullanici, req.kod.trim()) {
+        app.recover_limit.fail(ip, &req.kullanici);
+        app.db.audit(&req.kullanici, "-", "parola_kurtarma", &ip.to_string(), "red");
+        return ApiError(StatusCode::UNAUTHORIZED, "Kullanıcı adı ya da Bacak Onay kodu hatalı.".into()).into_response();
+    }
+    let hash = match tokio::task::spawn_blocking(move || auth::hash_password(&new_pw)).await {
+        Ok(Ok(h)) => h,
+        _ => return ApiError(StatusCode::INTERNAL_SERVER_ERROR, "parola kaydedilemedi".into()).into_response(),
+    };
+    if !app.db.set_admin_password(&req.kullanici, &hash) {
+        return ApiError(StatusCode::INTERNAL_SERVER_ERROR, "parola kaydedilemedi".into()).into_response();
+    }
+    app.sessions.remove_admin(&req.kullanici);
+    app.recover_limit.success(ip, &req.kullanici);
+    app.login_limit.success(ip, &req.kullanici);
+    app.db.audit(&req.kullanici, "-", "parola_kurtarma", &ip.to_string(), "tamam");
     session_response(&app, &req.kullanici)
 }
 
