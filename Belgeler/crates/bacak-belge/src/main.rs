@@ -394,6 +394,9 @@ fn main() -> Result<()> {
 
     let ui = AppWindow::new()?;
     ui.set_filename(filename.clone().into());
+    // EPUB reading mode starts dark when the desktop is dark (BacakOsSDK);
+    // the ☀ button still switches it for this window only.
+    ui.set_dark_mode(bacak_sdk::Gorunum::load().koyu);
 
     let Some(kind) = detect(&path) else {
         ui.set_mode("error".into());

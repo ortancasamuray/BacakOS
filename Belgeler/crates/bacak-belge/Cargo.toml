@@ -11,6 +11,7 @@ name = "bacak-belge"
 path = "src/main.rs"
 
 [dependencies]
+bacak-sdk = { path = "../../../BacakOsSDK/crates/bacak-sdk" }
 slint  = { workspace = true }
 anyhow = { workspace = true }
 image  = { workspace = true }
