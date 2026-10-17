@@ -20,6 +20,7 @@ Official site: [www.anadolupanteri.org.tr](https://www.anadolupanteri.org.tr)
 | [`tahta/`](tahta) | GPU-accelerated digital whiteboard engine |
 | [`kur/`](kur) | System installer |
 | [`uzakel/`](uzakel) | Remote desktop: Android/Windows/macOS companion apps and the BacakOS-side daemon |
+| [`BacakOsSDK/`](BacakOsSDK) | Application SDK — theme/dark mode, desktop entries, icons, MIME, compositor IPC, Slint widgets, new-app template |
 | [`kilavuz/`](kilavuz) | User guide (HTML) |
 
 Each component directory has its own README with build and architecture

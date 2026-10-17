@@ -1,0 +1,19 @@
+[package]
+name         = "bacak-sdk-slint"
+description  = "BacakOS theme and widgets for Slint applications, following the desktop-wide dark mode"
+version.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+authors.workspace      = true
+repository.workspace   = true
+rust-version.workspace = true
+
+[features]
+# For build.rs: `derle()` compiles the app's .slint with `@bacak` importable.
+# Use it from [build-dependencies] only.
+derleme = ["dep:slint-build"]
+
+[dependencies]
+bacak-sdk   = { workspace = true }
+slint       = { workspace = true }
+slint-build = { workspace = true, optional = true }

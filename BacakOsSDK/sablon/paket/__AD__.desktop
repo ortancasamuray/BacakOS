@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=__BASLIK__
+Name[tr]=__BASLIK__
+Comment=__BASLIK__
+Exec=__AD__ %U
+Icon=__AD__
+Terminal=false
+Categories=Utility;
+StartupWMClass=__AD__

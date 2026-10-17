@@ -19,6 +19,7 @@ Resmi site: [www.anadolupanteri.org.tr](https://www.anadolupanteri.org.tr)
 | [`tahta/`](tahta) | GPU hızlandırmalı dijital tahta motoru |
 | [`kur/`](kur) | Sistem yükleyici |
 | [`uzakel/`](uzakel) | Uzak masaüstü: Android/Windows/macOS istemcileri ve BacakOS tarafındaki daemon |
+| [`BacakOsSDK/`](BacakOsSDK) | Uygulama geliştirme kiti — tema/koyu mod, .desktop, simge, MIME, compositor IPC, Slint bileşenleri, yeni uygulama şablonu |
 | [`kilavuz/`](kilavuz) | Kullanım kılavuzu (HTML) |
 
 Her bileşen dizininin kendi README'i, derleme ve mimari detaylarını içerir.
