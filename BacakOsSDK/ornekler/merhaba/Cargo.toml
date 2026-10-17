@@ -1,0 +1,18 @@
+[package]
+name         = "bacak-merhaba"
+description  = "BacakOsSDK örnek uygulaması: tema, bildirim, Kontrol Merkezi, pencere listesi"
+version.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+authors.workspace      = true
+repository.workspace   = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+bacak-sdk       = { workspace = true }
+bacak-sdk-slint = { workspace = true }
+slint           = { workspace = true }
+
+[build-dependencies]
+bacak-sdk-slint = { workspace = true, features = ["derleme"] }

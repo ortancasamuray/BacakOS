@@ -1,0 +1,173 @@
+// BacakOS Slint bileşenleri (bacak-sdk-slint).
+//
+//   import { BacakTema, BacakPencere, BacakDugme } from "@bacak";
+//
+// BacakTema.koyu Rust tarafında `bacak_sdk_slint::tema_bagla!` ile masaüstünün
+// koyu moduna bağlanır; renkler bacak-sdk'daki `Palet` ile aynıdır.
+
+import { Palette } from "std-widgets.slint";
+
+export global BacakTema {
+    in-out property <bool> koyu: true;
+
+    out property <color> arka:        koyu ? #0d1421 : #f5f6f9;
+    out property <color> yuzey:       koyu ? #172131 : #ffffff;
+    out property <color> yuzey2:      koyu ? #223047 : #ebedf2;
+    out property <color> cizgi:       koyu ? #2e3d55 : #d3d7df;
+    out property <color> metin:       koyu ? #e8ecf4 : #1a1c22;
+    out property <color> soluk:       koyu ? #aab2c4 : #5f6573;
+    out property <color> vurgu:       koyu ? #5cb8ff : #1f7ae0;
+    out property <color> vurgu-metin: koyu ? #04121f : #ffffff;
+    out property <color> tehlike:     koyu ? #eb4d4d : #c62828;
+    out property <color> uyari:       koyu ? #ffc74d : #a86200;
+    out property <color> basari:      koyu ? #4caf7d : #2e7d4f;
+
+    out property <length> yaricap: 12px;
+    out property <length> yaricap-kucuk: 8px;
+    out property <length> bosluk: 8px;
+    out property <length> dolgu: 16px;
+    // Parmakla dokunmaya yetecek en küçük hedef (tahta, tablet).
+    out property <length> dokunma: 44px;
+    out property <length> yazi: 15px;
+    out property <length> yazi-kucuk: 13px;
+    out property <length> yazi-baslik: 20px;
+}
+
+// Uygulamanın ana penceresi: `export component Uygulama inherits BacakPencere { … }`.
+// std-widgets (LineEdit, ListView…) da koyu/açık moda uyar.
+export component BacakPencere inherits Window {
+    background: BacakTema.arka;
+    default-font-size: BacakTema.yazi;
+    // std-widgets'ın renk düzenini temayla aynı tut.
+    init => { Palette.color-scheme = BacakTema.koyu ? ColorScheme.dark : ColorScheme.light; }
+    changed-izleyici := Rectangle {
+        visible: false;
+        property <bool> koyu: BacakTema.koyu;
+        changed koyu => { Palette.color-scheme = self.koyu ? ColorScheme.dark : ColorScheme.light; }
+    }
+}
+
+export component BacakBaslik inherits Text {
+    color: BacakTema.metin;
+    font-size: BacakTema.yazi-baslik;
+    font-weight: 600;
+    accessible-role: text;
+}
+
+export component BacakMetin inherits Text {
+    in property <bool> soluk: false;
+    color: soluk ? BacakTema.soluk : BacakTema.metin;
+    font-size: soluk ? BacakTema.yazi-kucuk : BacakTema.yazi;
+    wrap: word-wrap;
+}
+
+export component BacakDugme inherits Rectangle {
+    in property <string> metin;
+    // Ana eylem: vurgu renginde dolu.
+    in property <bool> birincil: false;
+    // Geri alınamaz eylem: kırmızı çerçeve ve yazı.
+    in property <bool> tehlike: false;
+    in property <bool> etkin: true;
+    callback tiklandi();
+
+    property <color> zemin: birincil ? BacakTema.vurgu : BacakTema.yuzey2;
+
+    min-height: BacakTema.dokunma;
+    min-width: max(BacakTema.dokunma, etiket.preferred-width + 2 * BacakTema.dolgu);
+    border-radius: BacakTema.yaricap-kucuk;
+    border-width: 1px;
+    background: !etkin ? zemin.transparentize(50%) : dokunus.pressed ? zemin.darker(15%) : dokunus.has-hover ? zemin.brighter(8%) : zemin;
+    border-color: tehlike ? BacakTema.tehlike : (dokunus.has-hover && etkin) ? BacakTema.vurgu : birincil ? BacakTema.vurgu : BacakTema.cizgi;
+    accessible-role: button;
+    accessible-label: metin;
+    accessible-enabled: etkin;
+    accessible-action-default => { if (etkin) { tiklandi(); } }
+
+    etiket := Text {
+        text: root.metin;
+        color: root.birincil ? BacakTema.vurgu-metin : root.tehlike ? BacakTema.tehlike : BacakTema.metin;
+        opacity: root.etkin ? 1 : 0.6;
+        font-size: BacakTema.yazi;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    dokunus := TouchArea {
+        enabled: root.etkin;
+        mouse-cursor: pointer;
+        clicked => { root.tiklandi(); }
+    }
+}
+
+export component BacakKart inherits Rectangle {
+    background: BacakTema.yuzey;
+    border-radius: BacakTema.yaricap;
+    border-width: 1px;
+    border-color: BacakTema.cizgi;
+
+    VerticalLayout {
+        padding: BacakTema.dolgu;
+        spacing: BacakTema.bosluk;
+        @children
+    }
+}
+
+// Etiketli aç/kapat anahtarı. `acik` iki yönlü bağlanabilir; her dokunuşta
+// `degisti(yeni)` çağrılır.
+export component BacakAnahtar inherits Rectangle {
+    in-out property <bool> acik: false;
+    in property <string> metin;
+    in property <bool> etkin: true;
+    callback degisti(bool);
+
+    min-height: BacakTema.dokunma;
+    preferred-width: etiket.preferred-width + 60px;
+    accessible-role: checkbox;
+    accessible-checkable: true;
+    accessible-checked: acik;
+    accessible-label: metin;
+    accessible-enabled: etkin;
+    accessible-action-default => { if (etkin) { acik = !acik; degisti(acik); } }
+
+    etiket := Text {
+        x: 0;
+        width: parent.width - 56px;
+        height: parent.height;
+        text: root.metin;
+        color: BacakTema.metin;
+        font-size: BacakTema.yazi;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+
+    Rectangle {
+        width: 44px;
+        height: 26px;
+        x: parent.width - self.width;
+        y: (parent.height - self.height) / 2;
+        border-radius: self.height / 2;
+        background: root.acik ? BacakTema.vurgu : BacakTema.yuzey2;
+        border-width: 1px;
+        border-color: root.acik ? BacakTema.vurgu : BacakTema.cizgi;
+        opacity: root.etkin ? 1 : 0.5;
+        animate background { duration: 120ms; }
+
+        Rectangle {
+            width: 20px;
+            height: 20px;
+            y: 3px;
+            x: root.acik ? parent.width - self.width - 3px : 3px;
+            border-radius: self.height / 2;
+            background: root.acik ? BacakTema.vurgu-metin : BacakTema.soluk;
+            animate x { duration: 120ms; easing: ease-out; }
+        }
+    }
+
+    TouchArea {
+        enabled: root.etkin;
+        clicked => {
+            root.acik = !root.acik;
+            root.degisti(root.acik);
+        }
+    }
+}

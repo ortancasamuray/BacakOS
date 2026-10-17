@@ -1,0 +1,61 @@
+import { BacakTema, BacakPencere, BacakBaslik, BacakMetin, BacakDugme, BacakKart, BacakAnahtar } from "@bacak";
+import { ScrollView } from "std-widgets.slint";
+
+export { BacakTema }
+
+export component Uygulama inherits BacakPencere {
+    title: "Merhaba BacakOS";
+    preferred-width: 520px;
+    preferred-height: 560px;
+
+    in property <string> durum;
+    in property <string> pencereler;
+    callback bildirim-gonder();
+    callback kontrol-merkezi();
+    callback pencereleri-listele();
+    callback koyu-degisti(bool);
+
+    ScrollView {
+        VerticalLayout {
+            padding: BacakTema.dolgu;
+            spacing: BacakTema.dolgu;
+
+            BacakBaslik { text: "Merhaba BacakOS"; }
+            BacakMetin {
+                soluk: true;
+                text: "BacakOsSDK ile yazılmış örnek uygulama. Koyu mod masaüstüyle ortaktır: buradan değiştirince Kontrol Merkezi ve diğer uygulamalar da değişir.";
+            }
+
+            BacakKart {
+                BacakAnahtar {
+                    metin: "Koyu mod";
+                    acik: BacakTema.koyu;
+                    degisti(yeni) => { root.koyu-degisti(yeni); }
+                }
+            }
+
+            BacakKart {
+                BacakMetin { text: "Masaüstü"; }
+                HorizontalLayout {
+                    spacing: BacakTema.bosluk;
+                    BacakDugme {
+                        metin: "Bildirim gönder";
+                        birincil: true;
+                        tiklandi => { root.bildirim-gonder(); }
+                    }
+                    BacakDugme {
+                        metin: "Kontrol Merkezi";
+                        tiklandi => { root.kontrol-merkezi(); }
+                    }
+                    BacakDugme {
+                        metin: "Pencereler";
+                        tiklandi => { root.pencereleri-listele(); }
+                    }
+                }
+                BacakMetin { text: root.pencereler; }
+            }
+
+            BacakMetin { soluk: true; text: root.durum; }
+        }
+    }
+}

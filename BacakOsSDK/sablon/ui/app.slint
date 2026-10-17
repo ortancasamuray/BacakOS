@@ -1,0 +1,27 @@
+import { BacakTema, BacakPencere, BacakBaslik, BacakMetin, BacakDugme, BacakKart } from "@bacak";
+
+export { BacakTema }
+
+export component Uygulama inherits BacakPencere {
+    title: "__BASLIK__";
+    preferred-width: 480px;
+    preferred-height: 320px;
+
+    callback selam();
+
+    VerticalLayout {
+        padding: BacakTema.dolgu;
+        spacing: BacakTema.dolgu;
+        alignment: start;
+
+        BacakBaslik { text: "__BASLIK__"; }
+        BacakKart {
+            BacakMetin { text: "BacakOsSDK ile oluşturulan yeni uygulamanız."; }
+            BacakDugme {
+                metin: "Bildirim gönder";
+                birincil: true;
+                tiklandi => { root.selam(); }
+            }
+        }
+    }
+}

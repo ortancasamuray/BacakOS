@@ -1,0 +1,32 @@
+[package]
+name        = "__AD__"
+version     = "0.1.0"
+edition     = "2021"
+description = "__BASLIK__"
+license     = "MIT OR Apache-2.0"
+authors     = ["__YAZAR__"]
+
+[dependencies]
+bacak-sdk       = { path = "__SDK__/crates/bacak-sdk" }
+bacak-sdk-slint = { path = "__SDK__/crates/bacak-sdk-slint" }
+slint = { version = "1.8", default-features = false, features = ["compat-1-2", "std", "backend-winit", "backend-winit-wayland", "renderer-software"] }
+
+[build-dependencies]
+bacak-sdk-slint = { path = "__SDK__/crates/bacak-sdk-slint", features = ["derleme"] }
+
+[profile.release]
+lto = "thin"
+strip = true
+
+# `cargo deb` → target/debian/__AD___0.1.0-1_amd64.deb
+[package.metadata.deb]
+maintainer = "__YAZAR__"
+section = "utils"
+priority = "optional"
+# winit pencere/GPU kütüphanelerini çalışırken dlopen ile açar; $auto bunları görmez.
+depends = "$auto, libwayland-client0, libwayland-cursor0, libxkbcommon0"
+assets = [
+    ["target/release/__AD__", "usr/bin/", "755"],
+    ["paket/__AD__.desktop", "usr/share/applications/", "644"],
+    ["paket/__AD__.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
+]
