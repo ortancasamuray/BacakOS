@@ -278,12 +278,15 @@ pub fn bootloader(config: &Config, cancel: &Cancel, on: &mut Reporter) -> Result
     // installs them into the chroot to make the ISO itself bootable), so
     // there is nothing left to fetch — just point GRUB at the target disk.
     if uefi {
-        let mut args =
-            vec!["--target=x86_64-efi", "--efi-directory=/boot/efi", "--bootloader-id=BacakOS"];
+        // 32-bit UEFI on a 64-bit CPU needs the i386-efi GRUB (from
+        // grub-efi-ia32-bin in the squashfs); the kernel itself stays amd64.
+        let target = if disk::is_uefi_32bit() { "--target=i386-efi" } else { "--target=x86_64-efi" };
+        let mut args = vec![target, "--efi-directory=/boot/efi", "--bootloader-id=BacakOS"];
 
         // `--removable` also installs to the firmware-agnostic fallback path
-        // (\EFI\BOOT\BOOTX64.EFI) and skips the NVRAM boot entry. Real installs
-        // want the NVRAM entry, so this is gated to the VM test, where the guest
+        // (\EFI\BOOT\BOOTX64.EFI, or BOOTIA32.EFI for i386-efi) and skips the
+        // NVRAM boot entry. Real installs want the NVRAM entry, so this is
+        // gated to the VM test, where the guest
         // firmware starts with an empty NVRAM and can only find the fallback —
         // and where writing NVRAM would pollute the *host's* boot menu.
         if std::env::var_os("KUR_GRUB_REMOVABLE").is_some_and(|v| v == "1") {

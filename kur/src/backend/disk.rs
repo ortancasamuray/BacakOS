@@ -201,6 +201,14 @@ pub fn is_uefi_boot() -> bool {
     std::path::Path::new("/sys/firmware/efi").exists()
 }
 
+/// True when the UEFI firmware is 32-bit (`fw_platform_size` = 32) even though
+/// the kernel is 64-bit — Bay Trail / Cherry Trail tablets and mini PCs. Such
+/// firmware only loads `i386-efi` images (`BOOTIA32.EFI`), so GRUB must be
+/// installed for that target instead of `x86_64-efi`.
+pub fn is_uefi_32bit() -> bool {
+    std::fs::read_to_string("/sys/firmware/efi/fw_platform_size").is_ok_and(|s| s.trim() == "32")
+}
+
 /// Force everything currently mounted or swapped-on under `disk`'s existing
 /// partitions to let go, right before an automatic plan wipes it.
 ///
