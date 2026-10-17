@@ -10,6 +10,9 @@ authors = ["Anadolu Panteri <bilgi@anadolupanteri.org.tr>"]
 rust-version = "1.80"
 
 [dependencies]
+# BacakOS desktop integration: desktop-wide dark mode, .desktop/MIME handling.
+bacak-sdk = { path = "../BacakOsSDK/crates/bacak-sdk" }
+
 # UI
 slint = { version = "1.8", default-features = false, features = ["compat-1-2", "backend-winit", "backend-winit-wayland", "renderer-software", "std"] }
 

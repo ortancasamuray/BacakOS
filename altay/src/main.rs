@@ -131,7 +131,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ui.set_view_mode(0);
     ui.set_grid_scale(cfg.prefs.grid_scale.clamp(0.6, 2.2));
     ui.set_show_hidden_pref(cfg.prefs.show_hidden);
-    ui.global::<Theme>().set_dark(cfg.prefs.dark);
+    // Dark mode is desktop-wide (BacakOsSDK): read it now, follow changes made
+    // in the Control Center or any other app.
+    ui.global::<Theme>().set_dark(bacak_sdk::Gorunum::load().koyu);
+    {
+        let ui_w = ui.as_weak();
+        bacak_sdk::gorunum::izle(move |g| {
+            let _ = ui_w.upgrade_in_event_loop(move |ui| ui.global::<Theme>().set_dark(g.koyu));
+        });
+    }
     let lang = if cfg.prefs.lang.is_empty() { detect_locale() } else { cfg.prefs.lang.clone() };
     apply_language(&ui, &lang);
     ui.set_lang(SharedString::from(lang));
@@ -599,10 +607,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
     {
+        // Altay's theme switch changes it for the whole desktop; the IPC call
+        // may wait for its timeout, so keep it off the UI thread.
         ui.on_set_dark(move |dark| {
-            let mut cfg = config::load();
-            cfg.prefs.dark = dark;
-            let _ = config::save(&cfg);
+            std::thread::spawn(move || {
+                if let Err(e) = bacak_sdk::gorunum::ayarla(dark) {
+                    log::warn!("koyu mod ayarlanamadı: {e}");
+                }
+            });
         });
     }
     {
