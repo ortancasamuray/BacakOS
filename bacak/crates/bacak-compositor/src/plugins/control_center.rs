@@ -73,6 +73,9 @@ pub struct CcTile {
 pub struct ControlCenter {
     pub output: OutputId,
     pub panel: Rect,
+    /// Layout scale relative to the 1080-px design (see `open_control_center`);
+    /// the renderer multiplies its fixed offsets by it.
+    pub zoom: f32,
     pub tiles: Vec<CcTile>,
     pub clock: Option<(MemoryRenderBuffer, usize, usize)>,
     // Live snapshot, captured at open and mutated by clicks.

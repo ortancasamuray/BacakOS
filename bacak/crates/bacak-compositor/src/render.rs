@@ -1760,45 +1760,47 @@ fn push_cc_monitor_glyph(
     renderer: &mut GlesRenderer,
     x: f32,
     y: f32,
+    z: f32,
     output_scale: i32,
     off_x: i32,
     off_y: i32,
 ) {
     let frame = Color32F::new(0.92, 0.94, 0.97, 0.95);
     let screen = Color32F::new(0.30, 0.50, 0.78, 1.0);
-    let bezel_h = 13.0;
-    let inset = 1.8;
+    let mw = CC_MONITOR_W * z;
+    let bezel_h = 13.0 * z;
+    let inset = 1.8 * z;
     // Screen in front of the bezel it sits in.
     cc_card(
         out,
         renderer,
-        Rect::new(x + inset, y + inset, CC_MONITOR_W - 2.0 * inset, bezel_h - 2.0 * inset),
+        Rect::new(x + inset, y + inset, mw - 2.0 * inset, bezel_h - 2.0 * inset),
         screen,
-        1.2,
+        1.2 * z,
         output_scale,
         off_x,
         off_y,
     );
-    cc_card(out, renderer, Rect::new(x, y, CC_MONITOR_W, bezel_h), frame, 2.5, output_scale, off_x, off_y);
+    cc_card(out, renderer, Rect::new(x, y, mw, bezel_h), frame, 2.5 * z, output_scale, off_x, off_y);
     // Neck and base.
-    let neck_w = 3.0;
+    let neck_w = 3.0 * z;
     cc_card(
         out,
         renderer,
-        Rect::new(x + (CC_MONITOR_W - neck_w) / 2.0, y + bezel_h, neck_w, 2.4),
+        Rect::new(x + (mw - neck_w) / 2.0, y + bezel_h, neck_w, 2.4 * z),
         frame,
         0.0,
         output_scale,
         off_x,
         off_y,
     );
-    let base_w = 10.0;
+    let base_w = 10.0 * z;
     cc_card(
         out,
         renderer,
-        Rect::new(x + (CC_MONITOR_W - base_w) / 2.0, y + CC_MONITOR_H - 1.8, base_w, 1.8),
+        Rect::new(x + (mw - base_w) / 2.0, y + (CC_MONITOR_H - 1.8) * z, base_w, 1.8 * z),
         frame,
-        0.9,
+        0.9 * z,
         output_scale,
         off_x,
         off_y,
@@ -1808,11 +1810,12 @@ fn push_cc_monitor_glyph(
 /// A slider tile's track geometry: `(x, y, width, height)` of the groove
 /// inside the tile. Shared by the fill (pass 1) and the track (pass 2) so
 /// they line up exactly, and matched to the hit-test in `state.rs`.
-fn cc_slider_geom(r: Rect) -> (f32, f32, f32, f32) {
-    let th = 8.0;
-    let x = r.x + crate::state::CC_SLIDER_INSET;
-    let w = (r.w - 2.0 * crate::state::CC_SLIDER_INSET).max(1.0);
-    let y = r.y + r.h - 20.0;
+fn cc_slider_geom(r: Rect, z: f32) -> (f32, f32, f32, f32) {
+    let th = 8.0 * z;
+    let inset = crate::state::CC_SLIDER_INSET * z;
+    let x = r.x + inset;
+    let w = (r.w - 2.0 * inset).max(1.0);
+    let y = r.y + r.h - 20.0 * z;
     (x, y, w, th)
 }
 
@@ -1834,6 +1837,7 @@ pub(crate) fn render_control_center(
     if cc.output != output {
         return;
     }
+    let z = cc.zoom;
 
     let accent = SWITCHER_RING_COLOR;
     let warm = Color32F::new(1.0, 0.78, 0.30, 0.95);
@@ -1854,8 +1858,8 @@ pub(crate) fn render_control_center(
         out,
         renderer,
         &cc.clock,
-        cc.panel.x + 18.0,
-        cc.panel.y + 13.0,
+        cc.panel.x + 18.0 * z,
+        cc.panel.y + 13.0 * z,
         output_scale,
         off_x,
         off_y,
@@ -1874,7 +1878,7 @@ pub(crate) fn render_control_center(
                     _ => cc.volume,
                 }
                 .clamp(0.0, 1.0);
-                let (tx, ty, tw, th) = cc_slider_geom(r);
+                let (tx, ty, tw, th) = cc_slider_geom(r, z);
                 let fill_col = if matches!(tile.action, crate::state::CcAction::Brightness) {
                     warm
                 } else if matches!(tile.action, crate::state::CcAction::MicVolume) {
@@ -1882,9 +1886,9 @@ pub(crate) fn render_control_center(
                 } else {
                     accent
                 };
-                let fw = (tw * level).max(2.0);
+                let fw = (tw * level).max(2.0 * z);
                 cc_card(out, renderer, Rect::new(tx, ty, fw, th), fill_col, th / 2.0, output_scale, off_x, off_y);
-                let knob = 18.0;
+                let knob = 18.0 * z;
                 cc_card(
                     out,
                     renderer,
@@ -1896,26 +1900,26 @@ pub(crate) fn render_control_center(
                     off_y,
                 );
                 // Label sits above the track, top-left.
-                cc_blit_label(out, renderer, &tile.label, tx, r.y + 7.0, output_scale, off_x, off_y);
+                cc_blit_label(out, renderer, &tile.label, tx, r.y + 7.0 * z, output_scale, off_x, off_y);
             }
             crate::state::CcKind::Button { .. } => {
                 let label_h = tile.label.as_ref().map(|(_, _, h)| *h as f32).unwrap_or(0.0);
                 let sub_h = tile.sub.as_ref().map(|(_, _, h)| *h as f32).unwrap_or(0.0);
-                let gap = if sub_h > 0.0 { 2.0 } else { 0.0 };
+                let gap = if sub_h > 0.0 { 2.0 * z } else { 0.0 };
                 let block_h = label_h + gap + sub_h;
                 let mut ly = r.y + (r.h - block_h) / 2.0;
                 // The UI font (DejaVu) has no monitor glyph, so the Remote
                 // Desktop button draws one as vector shapes left of its label.
                 let icon_w = if tile.action == crate::plugins::control_center::CcAction::RemoteDesktopConnect {
-                    CC_MONITOR_W + CC_MONITOR_GAP
+                    (CC_MONITOR_W + CC_MONITOR_GAP) * z
                 } else {
                     0.0
                 };
                 if let Some((_, w, _)) = &tile.label {
                     let lx = r.x + (r.w - *w as f32 - icon_w) / 2.0 + icon_w;
                     if icon_w > 0.0 {
-                        let iy = r.y + (r.h - CC_MONITOR_H) / 2.0;
-                        push_cc_monitor_glyph(out, renderer, lx - icon_w, iy, output_scale, off_x, off_y);
+                        let iy = r.y + (r.h - CC_MONITOR_H * z) / 2.0;
+                        push_cc_monitor_glyph(out, renderer, lx - icon_w, iy, z, output_scale, off_x, off_y);
                     }
                     cc_blit_label(out, renderer, &tile.label, lx, ly, output_scale, off_x, off_y);
                 }
@@ -1930,19 +1934,19 @@ pub(crate) fn render_control_center(
                 // the short full-width dark tile centres its label.
                 let label_h = tile.label.as_ref().map(|(_, _, h)| *h as f32).unwrap_or(0.0);
                 let sub_h = tile.sub.as_ref().map(|(_, _, h)| *h as f32).unwrap_or(0.0);
-                if r.h >= 80.0 {
-                    let lx = r.x + 14.0;
+                if r.h >= 80.0 * z {
+                    let lx = r.x + 14.0 * z;
                     if tile.sub.is_some() {
-                        let sub_y = r.y + r.h - 12.0 - sub_h;
-                        let label_y = sub_y - label_h - 2.0;
+                        let sub_y = r.y + r.h - 12.0 * z - sub_h;
+                        let label_y = sub_y - label_h - 2.0 * z;
                         cc_blit_label(out, renderer, &tile.label, lx, label_y, output_scale, off_x, off_y);
                         cc_blit_label(out, renderer, &tile.sub, lx, sub_y, output_scale, off_x, off_y);
                     } else {
-                        let label_y = r.y + r.h - 12.0 - label_h;
+                        let label_y = r.y + r.h - 12.0 * z - label_h;
                         cc_blit_label(out, renderer, &tile.label, lx, label_y, output_scale, off_x, off_y);
                     }
                 } else {
-                    let lx = r.x + 16.0;
+                    let lx = r.x + 16.0 * z;
                     let label_y = r.y + (r.h - label_h) / 2.0;
                     cc_blit_label(out, renderer, &tile.label, lx, label_y, output_scale, off_x, off_y);
                 }
@@ -1955,16 +1959,16 @@ pub(crate) fn render_control_center(
         let r = tile.rect;
         match tile.kind {
             crate::state::CcKind::Slider => {
-                let (tx, ty, tw, th) = cc_slider_geom(r);
+                let (tx, ty, tw, th) = cc_slider_geom(r, z);
                 cc_card(out, renderer, Rect::new(tx, ty, tw, th), track_col, th / 2.0, output_scale, off_x, off_y);
             }
             crate::state::CcKind::Button { danger } => {
                 let col = if danger { danger_col } else { off_card };
-                cc_card(out, renderer, r, col, 12.0, output_scale, off_x, off_y);
+                cc_card(out, renderer, r, col, 12.0 * z, output_scale, off_x, off_y);
             }
             crate::state::CcKind::Toggle => {
                 let col = if on_for(tile.action) { accent } else { off_card };
-                cc_card(out, renderer, r, col, 16.0, output_scale, off_x, off_y);
+                cc_card(out, renderer, r, col, 16.0 * z, output_scale, off_x, off_y);
             }
         }
     }
@@ -1975,7 +1979,7 @@ pub(crate) fn render_control_center(
     } else {
         Color32F::new(0.20, 0.22, 0.27, 0.94)
     };
-    cc_card(out, renderer, cc.panel, panel_col, 22.0, output_scale, off_x, off_y);
+    cc_card(out, renderer, cc.panel, panel_col, 22.0 * z, output_scale, off_x, off_y);
 }
 
 /// Render the native Wi-Fi picker when open: a top-right card with a title, a

@@ -4660,7 +4660,7 @@ impl BacakState {
         let ssid: Option<String> = None;
         let clock_text = String::new();
 
-        // Geometry (logical px).
+        // Geometry (logical px, before `zoom`).
         const PAD: f32 = 16.0;
         const GAP: f32 = 12.0;
         const W: f32 = 380.0;
@@ -4672,9 +4672,6 @@ impl BacakState {
         const AD: f32 = 48.0; // audio device / mic device button rows
         const SH: f32 = 48.0; // screenshot button row
         const PR: f32 = 60.0; // power row
-        let inner = W - 2.0 * PAD;
-        let col_w = (inner - GAP) / 2.0;
-        let btn_w = (inner - 2.0 * GAP) / 3.0;
 
         // Which optional plugin sections are installed?
         let net_on = std::path::Path::new("/usr/share/bacak/plugins/network.plugin").exists();
@@ -4695,20 +4692,36 @@ impl BacakState {
         let remote_desktop_h = if remote_desktop_on { SH + GAP } else { 0.0 };
         let panel_h = PAD + CH + GAP + net_h + DK + GAP + SL + GAP + aud_h + ds_h + uzakel_h + remote_desktop_h + SH + GAP + PR + PAD;
 
+        // The layout above is designed for a 1080-px-tall logical output.
+        // Scale it with the output height (so a 4K panel at 1× doesn't get a
+        // postage stamp), but never past what fits on screen (so the power
+        // row stays reachable on 768-px laptops).
         let m = 14.0;
-        let bx = (bounds.x + bounds.w - W - m).max(bounds.x + m);
+        let zoom = (bounds.h / 1080.0)
+            .clamp(1.0, 2.5)
+            .min((bounds.h - 2.0 * m) / panel_h)
+            .min((bounds.w - 2.0 * m) / W)
+            .max(0.5);
+        let z = |v: f32| v * zoom;
+        let (pad, gap, w, ch, tr, eh, dk, sl, ad, sh, pr) =
+            (z(PAD), z(GAP), z(W), z(CH), z(TR), z(EH), z(DK), z(SL), z(AD), z(SH), z(PR));
+        let panel_h = panel_h * zoom;
+        let inner = w - 2.0 * pad;
+        let col_w = (inner - gap) / 2.0;
+        let btn_w = (inner - 2.0 * gap) / 3.0;
+        let bx = (bounds.x + bounds.w - w - m).max(bounds.x + m);
         let by = (bounds.y + m).max(bounds.y);
-        let panel = Rect::new(bx, by, W, panel_h);
+        let panel = Rect::new(bx, by, w, panel_h);
 
-        let cx = bx + PAD;
-        let mut y = by + PAD + CH + GAP;
+        let cx = bx + pad;
+        let mut y = by + pad + ch + gap;
 
         let text = self.text.as_ref();
         const LABEL: [u8; 3] = [232, 236, 244];
         const SUB: [u8; 3] = [170, 178, 196];
-        let lw = (col_w - 18.0).max(1.0) as usize;
-        let bw = (btn_w - 8.0).max(1.0) as usize;
-        let iw = (inner - 18.0) as usize;
+        let lw = (col_w - z(18.0)).max(1.0) as usize;
+        let bw = (btn_w - z(8.0)).max(1.0) as usize;
+        let iw = (inner - z(18.0)) as usize;
 
         let wifi_sub = if wifi_on {
             ssid.clone().unwrap_or_else(|| "Açık".to_string())
@@ -4721,151 +4734,152 @@ impl BacakState {
         // --- Network section (optional) ---
         if net_on {
             tiles.push(CcTile {
-                rect: Rect::new(cx, y, col_w, TR),
+                rect: Rect::new(cx, y, col_w, tr),
                 action: CcAction::WifiToggle,
                 kind: CcKind::Toggle,
-                label: cc_rasterize(text, "Wi-Fi", 15.0, LABEL, lw),
-                sub: cc_rasterize(text, &wifi_sub, 12.0, SUB, lw),
+                label: cc_rasterize(text, "Wi-Fi", z(15.0), LABEL, lw),
+                sub: cc_rasterize(text, &wifi_sub, z(12.0), SUB, lw),
             });
             tiles.push(CcTile {
-                rect: Rect::new(cx + col_w + GAP, y, col_w, TR),
+                rect: Rect::new(cx + col_w + gap, y, col_w, tr),
                 action: CcAction::BtToggle,
                 kind: CcKind::Toggle,
-                label: cc_rasterize(text, "Bluetooth", 15.0, LABEL, lw),
-                sub: cc_rasterize(text, if bt_on { "Açık" } else { "Kapalı" }, 12.0, SUB, lw),
+                label: cc_rasterize(text, "Bluetooth", z(15.0), LABEL, lw),
+                sub: cc_rasterize(text, if bt_on { "Açık" } else { "Kapalı" }, z(12.0), SUB, lw),
             });
-            y += TR + GAP;
+            y += tr + gap;
             tiles.push(CcTile {
-                rect: Rect::new(cx, y, inner, EH),
+                rect: Rect::new(cx, y, inner, eh),
                 action: CcAction::EthernetSettings,
                 kind: CcKind::Button { danger: false },
-                label: cc_rasterize(text, "Ethernet Ayarları", 15.0, LABEL, iw),
+                label: cc_rasterize(text, "Ethernet Ayarları", z(15.0), LABEL, iw),
                 sub: None,
             });
-            y += EH + GAP;
+            y += eh + gap;
         }
 
         // --- Core: dark mode + brightness ---
         tiles.push(CcTile {
-            rect: Rect::new(cx, y, inner, DK),
+            rect: Rect::new(cx, y, inner, dk),
             action: CcAction::DarkToggle,
             kind: CcKind::Toggle,
-            label: cc_rasterize(text, "Karanlık Mod", 15.0, LABEL, iw),
+            label: cc_rasterize(text, "Karanlık Mod", z(15.0), LABEL, iw),
             sub: None,
         });
-        y += DK + GAP;
+        y += dk + gap;
         tiles.push(CcTile {
-            rect: Rect::new(cx, y, inner, SL),
+            rect: Rect::new(cx, y, inner, sl),
             action: CcAction::Brightness,
             kind: CcKind::Slider,
-            label: cc_rasterize(text, "Parlaklık", 13.0, SUB, iw),
+            label: cc_rasterize(text, "Parlaklık", z(13.0), SUB, iw),
             sub: None,
         });
-        y += SL + GAP;
+        y += sl + gap;
 
         // --- Audio section (optional) ---
         if aud_on {
             tiles.push(CcTile {
-                rect: Rect::new(cx, y, inner, SL),
+                rect: Rect::new(cx, y, inner, sl),
                 action: CcAction::Volume,
                 kind: CcKind::Slider,
-                label: cc_rasterize(text, "Ses Çıkışı", 13.0, SUB, iw),
+                label: cc_rasterize(text, "Ses Çıkışı", z(13.0), SUB, iw),
                 sub: None,
             });
-            y += SL + GAP;
+            y += sl + gap;
             tiles.push(CcTile {
-                rect: Rect::new(cx, y, inner, AD),
+                rect: Rect::new(cx, y, inner, ad),
                 action: CcAction::AudioSettings,
                 kind: CcKind::Button { danger: false },
-                label: cc_rasterize(text, "Ses Çıkış Cihazı", 15.0, LABEL, iw),
+                label: cc_rasterize(text, "Ses Çıkış Cihazı", z(15.0), LABEL, iw),
                 sub: None,
             });
-            y += AD + GAP;
+            y += ad + gap;
             tiles.push(CcTile {
-                rect: Rect::new(cx, y, inner, SL),
+                rect: Rect::new(cx, y, inner, sl),
                 action: CcAction::MicVolume,
                 kind: CcKind::Slider,
-                label: cc_rasterize(text, "Mikrofon", 13.0, SUB, iw),
+                label: cc_rasterize(text, "Mikrofon", z(13.0), SUB, iw),
                 sub: None,
             });
-            y += SL + GAP;
+            y += sl + gap;
             tiles.push(CcTile {
-                rect: Rect::new(cx, y, inner, AD),
+                rect: Rect::new(cx, y, inner, ad),
                 action: CcAction::MicSettings,
                 kind: CcKind::Button { danger: false },
-                label: cc_rasterize(text, "Mikrofon Cihazı", 15.0, LABEL, iw),
+                label: cc_rasterize(text, "Mikrofon Cihazı", z(15.0), LABEL, iw),
                 sub: None,
             });
-            y += AD + GAP;
+            y += ad + gap;
         }
 
         // --- Core: desktop settings + screenshot + power ---
         let ds_on = std::path::Path::new("/usr/share/bacak/plugins/desktop-settings.plugin").exists();
         if ds_on {
             tiles.push(CcTile {
-                rect: Rect::new(cx, y, inner, SH),
+                rect: Rect::new(cx, y, inner, sh),
                 action: CcAction::DesktopSettings,
                 kind: CcKind::Button { danger: false },
-                label: cc_rasterize(text, "⚙  Masaüstü Ayarları", 15.0, LABEL, iw),
+                label: cc_rasterize(text, "⚙  Masaüstü Ayarları", z(15.0), LABEL, iw),
                 sub: None,
             });
-            y += SH + GAP;
+            y += sh + gap;
         }
         if uzakel_on {
             tiles.push(CcTile {
-                rect: Rect::new(cx, y, inner, SH),
+                rect: Rect::new(cx, y, inner, sh),
                 action: CcAction::UzakelConnect,
                 kind: CcKind::Button { danger: false },
-                label: cc_rasterize(text, "📱  Uzakel'e Bağlan", 15.0, LABEL, iw),
+                label: cc_rasterize(text, "📱  Uzakel'e Bağlan", z(15.0), LABEL, iw),
                 sub: None,
             });
-            y += SH + GAP;
+            y += sh + gap;
         }
         if remote_desktop_on {
             tiles.push(CcTile {
-                rect: Rect::new(cx, y, inner, SH),
+                rect: Rect::new(cx, y, inner, sh),
                 action: CcAction::RemoteDesktopConnect,
                 kind: CcKind::Button { danger: false },
-                label: cc_rasterize(text, "Uzak Masaüstü", 15.0, LABEL, iw),
+                label: cc_rasterize(text, "Uzak Masaüstü", z(15.0), LABEL, iw),
                 sub: None,
             });
-            y += SH + GAP;
+            y += sh + gap;
         }
         tiles.push(CcTile {
-            rect: Rect::new(cx, y, inner, SH),
+            rect: Rect::new(cx, y, inner, sh),
             action: CcAction::Screenshot,
             kind: CcKind::Button { danger: false },
-            label: cc_rasterize(text, "❏  Ekran Görüntüsü", 15.0, LABEL, iw),
+            label: cc_rasterize(text, "❏  Ekran Görüntüsü", z(15.0), LABEL, iw),
             sub: None,
         });
-        y += SH + GAP;
+        y += sh + gap;
         tiles.push(CcTile {
-            rect: Rect::new(cx, y, btn_w, PR),
+            rect: Rect::new(cx, y, btn_w, pr),
             action: CcAction::PowerOff,
             kind: CcKind::Button { danger: true },
-            label: cc_rasterize(text, "Kapat", 13.0, LABEL, bw),
+            label: cc_rasterize(text, "Kapat", z(13.0), LABEL, bw),
             sub: None,
         });
         tiles.push(CcTile {
-            rect: Rect::new(cx + btn_w + GAP, y, btn_w, PR),
+            rect: Rect::new(cx + btn_w + gap, y, btn_w, pr),
             action: CcAction::Reboot,
             kind: CcKind::Button { danger: false },
-            label: cc_rasterize(text, "Yeniden", 13.0, LABEL, bw),
+            label: cc_rasterize(text, "Yeniden", z(13.0), LABEL, bw),
             sub: None,
         });
         tiles.push(CcTile {
-            rect: Rect::new(cx + 2.0 * (btn_w + GAP), y, btn_w, PR),
+            rect: Rect::new(cx + 2.0 * (btn_w + gap), y, btn_w, pr),
             action: CcAction::Logout,
             kind: CcKind::Button { danger: false },
-            label: cc_rasterize(text, "Çıkış", 13.0, LABEL, bw),
+            label: cc_rasterize(text, "Çıkış", z(13.0), LABEL, bw),
             sub: None,
         });
 
-        let clock = cc_rasterize(text, &clock_text, 14.0, LABEL, (inner) as usize);
+        let clock = cc_rasterize(text, &clock_text, z(14.0), LABEL, (inner) as usize);
 
         self.control_center = Some(ControlCenter {
             output: out,
             panel,
+            zoom,
             tiles,
             clock,
             wifi_on,
@@ -4908,10 +4922,11 @@ impl BacakState {
         let bt_sub_text = if snap.bt_on { "Açık" } else { "Kapalı" };
         let eth_sub_text = if snap.eth_connected { "Bağlı" } else { "Bağlı değil" };
         let text = self.text.as_ref();
-        let wifi_sub = cc_rasterize(text, &wifi_sub_text, 12.0, SUB, 150);
-        let bt_sub = cc_rasterize(text, bt_sub_text, 12.0, SUB, 150);
-        let eth_sub = cc_rasterize(text, eth_sub_text, 12.0, SUB, 150);
-        let clock = cc_rasterize(text, &snap.clock, 14.0, LABEL, 348);
+        let z = self.control_center.as_ref().map(|cc| cc.zoom).unwrap_or(1.0);
+        let wifi_sub = cc_rasterize(text, &wifi_sub_text, 12.0 * z, SUB, (150.0 * z) as usize);
+        let bt_sub = cc_rasterize(text, bt_sub_text, 12.0 * z, SUB, (150.0 * z) as usize);
+        let eth_sub = cc_rasterize(text, eth_sub_text, 12.0 * z, SUB, (150.0 * z) as usize);
+        let clock = cc_rasterize(text, &snap.clock, 14.0 * z, LABEL, (348.0 * z) as usize);
         if let Some(cc) = self.control_center.as_mut() {
             cc.wifi_on = snap.wifi_on;
             cc.bt_on = snap.bt_on;
@@ -7211,9 +7226,10 @@ impl BacakState {
         };
 
         // Slider level from the click's x within the inset track.
+        let inset = CC_SLIDER_INSET * cc.zoom;
         let slider_level = || {
-            let track = (rect.w - 2.0 * CC_SLIDER_INSET).max(1.0);
-            ((px - rect.x - CC_SLIDER_INSET) / track).clamp(0.0, 1.0)
+            let track = (rect.w - 2.0 * inset).max(1.0);
+            ((px - rect.x - inset) / track).clamp(0.0, 1.0)
         };
 
         match action {
