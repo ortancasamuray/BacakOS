@@ -11,9 +11,10 @@
 //!   * [`open`] / [`open_with`] — launch the default or a chosen application,
 //!   * [`set_default`] — make an application the default for a type.
 //!
-//! Desktop-entry parsing and `Exec` field-code expansion are pure and tested;
-//! discovery and launching shell out to the standard freedesktop tools and
-//! degrade gracefully when they are missing. The file path is always
+//! Desktop-entry parsing, `Exec` expansion, MIME detection/defaults and
+//! launching come from BacakOsSDK (`bacak_sdk::masaustu` / `bacak_sdk::mime`),
+//! shared with every BacakOS app; this module keeps Altay's own [`AppEntry`]
+//! view, the icon lookups and the sandbox check. The file path is always
 //! sandbox-validated before launch.
 
 use std::path::{Path, PathBuf};
@@ -51,64 +52,24 @@ pub struct AppEntry {
 
 // ---- Discovery --------------------------------------------------------------
 
-/// freedesktop application directories, most-specific (user) first.
-fn application_dirs() -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-    if let Some(data_home) = dirs::data_dir() {
-        dirs.push(data_home.join("applications"));
+impl From<bacak_sdk::Uygulama> for AppEntry {
+    fn from(a: bacak_sdk::Uygulama) -> Self {
+        AppEntry {
+            id: a.id,
+            name: a.ad,
+            exec: a.exec,
+            mime_types: a.mime_turleri,
+            icon: a.simge,
+            no_display: a.gizli,
+            terminal: a.terminal,
+        }
     }
-    let system = std::env::var("XDG_DATA_DIRS")
-        .unwrap_or_else(|_| "/usr/local/share:/usr/share".into());
-    for base in system.split(':').filter(|s| !s.is_empty()) {
-        dirs.push(Path::new(base).join("applications"));
-    }
-    dirs
 }
 
 /// Parse a desktop-entry file's text into an [`AppEntry`]. Pure; testable.
-/// Only the `[Desktop Entry]` group is read.
+/// Only the `[Desktop Entry]` group is read; `Name` is localised.
 pub fn parse_entry(id: &str, text: &str) -> Option<AppEntry> {
-    let mut in_group = false;
-    let (mut name, mut exec, mut mimes, mut no_display, mut is_app, mut icon, mut terminal) =
-        (String::new(), String::new(), Vec::new(), false, false, String::new(), false);
-    for line in text.lines() {
-        let line = line.trim();
-        if line.starts_with('[') {
-            in_group = line == "[Desktop Entry]";
-            continue;
-        }
-        if !in_group || line.starts_with('#') {
-            continue;
-        }
-        let Some((key, val)) = line.split_once('=') else { continue };
-        match key.trim() {
-            "Type" => is_app = val.trim() == "Application",
-            "Name" if name.is_empty() => name = val.trim().to_string(),
-            "Exec" => exec = val.trim().to_string(),
-            "Icon" if icon.is_empty() => icon = val.trim().to_string(),
-            "MimeType" => {
-                mimes = val.split(';').filter(|s| !s.is_empty()).map(|s| s.trim().to_string()).collect()
-            }
-            "NoDisplay" | "Hidden" => {
-                if val.trim().eq_ignore_ascii_case("true") {
-                    no_display = true;
-                }
-            }
-            "Terminal" => {
-                if val.trim().eq_ignore_ascii_case("true") {
-                    terminal = true;
-                }
-            }
-            _ => {}
-        }
-    }
-    if !is_app || exec.is_empty() {
-        return None;
-    }
-    if name.is_empty() {
-        name = id.trim_end_matches(".desktop").to_string();
-    }
-    Some(AppEntry { id: id.to_string(), name, exec, mime_types: mimes, icon, no_display, terminal })
+    bacak_sdk::masaustu::parse(id, text, Path::new(id)).map(AppEntry::from)
 }
 
 /// Memoized icon name → resolved file. Theme lookups touch many directories, so
@@ -241,95 +202,28 @@ fn resolve_mime_icon_uncached(name: &str) -> Option<PathBuf> {
     None
 }
 
-/// Look up a desktop entry by id across the application directories.
+/// Look up a desktop entry by id (or window class) across the application
+/// directories.
 pub fn app_by_id(id: &str) -> Option<AppEntry> {
-    for dir in application_dirs() {
-        let path = dir.join(id);
-        if let Ok(text) = std::fs::read_to_string(&path) {
-            return parse_entry(id, &text);
-        }
-    }
-    None
+    bacak_sdk::masaustu::uygulama(id).map(AppEntry::from)
 }
 
 /// All visible applications, de-duplicated by id (user entries win).
 pub fn all_apps() -> Vec<AppEntry> {
-    let mut seen = std::collections::HashSet::new();
-    let mut out = Vec::new();
-    for dir in application_dirs() {
-        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
-        for entry in rd.flatten() {
-            let id = entry.file_name().to_string_lossy().into_owned();
-            if !id.ends_with(".desktop") || !seen.insert(id.clone()) {
-                continue;
-            }
-            if let Ok(text) = std::fs::read_to_string(entry.path()) {
-                if let Some(app) = parse_entry(&id, &text) {
-                    if !app.no_display {
-                        out.push(app);
-                    }
-                }
-            }
-        }
-    }
-    out
+    bacak_sdk::masaustu::uygulamalar().into_iter().map(AppEntry::from).collect()
 }
 
 // ---- MIME / defaults --------------------------------------------------------
 
 /// Detect a file's MIME type: `xdg-mime` first, then an extension fallback.
 pub fn mime_type(path: &Path) -> Option<String> {
-    use std::process::Command;
-    if let Ok(out) = Command::new("xdg-mime").args(["query", "filetype"]).arg(path).output() {
-        if out.status.success() {
-            let m = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !m.is_empty() {
-                return Some(m);
-            }
-        }
-    }
-    mime_from_extension(path)
+    bacak_sdk::mime::tur(path)
 }
 
-/// The default application id for a MIME type, via `xdg-mime query default`.
-/// Falls back to built-in mappings when xdg-mime is unavailable or returns nothing.
+/// The default application id for a MIME type (`xdg-mime`, then BacakOS's
+/// built-in defaults such as bacak-belge for PDFs and images).
 pub fn default_app(mime: &str) -> Option<String> {
-    use std::process::Command;
-    if let Ok(out) = Command::new("xdg-mime").args(["query", "default", mime]).output() {
-        if out.status.success() {
-            let id = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !id.is_empty() {
-                return Some(id);
-            }
-        }
-    }
-    builtin_default_app(mime).map(|s| s.to_string())
-}
-
-/// Hardcoded defaults for known types — used when xdg-mime is unavailable or
-/// the user has no mimeapps.list entry.
-fn builtin_default_app(mime: &str) -> Option<&'static str> {
-    match mime {
-        "application/pdf"
-        | "application/epub+zip"
-        | "image/jpeg"
-        | "image/png"
-        | "image/gif"
-        | "image/webp"
-        | "image/bmp"
-        | "image/tiff"
-        | "image/x-tiff"
-        | "image/svg+xml"
-        | "image/x-icon"
-        | "image/vnd.microsoft.icon"
-        | "image/x-qoi"
-        | "image/vnd.radiance"
-        | "image/x-portable-bitmap"
-        | "image/x-portable-graymap"
-        | "image/x-portable-pixmap"
-        | "image/x-portable-anymap" => Some("bacak-belge.desktop"),
-        _ => None,
-    }
+    bacak_sdk::mime::varsayilan(mime)
 }
 
 /// Every installed application, for the "Birlikte Aç" (Open With) picker —
@@ -341,35 +235,16 @@ fn builtin_default_app(mime: &str) -> Option<&'static str> {
 /// alphabetically; the current default (if any) is pinned to the very top.
 pub fn apps_for(sandbox: &Sandbox, path: &Path) -> Result<Vec<AppEntry>, ExoError> {
     let safe = sandbox.resolve(path)?;
-    let mime = mime_type(safe.as_path());
-    let mut apps: Vec<AppEntry> = all_apps();
-    apps.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-    if let Some(mime) = &mime {
-        let (mut matching, mut rest): (Vec<AppEntry>, Vec<AppEntry>) =
-            apps.into_iter().partition(|a| a.mime_types.iter().any(|m| m == mime));
-        matching.append(&mut rest);
-        apps = matching;
-        if let Some(def) = default_app(mime) {
-            if let Some(pos) = apps.iter().position(|a| a.id == def) {
-                let d = apps.remove(pos);
-                apps.insert(0, d);
-            }
-        }
-    }
-    Ok(apps)
+    let apps = match mime_type(safe.as_path()) {
+        Some(mime) => bacak_sdk::mime::uygulamalar_icin(&mime),
+        None => bacak_sdk::masaustu::uygulamalar(),
+    };
+    Ok(apps.into_iter().map(AppEntry::from).collect())
 }
 
 /// Make `app_id` the default application for `mime` (`xdg-mime default`).
 pub fn set_default(mime: &str, app_id: &str) -> Result<(), ExoError> {
-    let status = std::process::Command::new("xdg-mime")
-        .args(["default", app_id, mime])
-        .status()
-        .map_err(|e| ExoError::Launch(e.to_string()))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(ExoError::Launch("xdg-mime default returned non-zero".into()))
-    }
+    bacak_sdk::mime::varsayilan_yap(mime, app_id).map_err(|e| ExoError::Launch(e.to_string()))
 }
 
 // ---- Launching --------------------------------------------------------------
@@ -378,123 +253,29 @@ pub fn set_default(mime: &str, app_id: &str) -> Result<(), ExoError> {
 /// (so it behaves like a real file manager), falling back to `xdg-open`.
 pub fn open(sandbox: &Sandbox, path: impl AsRef<Path>) -> Result<(), ExoError> {
     let safe = sandbox.resolve(path)?;
-    let p = safe.as_path();
-    if let Some(mime) = mime_type(p) {
-        if let Some(id) = default_app(&mime) {
-            if launch_app(&id, p) {
-                return Ok(());
-            }
-        }
-    }
-    if spawn("xdg-open", &[p]) {
-        Ok(())
-    } else {
-        Err(ExoError::NoHandler)
-    }
+    bacak_sdk::mime::ac(safe.as_path()).map_err(|_| ExoError::NoHandler)
 }
 
 /// Open `path` with a specific application id.
 pub fn open_with(sandbox: &Sandbox, path: impl AsRef<Path>, app_id: &str) -> Result<(), ExoError> {
     let safe = sandbox.resolve(path)?;
-    if launch_app(app_id, safe.as_path()) {
-        Ok(())
-    } else {
-        Err(ExoError::Launch(format!("could not start {app_id}")))
-    }
-}
-
-/// Terminal emulators to try when launching a Terminal=true app, in order.
-const TERM_EMULATORS: &[(&str, &str)] = &[
-    ("alacritty", "-e"),
-    ("xterm", "-e"),
-    ("gnome-terminal", "--"),
-    ("xfce4-terminal", "-e"),
-    ("konsole", "-e"),
-];
-
-/// Launch an application id with one file.
-/// Prefers parsing the Exec line directly (reliable) over gio/gtk-launch
-/// (which require specific installation paths or portal access). Terminal=true
-/// apps are wrapped in a terminal emulator.
-fn launch_app(app_id: &str, file: &Path) -> bool {
-    let Some(app) = app_by_id(app_id) else { return false };
-    let Some((prog, args)) = expand_exec(&app.exec, file) else { return false };
-
-    if app.terminal {
-        // Wrap in terminal emulator: `alacritty -e <prog> [args...]`
-        for (term, flag) in TERM_EMULATORS {
-            let mut full_args: Vec<&Path> = vec![Path::new(flag), Path::new(&prog)];
-            full_args.extend(args.iter().map(|s| Path::new(s.as_str())));
-            if spawn(term, &full_args) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    spawn(&prog, &args.iter().map(|s| Path::new(s.as_str())).collect::<Vec<_>>())
+    bacak_sdk::mime::birlikte_ac(safe.as_path(), app_id)
+        .map_err(|e| ExoError::Launch(format!("could not start {app_id}: {e}")))
 }
 
 /// Expand a desktop `Exec=` line for a single file, returning (program, args).
-/// Field codes `%f %F %u %U` are replaced with the file; `%i %c %k %%` and other
-/// codes are dropped/handled. Pure; testable.
+/// Quoted arguments stay whole; `%f %F %u %U` become the file, other field
+/// codes are dropped. Pure; testable.
 pub fn expand_exec(exec: &str, file: &Path) -> Option<(String, Vec<String>)> {
-    let file = file.to_string_lossy().into_owned();
-    let mut tokens = exec.split_whitespace();
-    let prog = tokens.next()?.to_string();
-    let mut args = Vec::new();
-    for tok in tokens {
-        match tok {
-            "%f" | "%F" | "%u" | "%U" => args.push(file.clone()),
-            "%i" | "%c" | "%k" | "%d" | "%D" | "%n" | "%N" | "%v" | "%m" => {}
-            "%%" => args.push("%".to_string()),
-            other => args.push(other.to_string()),
-        }
-    }
-    Some((prog, args))
-}
-
-fn spawn(program: &str, args: &[&Path]) -> bool {
-    use std::process::{Command, Stdio};
-    Command::new(program)
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .is_ok()
+    let mut argv = bacak_sdk::masaustu::exec_argv(exec, &[file]).into_iter();
+    let prog = argv.next()?;
+    Some((prog, argv.collect()))
 }
 
 /// Minimal extension→MIME fallback for when `xdg-mime` is unavailable.
+#[cfg(test)]
 fn mime_from_extension(path: &Path) -> Option<String> {
-    let ext = path.extension()?.to_string_lossy().to_lowercase();
-    let m = match ext.as_str() {
-        "txt" | "log" | "md" => "text/plain",
-        "html" | "htm" => "text/html",
-        "pdf" => "application/pdf",
-        "epub" => "application/epub+zip",
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "svg" => "image/svg+xml",
-        "webp" => "image/webp",
-        "bmp" => "image/bmp",
-        "tiff" | "tif" => "image/tiff",
-        "ico" => "image/x-icon",
-        "qoi" => "image/x-qoi",
-        "hdr" => "image/vnd.radiance",
-        "pbm" | "pgm" | "ppm" | "pnm" => "image/x-portable-pixmap",
-        "mp3" => "audio/mpeg",
-        "flac" => "audio/flac",
-        "ogg" => "audio/ogg",
-        "mp4" | "m4v" => "video/mp4",
-        "mkv" => "video/x-matroska",
-        "webm" => "video/webm",
-        "zip" => "application/zip",
-        "json" => "application/json",
-        _ => return None,
-    };
-    Some(m.to_string())
+    bacak_sdk::mime::uzantidan(path).map(String::from)
 }
 
 #[cfg(test)]
@@ -515,8 +296,9 @@ Exec=gedit --new-window";
 
     #[test]
     fn parses_desktop_entry_first_group_only() {
+        std::env::set_var("LANG", "tr_TR.UTF-8");
         let app = parse_entry("org.gnome.gedit.desktop", GEDIT).unwrap();
-        assert_eq!(app.name, "Text Editor");
+        assert_eq!(app.name, "Metin Düzenleyici", "Name[tr] tercih edilmeli");
         assert_eq!(app.exec, "gedit %U");
         assert_eq!(app.icon, "org.gnome.gedit");
         assert!(app.mime_types.contains(&"text/plain".to_string()));
@@ -543,6 +325,11 @@ Exec=gedit --new-window";
         let (prog, args) = expand_exec("myapp --flag %f --x", Path::new("/t/f")).unwrap();
         assert_eq!(prog, "myapp");
         assert_eq!(args, vec!["--flag", "/t/f", "--x"]);
+
+        // Quoted program paths with spaces stay one argument.
+        let (prog, args) = expand_exec(r#""/opt/My App/run" %f"#, Path::new("/t/f")).unwrap();
+        assert_eq!(prog, "/opt/My App/run");
+        assert_eq!(args, vec!["/t/f"]);
     }
 
     #[test]

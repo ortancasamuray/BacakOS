@@ -40,6 +40,8 @@ pub struct Prefs {
     pub view_mode: i32,
     #[serde(default = "default_scale")]
     pub grid_scale: f32,
+    /// No longer read: dark mode is desktop-wide since BacakOsSDK
+    /// (`~/.config/bacak/gorunum.json`). Kept so old configs round-trip.
     #[serde(default = "default_dark")]
     pub dark: bool,
     /// UI language: "en", "tr", or "" to auto-detect from the locale.
