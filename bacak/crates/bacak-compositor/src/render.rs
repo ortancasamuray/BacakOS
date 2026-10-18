@@ -993,22 +993,33 @@ pub(crate) fn render_dock(
         crate::config::DockEdge::Right => (off_x - reveal, off_y),
     };
 
-    let tiles = state.dock_tiles_for(output);
-    let (Some(first), Some(last)) = (
-        tiles.first().map(|e| e.rect),
-        tiles.last().map(|e| e.rect),
-    ) else {
-        return;
+    // Bar colours are designed for dark mode; light mode inverts their
+    // lightness (see `themed`). Light mode also drops the hover chip's
+    // card shadow and softens the bar's, which would show through.
+    let dark = state.dark_mode;
+    let panel_col = themed(DOCK_PANEL_COLOR, dark);
+    let hover_col = themed(DOCK_HOVER_COLOR, dark);
+    let dot_col = themed(DOCK_DOT_COLOR, dark);
+    let (hover_shadow, panel_shadow) = if dark {
+        (CARD_SHADOW_COL, CARD_SHADOW_COL)
+    } else {
+        ([0.0; 4], [0.0, 0.0, 0.0, 0.18])
     };
 
-    // Panel = the icon row grown by the same padding the layout used.
+    let tiles = state.dock_tiles_for(output);
+    if tiles.is_empty() {
+        return;
+    }
+
+    // Panel = the bounding box of every tile grown by the layout's padding.
+    // Not just first..last in the vec: the apps button is stored last but
+    // drawn in the leading slot, so it would fall outside the bar.
     let pad = (state.config.dock_height * 0.18).max(2.0);
-    let panel = Rect::new(
-        first.x - pad,
-        first.y - pad,
-        (last.x + last.w - first.x) + 2.0 * pad,
-        first.h + 2.0 * pad,
+    let (x0, y0, x1, y1) = tiles.iter().map(|e| e.rect).fold(
+        (f32::MAX, f32::MAX, f32::MIN, f32::MIN),
+        |(x0, y0, x1, y1), r| (x0.min(r.x), y0.min(r.y), x1.max(r.x + r.w), y1.max(r.y + r.h)),
     );
+    let panel = Rect::new(x0 - pad, y0 - pad, (x1 - x0) + 2.0 * pad, (y1 - y0) + 2.0 * pad);
 
     // Which tile is under the pointer? Same hit-test as `dock_click`
     // (pointer position is WM-global, matching the tile rects).
@@ -1116,9 +1127,9 @@ pub(crate) fn render_dock(
         };
 
         if entry.app == crate::state::APPS_BUTTON_APP {
-            push_apps_glyph(tile, fade, output_scale, off_x, off_y, out);
+            push_apps_glyph(tile, fade, dark, output_scale, off_x, off_y, out);
         } else if entry.app == crate::state::SETTINGS_BUTTON_APP {
-            push_settings_glyph(tile, fade, output_scale, off_x, off_y, out);
+            push_settings_glyph(tile, fade, dark, output_scale, off_x, off_y, out);
         } else if entry.app == crate::state::RECENTS_BUTTON_APP {
             // Prefer the BacakOS icon theme's "overview" badge; fall back to
             // the hand-drawn overlapping-cards glyph if it isn't installed.
@@ -1127,7 +1138,7 @@ pub(crate) fn render_dock(
             {
                 out.push(el);
             } else {
-                push_recents_glyph(tile, fade, output_scale, off_x, off_y, out);
+                push_recents_glyph(tile, fade, dark, output_scale, off_x, off_y, out);
             }
         } else if entry.app == crate::state::SCREENSHOT_BUTTON_APP {
             // Prefer the real "screenshot" camera icon from the BacakOS icon
@@ -1167,21 +1178,22 @@ pub(crate) fn render_dock(
                 tile.h + 2.0 * g,
             );
             match card_program(renderer) {
-                Some(p) => out.push(switcher_card_element(
+                Some(p) => out.push(card_element(
                     p,
                     chip,
-                    DOCK_HOVER_COLOR,
+                    hover_col,
                     DOCK_HOVER_RADIUS,
                     false,
                     None,
                     1.0,
+                    hover_shadow,
                     output_scale,
                     off_x,
                     off_y,
                 )),
                 None => out.push(solid_element(
                     chip,
-                    DOCK_HOVER_COLOR,
+                    hover_col,
                     output_scale,
                     off_x,
                     off_y,
@@ -1224,7 +1236,7 @@ pub(crate) fn render_dock(
             {
                 out.push(solid_element(
                     dot,
-                    DOCK_DOT_COLOR,
+                    dot_col,
                     output_scale,
                     off_x,
                     off_y,
@@ -1292,20 +1304,21 @@ pub(crate) fn render_dock(
     }
 
     match card_program(renderer) {
-        Some(p) => out.push(switcher_card_element(
+        Some(p) => out.push(card_element(
             p,
             panel,
-            DOCK_PANEL_COLOR,
+            panel_col,
             DOCK_PANEL_RADIUS,
             false,
             None,
             1.0,
+            panel_shadow,
             output_scale,
             off_x,
             off_y,
         )),
         // No shader → an honest flat translucent bar (square corners).
-        None => out.push(solid_element(panel, DOCK_PANEL_COLOR, output_scale, off_x, off_y)),
+        None => out.push(solid_element(panel, panel_col, output_scale, off_x, off_y)),
     }
 }
 
@@ -1327,13 +1340,16 @@ pub(crate) fn render_dock_floating_button(
 ) {
     let Some(r) = state.dock_floating_button_rect(output) else { return };
     // Front-first: glyph on top, panel behind (mirrors `render_dock`).
-    push_apps_glyph(r, 1.0, output_scale, off_x, off_y, out);
+    // On the accent (dock summoned) the glyph stays light in both themes.
+    let dark = state.dark_mode;
+    push_apps_glyph(r, 1.0, dark || state.dock_force_shown, output_scale, off_x, off_y, out);
     let bg = if state.dock_force_shown {
         Color32F::new(0.22, 0.45, 0.85, 0.96) // accent — dock summoned
     } else {
-        Color32F::new(0.14, 0.16, 0.20, 0.92)
+        themed(Color32F::new(0.14, 0.16, 0.20, 0.92), dark)
     };
-    cc_card(out, renderer, r, bg, r.w * 0.28, output_scale, off_x, off_y);
+    let shadow = if dark { CARD_SHADOW_COL } else { [0.0, 0.0, 0.0, 0.18] };
+    cc_card_shadow(out, renderer, r, bg, r.w * 0.28, shadow, output_scale, off_x, off_y);
 }
 
 /// Draw the dock's applications-menu button: a 3×3 grid of small light
@@ -1341,6 +1357,7 @@ pub(crate) fn render_dock_floating_button(
 fn push_apps_glyph(
     tile: Rect,
     fade: f32,
+    dark: bool,
     output_scale: i32,
     off_x: i32,
     off_y: i32,
@@ -1349,7 +1366,14 @@ fn push_apps_glyph(
     const N: usize = 3;
     let gap = tile.w * 0.08;
     let cell = (tile.w - (N as f32 + 1.0) * gap) / N as f32;
-    let color = Color32F::new(0.92, 0.95, 1.0, 1.0 * fade);
+    // Light mode: a soft slate rather than the near-black a straight
+    // lightness inversion gives, so the nine solid squares don't outweigh
+    // the app icons next to them.
+    let color = if dark {
+        Color32F::new(0.92, 0.95, 1.0, 1.0 * fade)
+    } else {
+        Color32F::new(0.38, 0.43, 0.52, 0.9 * fade)
+    };
     for r in 0..N {
         for c in 0..N {
             let x = tile.x + gap + c as f32 * (cell + gap);
@@ -1371,12 +1395,13 @@ fn push_apps_glyph(
 fn push_settings_glyph(
     tile: Rect,
     fade: f32,
+    dark: bool,
     output_scale: i32,
     off_x: i32,
     off_y: i32,
     out: &mut Vec<BacakElements>,
 ) {
-    let color = Color32F::new(0.85, 0.9, 0.95, 0.9 * fade);
+    let color = themed(Color32F::new(0.85, 0.9, 0.95, 0.9 * fade), dark);
     let bar_w = tile.w * 0.60;
     let bar_h = (tile.h * 0.12).max(2.0);
     let bx = tile.x + (tile.w - bar_w) / 2.0;
@@ -1410,6 +1435,7 @@ fn push_settings_glyph(
 fn push_recents_glyph(
     tile: Rect,
     fade: f32,
+    dark: bool,
     output_scale: i32,
     off_x: i32,
     off_y: i32,
@@ -1420,8 +1446,8 @@ fn push_recents_glyph(
     let cx = tile.x + tile.w / 2.0;
     let cy = tile.y + tile.h / 2.0;
     let off = tile.w * 0.09;
-    let bright = Color32F::new(0.85, 0.9, 0.95, 0.92 * fade);
-    let dim = Color32F::new(0.85, 0.9, 0.95, 0.42 * fade);
+    let bright = themed(Color32F::new(0.85, 0.9, 0.95, 0.92 * fade), dark);
+    let dim = themed(Color32F::new(0.85, 0.9, 0.95, 0.42 * fade), dark);
     // Front card (lower-left), on top.
     out.push(solid_element(
         Rect::new(cx - w / 2.0 - off, cy - h / 2.0 + off, w, h),
