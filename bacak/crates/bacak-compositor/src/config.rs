@@ -33,6 +33,25 @@ pub enum DockEdge {
     Right,
 }
 
+/// Whether multi-finger touchscreen input drives the compositor's own
+/// gestures (two-finger double-tap, three/four-finger swipes, long-press
+/// selection menu) or goes straight to the application.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TouchGestures {
+    /// On, except for interactive whiteboards (Fatih / ETA boards, see
+    /// [`BOARD_USB_VENDORS`]), where several hands draw at once.
+    #[default]
+    Auto,
+    On,
+    Off,
+}
+
+/// USB vendor ids of the Fatih interactive whiteboard touch sensors driven by
+/// `eta-touchdrv` (2-camera optical: 6615, 4-camera OTD: 2621). Their kernel
+/// modules copy the USB ids into the input device, so libinput reports them.
+pub const BOARD_USB_VENDORS: [u32; 2] = [0x6615, 0x2621];
+
 impl DockEdge {
     /// True for `Bottom`/`Top` — the bar runs left-to-right. The
     /// renderer / layout / drag logic branches on this to swap which
@@ -157,6 +176,14 @@ pub struct CompositorConfig {
     /// F-keyboard). Empty is a valid variant (plain Q-keyboard layouts).
     #[serde(default = "default_xkb_variant")]
     pub xkb_variant: String,
+    /// Touchscreen system gestures; see [`TouchGestures`].
+    #[serde(default)]
+    pub touch_gestures: TouchGestures,
+    /// DRM connector (e.g. `"HDMI-A-1"`) that touchscreens are mapped onto.
+    /// Empty (the default) maps them onto the primary output — set it when
+    /// a whiteboard isn't the primary screen.
+    #[serde(default)]
+    pub touch_output: String,
 }
 
 fn default_xkb_layout() -> String {
@@ -190,6 +217,8 @@ impl Default for CompositorConfig {
             onboarding_shown: false,
             xkb_layout: default_xkb_layout(),
             xkb_variant: default_xkb_variant(),
+            touch_gestures: TouchGestures::Auto,
+            touch_output: String::new(),
         }
     }
 }
@@ -287,6 +316,8 @@ impl CompositorConfig {
         "icon_theme",
         "xkb_layout",
         "xkb_variant",
+        "touch_gestures",
+        "touch_output",
     ];
 
     /// Split a comma-separated list value into trimmed, non-empty,
@@ -354,6 +385,15 @@ impl CompositorConfig {
             "icon_theme" => self.icon_theme = value.trim().to_string(),
             "xkb_layout" => self.xkb_layout = value.trim().to_string(),
             "xkb_variant" => self.xkb_variant = value.trim().to_string(),
+            "touch_gestures" => {
+                self.touch_gestures = match value.trim() {
+                    "auto" => TouchGestures::Auto,
+                    "on" => TouchGestures::On,
+                    "off" => TouchGestures::Off,
+                    other => return Err(format!("`{other}` is not one of auto/on/off")),
+                }
+            }
+            "touch_output" => self.touch_output = value.trim().to_string(),
             other => {
                 return Err(format!(
                     "unknown key `{other}` (valid: {})",
@@ -385,6 +425,8 @@ impl CompositorConfig {
             "icon_theme" => self.icon_theme = d.icon_theme,
             "xkb_layout" => self.xkb_layout = d.xkb_layout,
             "xkb_variant" => self.xkb_variant = d.xkb_variant,
+            "touch_gestures" => self.touch_gestures = d.touch_gestures,
+            "touch_output" => self.touch_output = d.touch_output,
             other => {
                 return Err(format!(
                     "unknown key `{other}` (valid: {})",
@@ -429,6 +471,16 @@ impl CompositorConfig {
     /// it regardless of the file (handy for one-off testing, mirroring
     /// how `BACAK_BACKEND` overrides at runtime); otherwise the file
     /// value wins.
+    /// Whether touches from the device with this USB vendor id may start
+    /// compositor gestures (see [`TouchGestures`]).
+    pub fn touch_gestures_for(&self, usb_vendor: u32) -> bool {
+        match self.touch_gestures {
+            TouchGestures::On => true,
+            TouchGestures::Off => false,
+            TouchGestures::Auto => !BOARD_USB_VENDORS.contains(&usb_vendor),
+        }
+    }
+
     pub fn blur_enabled(&self) -> bool {
         std::env::var("BACAK_BLUR").is_ok() || self.blur
     }
@@ -531,6 +583,25 @@ mod tests {
         assert!(part.blur);
         assert_eq!(part.blur_radius, 40.0);
         assert_eq!(part.shadow_step, 0.18); // still defaulted
+    }
+
+    #[test]
+    fn touch_gestures_auto_skips_whiteboards() {
+        let mut c = CompositorConfig::default();
+        assert!(c.touch_gestures_for(0x046d), "sıradan dokunmatik: jestler açık");
+        assert!(!c.touch_gestures_for(0x6615), "ETA optik tahta: kapalı");
+        assert!(!c.touch_gestures_for(0x2621), "ETA OTD tahta: kapalı");
+        c.set_field("touch_gestures", "on").unwrap();
+        assert!(c.touch_gestures_for(0x6615));
+        c.set_field("touch_gestures", "off").unwrap();
+        assert!(!c.touch_gestures_for(0x046d));
+        assert!(c.set_field("touch_gestures", "bazen").is_err());
+        c.set_field("touch_output", " HDMI-A-1 ").unwrap();
+        assert_eq!(c.touch_output, "HDMI-A-1");
+        c.reset_field("touch_output").unwrap();
+        assert!(c.touch_output.is_empty());
+        let j: CompositorConfig = serde_json::from_str(r#"{"touch_gestures":"off"}"#).unwrap();
+        assert_eq!(j.touch_gestures, TouchGestures::Off);
     }
 
     #[test]

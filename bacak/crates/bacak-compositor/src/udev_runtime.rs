@@ -263,6 +263,23 @@ impl LoopData {
         let o = self.state.wm.output(primary)?;
         Some((o.bounds.x as f64, o.bounds.y as f64, t.output_size, t.scale))
     }
+
+    /// The output touchscreens map onto: the connector named by
+    /// `touch_output` when it's connected (a whiteboard that isn't the
+    /// primary screen), else the primary output.
+    fn touch_origin_size(
+        &self,
+    ) -> Option<(f64, f64, UtilsSize<i32, smithay::utils::Physical>, i32)> {
+        let wanted = self.state.config.touch_output.as_str();
+        if !wanted.is_empty() {
+            if let Some(t) = self.targets.iter().find(|t| t.connector_name == wanted) {
+                if let Some(o) = self.state.wm.output(t.output_id) {
+                    return Some((o.bounds.x as f64, o.bounds.y as f64, t.output_size, t.scale));
+                }
+            }
+        }
+        self.primary_origin_size()
+    }
 }
 
 /// Bring up the native session backend and run until the event loop exits.
@@ -3239,7 +3256,7 @@ fn forward_libinput_event(
         }
 
         InputEvent::TouchDown { event } => {
-            let Some((ox, oy, size, scale)) = data.primary_origin_size() else { return };
+            let Some((ox, oy, size, scale)) = data.touch_origin_size() else { return };
             let logical = event.position_transformed(size.to_logical(scale));
             let slot: i32 = event.slot().into();
             // libinput touches are primary-output-local; shift by the
@@ -3264,6 +3281,10 @@ fn forward_libinput_event(
                 }
                 return;
             }
+            // Whiteboards (and `touch_gestures: off`) skip every compositor
+            // gesture below: all fingers go to the app, so several hands can
+            // draw without triggering a terminal or a workspace switch.
+            let gestures = data.state.config.touch_gestures_for(event.device().id_vendor());
             // Feed the aggregator first, then arbitrate: one or two free fingers
             // go to the client (tap / drag / pinch); the third finger claims the
             // whole sequence as a compositor gesture (workspace swipe / overview)
@@ -3272,12 +3293,14 @@ fn forward_libinput_event(
             // Feed the two-finger window-gesture recogniser every down so it has
             // both fingers' positions when the second lands (it acts only at
             // exactly two fingers; see `BacakState::two_finger_down`).
-            data.state.two_finger_down(slot, tx, ty, event.time() / 1000);
+            if gestures {
+                data.state.two_finger_down(slot, tx, ty, event.time() / 1000);
+            }
             // Feed the single-finger selection recogniser (long-press → action
             // menu). A second finger means a gesture/pinch, not a selection, so
             // drop the pending long-press. Uses the start-time clock so it
             // matches the per-frame `tick` poll in the main loop.
-            if data.state.touch_aggregator.fingers() == 1 {
+            if gestures && data.state.touch_aggregator.fingers() == 1 {
                 let now_ms = data.state.start_time.elapsed().as_millis() as u64;
                 data.state.selection_recognizer.down(tx, ty, now_ms);
                 data.state.single_touch_slot = Some(slot);
@@ -3285,7 +3308,12 @@ fn forward_libinput_event(
                 data.state.selection_recognizer.cancel();
                 data.state.single_touch_slot = None;
             }
-            match data.state.touch_arbiter.down(data.state.touch_aggregator.fingers()) {
+            let route = if gestures {
+                data.state.touch_arbiter.down(data.state.touch_aggregator.fingers())
+            } else {
+                crate::input::TouchRoute::Client
+            };
+            match route {
                 crate::input::TouchRoute::Client => {
                     let loc =
                         Point::<f64, smithay::utils::Logical>::from((tx as f64, ty as f64));
@@ -3358,7 +3386,7 @@ fn forward_libinput_event(
         }
 
         InputEvent::TouchMotion { event } => {
-            let Some((ox, oy, size, scale)) = data.primary_origin_size() else { return };
+            let Some((ox, oy, size, scale)) = data.touch_origin_size() else { return };
             let logical = event.position_transformed(size.to_logical(scale));
             let slot: i32 = event.slot().into();
             let (tx, ty) = ((logical.x + ox) as f32, (logical.y + oy) as f32);
@@ -3482,8 +3510,9 @@ fn forward_libinput_event(
                     t.needs_redraw = true;
                 }
             }
+            let gestures = data.state.config.touch_gestures_for(event.device().id_vendor());
             // Two-finger double-tap → toggle fullscreen / restore on the target.
-            if data.state.two_finger_up(slot, event.time() / 1000) {
+            if gestures && data.state.two_finger_up(slot, event.time() / 1000) {
                 for t in data.targets.iter_mut() {
                     t.needs_redraw = true;
                 }
@@ -3493,7 +3522,7 @@ fn forward_libinput_event(
             data.state
                 .touch_arbiter
                 .up(data.state.touch_aggregator.is_active());
-            if let Some(gesture) = gesture {
+            if let Some(gesture) = gesture.filter(|_| gestures) {
                 tracing::info!(?gesture, "touch gesture recognised (udev)");
                 dispatch_gesture(data, gesture);
             }
