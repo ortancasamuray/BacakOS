@@ -701,6 +701,14 @@
       <h3>Gömülü tarayıcı ve EBA</h3>
       <p>Araç çubuğundaki adres çubuğu bir web sayfası açar; varsayılan anasayfa <strong>www.eba.gov.tr</strong>'dir (Eğitim Bilişim Ağı). Adres çubuğundaki kalem simgesiyle "çizim modu"na geçip, açık olan web sayfasının üzerine doğrudan not alabilirsiniz.</p>
 
+      <h3>Fatih akıllı tahtalarında dokunmatik</h3>
+      <p>Fatih projesi etkileşimli tahtalarının (2 kameralı optik ve 4 kameralı OTD algılayıcılar) sürücüsü <strong>eta-touchdrv</strong> BacakOS'la birlikte gelir: tahta USB'den takıldığında sürücü kendiliğinden yüklenir, ek kurulum gerekmez. Sürücü bilgisayara kurulurken ve çekirdek her güncellendiğinde yeniden derlenir.</p>
+      <ul>
+        <li><strong>Tahta modu:</strong> tahtadan gelen dokunmalarda masaüstünün çok parmaklı jestleri (iki parmakla çift dokunma, üç/dört parmakla kaydırma, uzun basınca seçim menüsü) kapalıdır; bütün parmaklar doğrudan uygulamaya gider, böylece birkaç öğrenci aynı anda yazabilir. Diğer dokunmatik ekranlarda jestler çalışmaya devam eder. Değiştirmek için: <code>bacak config set touch_gestures on</code> (her yerde açık), <code>off</code> (her yerde kapalı) ya da <code>auto</code> (varsayılan).</li>
+        <li><strong>Tahta ikinci ekransa:</strong> dokunmalar varsayılan olarak birincil ekrana eşlenir. Tahta başka bir çıkışa bağlıysa <code>bacak config set touch_output HDMI-A-1</code> ile o çıkışa bağlayın (çıkış adları <code>~/.config/bacak/compositor.json</code> içindeki <code>outputs</code> bölümüyle aynıdır).</li>
+        <li><strong>Kalibrasyon:</strong> üreticinin <code>calibrationTools</code> / <code>OtdCalibrationTool</code> araçları X11 kullanır ve yönetici yetkisi ister; BacakOS'ta henüz menüden açılmaz.</li>
+      </ul>
+
       <h3>Kapatma</h3>
       <p>Araç çubuğunun sonundaki aşağı-ok simgesi tahta'yı küçültüp masaüstüne döner (uygulama kapanmaz, arka planda açık kalır). Pencereyi tamamen kapattığınızda dock otomatik olarak geri gelir.</p>
     </section>
