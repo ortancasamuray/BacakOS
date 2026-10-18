@@ -208,6 +208,28 @@ KUR_SRC="$HERE/kur"
 )
 
 # ---------------------------------------------------------------------------
+# eta-touchdrv: Fatih akıllı tahta dokunmatik sürücüsü (Pardus kaynağı, DKMS)
+# ---------------------------------------------------------------------------
+# İç içe ayrı bir git deposu (bacakos'ta takip edilmez). Kaynak ağacı kirletmemek
+# ve dpkg-buildpackage'ın ../ altına yazdığı dosyalar depo köküne düşmesin diye
+# geçici bir kopyada derlenir. debhelper + dh-dkms gerekir (setup-deps.sh).
+ETA_SRC="$HERE/eta-touchdrv"
+if [ -d "$ETA_SRC/debian" ]; then
+    log "=== eta-touchdrv derleniyor ==="
+    if command -v dh >/dev/null && [ -x /usr/bin/dh_dkms ]; then
+        ETA_TMP=$(mktemp -d)
+        cp -r "$ETA_SRC" "$ETA_TMP/eta-touchdrv"
+        rm -rf "$ETA_TMP/eta-touchdrv/.git"
+        (cd "$ETA_TMP/eta-touchdrv" && dpkg-buildpackage -b -us -uc)
+        cp "$ETA_TMP"/eta-touchdrv_*_amd64.deb "$DIST/"
+        rm -rf "$ETA_TMP"
+        log "ISO'ya almak için: cp $DIST/eta-touchdrv_*_amd64.deb Buildeba/config/packages.chroot/"
+    else
+        log "eta-touchdrv ATLANDI: debhelper/dh-dkms yok (sudo bash setup-deps.sh)"
+    fi
+fi
+
+# ---------------------------------------------------------------------------
 # bacakos: içeriksiz meta-paket — tek `apt install` ile tüm bileşenleri kurar
 # ---------------------------------------------------------------------------
 log "=== bacakos meta-paketi oluşturuluyor ==="
