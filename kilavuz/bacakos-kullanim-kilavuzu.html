@@ -346,6 +346,24 @@
       <h2><span class="num">01</span> Kurulum</h2>
       <p class="lede">BacakOS, canlı ortamdan <strong>kur</strong> adlı grafik yükleyiciyle kurulur. Sihirbaz beş adımdan oluşur.</p>
 
+      <h3>Sistem gereksinimleri</h3>
+      <table class="kv">
+        <tr><th>Bileşen</th><th>En düşük</th><th>Önerilen</th></tr>
+        <tr><td class="k">İşlemci</td><td>64 bit x86 (amd64), 2 çekirdek</td><td class="d">4 çekirdek</td></tr>
+        <tr><td class="k">Bellek (RAM)</td><td>2 GB</td><td class="d">4 GB</td></tr>
+        <tr><td class="k">Disk</td><td>20 GB</td><td class="d">32 GB veya üzeri, SSD</td></tr>
+        <tr><td class="k">Ekran kartı</td><td>Çekirdek sürücüsü olan, OpenGL ES 2.0 destekli GPU</td><td class="d">Intel HD (2013 sonrası), AMD Radeon veya NVIDIA</td></tr>
+        <tr><td class="k">Ekran</td><td>800×600</td><td class="d">1366×768 veya üzeri</td></tr>
+        <tr><td class="k">Önyükleme</td><td>BIOS veya UEFI (64 ya da 32 bit)</td><td class="d">UEFI</td></tr>
+      </table>
+      <ul>
+        <li><strong>32 bit işlemciler desteklenmez.</strong> 32 bit UEFI'li ama işlemcisi 64 bit olan cihazlar desteklenir (aşağıdaki nota bakın).</li>
+        <li>Masaüstü boşta yaklaşık 0,7 GB bellek kullanır. 2 GB'ta temel kullanım mümkündür; web tarayıcısı ile tahta birlikte açılacaksa 4 GB gerekir.</li>
+        <li>kur, 20 GB'tan küçük diskleri kabul etmez; kök bölüm en az 12 GB olmalıdır. Otomatik bölümleme ayrıca RAM kadar (1–8 GB) takas alanı ayırır.</li>
+        <li>Masaüstü ekranı ekran kartıyla çizer; yazılımsal çizime geçmez. Sanal makinede <code>virtio-gpu</code> (virgl) ekran kartını seçin.</li>
+        <li>768 pikselden kısa ekranlarda Masaüstü Ayarları panelinin alt satırları ekrana sığmayabilir.</li>
+      </ul>
+
       <ol class="steps">
         <li>
           <strong>Dil ve Klavye</strong>
