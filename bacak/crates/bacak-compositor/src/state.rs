@@ -358,6 +358,24 @@ fn urlencode(s: &str) -> String {
     out
 }
 
+/// Control Center label colour in dark mode (also the text on its red
+/// "Kapat" button in both themes).
+const CC_LABEL_DARK: [u8; 3] = [232, 236, 244];
+
+/// Control Center `(label, secondary)` text colours for the theme: the dark
+/// panel's pale text, or its lightness-inverted counterpart on the light panel.
+fn cc_text_colors(dark: bool) -> ([u8; 3], [u8; 3]) {
+    const SUB: [u8; 3] = [170, 178, 196];
+    if dark {
+        return (CC_LABEL_DARK, SUB);
+    }
+    let ink = |c: [u8; 3]| {
+        crate::render::invert_lightness(c.map(|v| v as f32 / 255.0))
+            .map(|v| (v * 255.0).round().clamp(0.0, 255.0) as u8)
+    };
+    (ink(CC_LABEL_DARK), ink(SUB))
+}
+
 fn cc_rasterize(
     text: Option<&TextRenderer>,
     s: &str,
@@ -1584,7 +1602,11 @@ impl BacakState {
             apps_menu_touch_slot: None,
             touch_pointer_slot: None,
             brightness: 1.0,
-            dark_mode: bacak_ipc::Gorunum::load().koyu,
+            dark_mode: {
+                let koyu = bacak_ipc::Gorunum::load().koyu;
+                DS_DARK.store(koyu, std::sync::atomic::Ordering::Relaxed);
+                koyu
+            },
             ipc: None,
             ipc_last_focus: None,
             maximize_restore: HashMap::new(),
@@ -4725,8 +4747,8 @@ impl BacakState {
         let mut y = by + pad + ch + gap;
 
         let text = self.text.as_ref();
-        const LABEL: [u8; 3] = [232, 236, 244];
-        const SUB: [u8; 3] = [170, 178, 196];
+        #[allow(non_snake_case)]
+        let (LABEL, SUB) = cc_text_colors(self.dark_mode);
         let lw = (col_w - z(18.0)).max(1.0) as usize;
         let bw = (btn_w - z(8.0)).max(1.0) as usize;
         let iw = (inner - z(18.0)) as usize;
@@ -4864,7 +4886,8 @@ impl BacakState {
             rect: Rect::new(cx, y, btn_w, pr),
             action: CcAction::PowerOff,
             kind: CcKind::Button { danger: true },
-            label: cc_rasterize(text, "Kapat", z(13.0), LABEL, bw),
+            // On the red button: light text in both themes.
+            label: cc_rasterize(text, "Kapat", z(13.0), CC_LABEL_DARK, bw),
             sub: None,
         });
         tiles.push(CcTile {
@@ -4920,8 +4943,8 @@ impl BacakState {
     /// Apply a background-fetched Control-Center snapshot: update the live state
     /// and re-rasterise the labels that depend on it (clock, Wi-Fi/Bluetooth sub).
     fn cc_apply_snapshot(&mut self, snap: CcSnapshot) {
-        const SUB: [u8; 3] = [170, 178, 196];
-        const LABEL: [u8; 3] = [232, 236, 244];
+        #[allow(non_snake_case)]
+        let (LABEL, SUB) = cc_text_colors(self.dark_mode);
         let wifi_sub_text = if snap.wifi_on {
             snap.ssid.clone().unwrap_or_else(|| "Açık".to_string())
         } else {
@@ -7545,13 +7568,36 @@ impl BacakState {
     /// the Desktop Settings toggle row in sync.
     pub fn set_dark_mode(&mut self, koyu: bool) {
         self.dark_mode = koyu;
+        DS_DARK.store(koyu, std::sync::atomic::Ordering::Relaxed);
         if let Err(e) = (bacak_ipc::Gorunum { koyu }).save() {
             tracing::warn!(error = %e, "gorunum.json yazılamadı");
         }
         if let Some(ipc) = self.ipc.as_mut() {
             ipc.broadcast(&bacak_ipc::Olay::Gorunum { koyu });
         }
-        if let Some(ds) = self.desktop_settings.as_mut() {
+        // The panel's labels are rasterised in theme colours: rebuild the main
+        // page when it's showing. Elsewhere (sub-list, password prompt) only
+        // the toggle follows; the next open picks up the new colours.
+        let main_page = self.desktop_settings.as_ref().and_then(|ds| {
+            let on_main = matches!(ds.mode, DsMode::Main)
+                && ds.rows.iter().any(|r| r.is_toggle && matches!(r.action, DsAction::ToggleDarkMode));
+            on_main.then_some(ds.output)
+        });
+        // Control Center labels too: rebuild it, keeping the live tile state
+        // (the background refresh re-rasterises the clock and sub-labels).
+        if let Some(old) = self.control_center.take() {
+            self.open_control_center(old.output);
+            if let Some(cc) = self.control_center.as_mut() {
+                cc.wifi_on = old.wifi_on;
+                cc.bt_on = old.bt_on;
+                cc.volume = old.volume;
+                cc.muted = old.muted;
+                cc.mic_volume = old.mic_volume;
+            }
+        }
+        if let (Some(out), None) = (main_page, self.file_browser.as_ref()) {
+            self.open_desktop_settings(out);
+        } else if let Some(ds) = self.desktop_settings.as_mut() {
             for row in &mut ds.rows {
                 if matches!(row.action, DsAction::ToggleDarkMode) {
                     row.toggled = koyu;
@@ -9741,6 +9787,21 @@ fn ds_mode_label((w, h, hz): (u16, u16, u32)) -> String {
     format!("{w} × {h}  @ {hz} Hz")
 }
 
+/// Mirror of [`BacakState::dark_mode`] for [`ds_rasterize`], which has no
+/// access to the state. Written only by [`BacakState::set_dark_mode`] and at
+/// start-up.
+static DS_DARK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Text colour for the Desktop Settings panel: `rgb` is picked for the dark
+/// panel; in light mode its lightness is inverted like the panel colours.
+fn ds_ink(rgb: [u8; 3]) -> [u8; 3] {
+    if DS_DARK.load(std::sync::atomic::Ordering::Relaxed) {
+        return rgb;
+    }
+    let f = crate::render::invert_lightness(rgb.map(|c| c as f32 / 255.0));
+    f.map(|c| (c * 255.0).round().clamp(0.0, 255.0) as u8)
+}
+
 fn ds_rasterize(
     font: &Option<crate::text::TextRenderer>,
     s: &str,
@@ -9750,6 +9811,7 @@ fn ds_rasterize(
 ) -> Option<(MemoryRenderBuffer, usize, usize)> {
     use smithay::utils::Transform;
     let f = font.as_ref()?;
+    let rgb = ds_ink(rgb);
     let ss = LABEL_SUPERSAMPLE;
     let (rgba, w, h) = f.rasterize_line(s, px * ss as f32, rgb, max_w * ss as usize)?;
     let buf = MemoryRenderBuffer::from_slice(
@@ -11879,5 +11941,20 @@ mod terminal_copy_tests {
         assert_eq!(state.selection_menu_target, Some(id), "menu must remember its target window");
         state.close_selection_menu();
         assert_eq!(state.selection_menu_target, None, "close clears the target");
+    }
+}
+
+#[cfg(test)]
+mod cc_theme_tests {
+    use super::{cc_text_colors, CC_LABEL_DARK};
+
+    #[test]
+    fn light_control_center_uses_dark_text() {
+        assert_eq!(cc_text_colors(true).0, CC_LABEL_DARK);
+        let (label, sub) = cc_text_colors(false);
+        assert!(label.iter().all(|&c| c < 50), "{label:?}");
+        assert!(sub.iter().all(|&c| c < 110), "{sub:?}");
+        // Secondary text stays lighter than the primary label.
+        assert!(sub[0] > label[0]);
     }
 }

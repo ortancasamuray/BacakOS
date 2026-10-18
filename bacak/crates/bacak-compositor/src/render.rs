@@ -71,6 +71,49 @@ const SHADOW_COLOR: Color32F = Color32F::new(0.0, 0.0, 0.0, 0.28);
 /// reads as "intent indicator" rather than "real surface".
 const SNAP_PREVIEW_COLOR: Color32F = Color32F::new(0.20, 0.55, 0.95, 0.30);
 
+/// Light-theme counterpart of a colour picked for a dark panel: hue and
+/// saturation stay, HSL lightness is inverted (near-white text → near-black,
+/// a navy card → pale blue-grey, a dim "disabled" grey → a light one). The
+/// Desktop Settings panel and its image picker run every colour through
+/// this when the desktop-wide dark mode is off.
+pub(crate) fn invert_lightness([r, g, b]: [f32; 3]) -> [f32; 3] {
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let l = (max + min) / 2.0;
+    let d = max - min;
+    if d <= f32::EPSILON {
+        return [1.0 - l; 3];
+    }
+    let s = if l > 0.5 { d / (2.0 - max - min) } else { d / (max + min) };
+    let h = if max == r {
+        ((g - b) / d).rem_euclid(6.0)
+    } else if max == g {
+        (b - r) / d + 2.0
+    } else {
+        (r - g) / d + 4.0
+    } / 6.0;
+    let l = 1.0 - l;
+    let q = if l < 0.5 { l * (1.0 + s) } else { l + s - l * s };
+    let p = 2.0 * l - q;
+    let ch = |t: f32| {
+        let t = t.rem_euclid(1.0);
+        if t < 1.0 / 6.0 { p + (q - p) * 6.0 * t }
+        else if t < 0.5 { q }
+        else if t < 2.0 / 3.0 { p + (q - p) * (2.0 / 3.0 - t) * 6.0 }
+        else { p }
+    };
+    [ch(h + 1.0 / 3.0), ch(h), ch(h - 1.0 / 3.0)]
+}
+
+/// `c` as is in dark mode, [`invert_lightness`]ed (alpha kept) in light mode.
+pub(crate) fn themed(c: Color32F, dark: bool) -> Color32F {
+    if dark {
+        return c;
+    }
+    let [r, g, b] = invert_lightness([c.r(), c.g(), c.b()]);
+    Color32F::new(r, g, b, c.a())
+}
+
 // -- Task-switcher overlay tuning --------------------------------------------
 //
 // All values are in WM-logical pixels at scale 1; physical conversion goes
@@ -1628,9 +1671,27 @@ pub(crate) fn cc_card(
     off_x: i32,
     off_y: i32,
 ) {
+    cc_card_shadow(out, renderer, rect, color, radius, CARD_SHADOW_COL, output_scale, off_x, off_y);
+}
+
+/// [`cc_card`] with its own drop-shadow colour. Light panels pass a faint or
+/// transparent one: the default shadow shows through translucent cards there
+/// as a dark smudge.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn cc_card_shadow(
+    out: &mut Vec<BacakElements>,
+    renderer: &mut GlesRenderer,
+    rect: Rect,
+    color: Color32F,
+    radius: f32,
+    shadow: [f32; 4],
+    output_scale: i32,
+    off_x: i32,
+    off_y: i32,
+) {
     match card_program(renderer) {
-        Some(p) => out.push(switcher_card_element(
-            p, rect, color, radius, false, None, 1.0, output_scale, off_x, off_y,
+        Some(p) => out.push(card_element(
+            p, rect, color, radius, false, None, 1.0, shadow, output_scale, off_x, off_y,
         )),
         None => out.push(solid_element(rect, color, output_scale, off_x, off_y)),
     }
@@ -1761,46 +1822,52 @@ fn push_cc_monitor_glyph(
     x: f32,
     y: f32,
     z: f32,
+    dark: bool,
     output_scale: i32,
     off_x: i32,
     off_y: i32,
 ) {
-    let frame = Color32F::new(0.92, 0.94, 0.97, 0.95);
+    let frame = themed(Color32F::new(0.92, 0.94, 0.97, 0.95), dark);
+    // A drop shadow under this small glyph reads as a smudge on the light panel.
+    let shadow = if dark { CARD_SHADOW_COL } else { [0.0; 4] };
     let screen = Color32F::new(0.30, 0.50, 0.78, 1.0);
     let mw = CC_MONITOR_W * z;
     let bezel_h = 13.0 * z;
     let inset = 1.8 * z;
     // Screen in front of the bezel it sits in.
-    cc_card(
+    cc_card_shadow(
         out,
         renderer,
         Rect::new(x + inset, y + inset, mw - 2.0 * inset, bezel_h - 2.0 * inset),
         screen,
         1.2 * z,
+        shadow,
         output_scale,
         off_x,
         off_y,
     );
-    cc_card(out, renderer, Rect::new(x, y, mw, bezel_h), frame, 2.5 * z, output_scale, off_x, off_y);
+    cc_card_shadow(out, renderer, Rect::new(x, y, mw, bezel_h), frame, 2.5 * z, shadow, output_scale, off_x, off_y);
     // Neck and base.
     let neck_w = 3.0 * z;
-    cc_card(
+    cc_card_shadow(
         out,
         renderer,
         Rect::new(x + (mw - neck_w) / 2.0, y + bezel_h, neck_w, 2.4 * z),
         frame,
         0.0,
+        shadow,
         output_scale,
         off_x,
         off_y,
     );
     let base_w = 10.0 * z;
-    cc_card(
+    cc_card_shadow(
         out,
         renderer,
         Rect::new(x + (mw - base_w) / 2.0, y + (CC_MONITOR_H - 1.8) * z, base_w, 1.8 * z),
         frame,
         0.9 * z,
+        shadow,
         output_scale,
         off_x,
         off_y,
@@ -1839,10 +1906,20 @@ pub(crate) fn render_control_center(
     }
     let z = cc.zoom;
 
+    // Colours are designed for dark mode; `t` gives their light counterpart
+    // (labels follow in `open_control_center`). Light mode draws the
+    // translucent tiles without the card shadow, which would show through.
+    let dark = state.dark_mode;
+    let t = |c| themed(c, dark);
+    let (tile_shadow, knob_shadow, panel_shadow) = if dark {
+        (CARD_SHADOW_COL, CARD_SHADOW_COL, CARD_SHADOW_COL)
+    } else {
+        ([0.0; 4], [0.0, 0.0, 0.0, 0.25], [0.0, 0.0, 0.0, 0.18])
+    };
     let accent = SWITCHER_RING_COLOR;
     let warm = Color32F::new(1.0, 0.78, 0.30, 0.95);
-    let off_card = Color32F::new(1.0, 1.0, 1.0, 0.10);
-    let track_col = Color32F::new(1.0, 1.0, 1.0, 0.13);
+    let off_card = t(Color32F::new(1.0, 1.0, 1.0, 0.10));
+    let track_col = t(Color32F::new(1.0, 1.0, 1.0, 0.13));
     let knob_col = Color32F::new(1.0, 1.0, 1.0, 0.98);
     let danger_col = Color32F::new(0.92, 0.30, 0.30, 0.92);
 
@@ -1887,14 +1964,15 @@ pub(crate) fn render_control_center(
                     accent
                 };
                 let fw = (tw * level).max(2.0 * z);
-                cc_card(out, renderer, Rect::new(tx, ty, fw, th), fill_col, th / 2.0, output_scale, off_x, off_y);
+                cc_card_shadow(out, renderer, Rect::new(tx, ty, fw, th), fill_col, th / 2.0, tile_shadow, output_scale, off_x, off_y);
                 let knob = 18.0 * z;
-                cc_card(
+                cc_card_shadow(
                     out,
                     renderer,
                     Rect::new(tx + fw - knob / 2.0, ty + th / 2.0 - knob / 2.0, knob, knob),
                     knob_col,
                     knob / 2.0,
+                    knob_shadow,
                     output_scale,
                     off_x,
                     off_y,
@@ -1919,7 +1997,7 @@ pub(crate) fn render_control_center(
                     let lx = r.x + (r.w - *w as f32 - icon_w) / 2.0 + icon_w;
                     if icon_w > 0.0 {
                         let iy = r.y + (r.h - CC_MONITOR_H * z) / 2.0;
-                        push_cc_monitor_glyph(out, renderer, lx - icon_w, iy, z, output_scale, off_x, off_y);
+                        push_cc_monitor_glyph(out, renderer, lx - icon_w, iy, z, dark, output_scale, off_x, off_y);
                     }
                     cc_blit_label(out, renderer, &tile.label, lx, ly, output_scale, off_x, off_y);
                 }
@@ -1960,26 +2038,22 @@ pub(crate) fn render_control_center(
         match tile.kind {
             crate::state::CcKind::Slider => {
                 let (tx, ty, tw, th) = cc_slider_geom(r, z);
-                cc_card(out, renderer, Rect::new(tx, ty, tw, th), track_col, th / 2.0, output_scale, off_x, off_y);
+                cc_card_shadow(out, renderer, Rect::new(tx, ty, tw, th), track_col, th / 2.0, tile_shadow, output_scale, off_x, off_y);
             }
             crate::state::CcKind::Button { danger } => {
                 let col = if danger { danger_col } else { off_card };
-                cc_card(out, renderer, r, col, 12.0 * z, output_scale, off_x, off_y);
+                cc_card_shadow(out, renderer, r, col, 12.0 * z, tile_shadow, output_scale, off_x, off_y);
             }
             crate::state::CcKind::Toggle => {
                 let col = if on_for(tile.action) { accent } else { off_card };
-                cc_card(out, renderer, r, col, 16.0 * z, output_scale, off_x, off_y);
+                cc_card_shadow(out, renderer, r, col, 16.0 * z, tile_shadow, output_scale, off_x, off_y);
             }
         }
     }
 
     // --- pass 3: panel background, furthest back ---
-    let panel_col = if state.dark_mode {
-        Color32F::new(0.05, 0.08, 0.13, 0.94)
-    } else {
-        Color32F::new(0.20, 0.22, 0.27, 0.94)
-    };
-    cc_card(out, renderer, cc.panel, panel_col, 22.0 * z, output_scale, off_x, off_y);
+    let panel_col = t(Color32F::new(0.05, 0.08, 0.13, 0.94));
+    cc_card_shadow(out, renderer, cc.panel, panel_col, 22.0 * z, panel_shadow, output_scale, off_x, off_y);
 }
 
 /// Render the native Wi-Fi picker when open: a top-right card with a title, a
@@ -3560,15 +3634,26 @@ pub(crate) fn render_desktop_settings(
     if ds.output != output { return; }
 
     let p = ds.panel;
-    let panel_bg  = Color32F::new(0.10, 0.12, 0.18, 0.96);
-    let section_bg = Color32F::new(0.14, 0.17, 0.24, 0.92);
-    let row_hover  = Color32F::new(1.0,  1.0,  1.0,  0.10);
+    // Colours are designed for dark mode; `t` gives their light counterpart.
+    let dark = state.dark_mode;
+    let t = |c| themed(c, dark);
+    let panel_bg  = t(Color32F::new(0.10, 0.12, 0.18, 0.96));
+    let section_bg = t(Color32F::new(0.14, 0.17, 0.24, 0.92));
+    let row_hover  = t(Color32F::new(1.0,  1.0,  1.0,  0.10));
     let accent     = SWITCHER_RING_COLOR;
-    let toggle_off = Color32F::new(1.0,  1.0,  1.0,  0.18);
+    let toggle_off = t(Color32F::new(1.0,  1.0,  1.0,  0.18));
     let ok_col     = Color32F::new(0.25, 0.72, 0.48, 0.95);
-    let cancel_col = Color32F::new(1.0,  1.0,  1.0,  0.12);
-    let field_bg   = Color32F::new(1.0,  1.0,  1.0,  0.08);
-    let shadow     = Color32F::new(0.0,  0.0,  0.0,  0.55);
+    let cancel_col = t(Color32F::new(1.0,  1.0,  1.0,  0.12));
+    let field_bg   = t(Color32F::new(1.0,  1.0,  1.0,  0.08));
+    let overlay_bg = t(Color32F::new(0.08, 0.10, 0.16, 0.98));
+    let shadow     = Color32F::new(0.0,  0.0,  0.0,  if dark { 0.55 } else { 0.22 });
+    // Card drop shadows: the default one shows through the translucent rows
+    // of a light panel as dark smudges, so light mode draws rows flat.
+    let (row_shadow, panel_shadow) = if dark {
+        (CARD_SHADOW_COL, CARD_SHADOW_COL)
+    } else {
+        ([0.0; 4], [0.0, 0.0, 0.0, 0.18])
+    };
     const TITLE_H: f32 = 38.0;
 
     // ── Pass 1: foreground (labels, knobs, borders) — pushed first = topmost ──
@@ -3622,7 +3707,7 @@ pub(crate) fn render_desktop_settings(
                 let pill_y = r.y + (r.h - pill_h) / 2.0;
                 let knob   = pill_h - 4.0;
                 let knob_x = if row.toggled { pill_x + pill_w - knob - 2.0 } else { pill_x + 2.0 };
-                cc_card(out, renderer, Rect::new(knob_x, pill_y + 2.0, knob, knob), Color32F::new(1.0, 1.0, 1.0, 0.96), knob / 2.0, output_scale, off_x, off_y);
+                cc_card_shadow(out, renderer, Rect::new(knob_x, pill_y + 2.0, knob, knob), Color32F::new(1.0, 1.0, 1.0, 0.96), knob / 2.0, row_shadow, output_scale, off_x, off_y);
             } else {
                 let vw = row.value_label.as_ref().map(|(_, w, _)| *w as f32).unwrap_or(0.0);
                 let vh = row.value_label.as_ref().map(|(_, _, h)| *h as f32).unwrap_or(0.0);
@@ -3635,11 +3720,11 @@ pub(crate) fn render_desktop_settings(
 
     // Overlay card backgrounds.
     if matches!(ds.mode, crate::state::DsMode::Auth { .. }) {
-        ds_overlay_bg(out, renderer, p, field_bg, cancel_col, ok_col, output_scale, off_x, off_y,
+        ds_overlay_bg(out, renderer, p, field_bg, cancel_col, ok_col, overlay_bg, row_shadow, output_scale, off_x, off_y,
             ds.auth_field, ds.auth_cancel_rect, ds.auth_ok_rect);
     }
     if matches!(ds.mode, crate::state::DsMode::HostnameEntry { .. } | crate::state::DsMode::PwChange { .. } | crate::state::DsMode::WallpaperImageEntry) {
-        ds_overlay_bg(out, renderer, p, field_bg, cancel_col, ok_col, output_scale, off_x, off_y,
+        ds_overlay_bg(out, renderer, p, field_bg, cancel_col, ok_col, overlay_bg, row_shadow, output_scale, off_x, off_y,
             ds.entry_field, ds.entry_cancel_rect, ds.entry_ok_rect);
     }
 
@@ -3649,25 +3734,25 @@ pub(crate) fn render_desktop_settings(
             let r = row.rect;
             if let Some(color) = row.swatch {
                 let c = Color32F::new(color[0] as f32 / 255.0, color[1] as f32 / 255.0, color[2] as f32 / 255.0, 1.0);
-                cc_card(out, renderer, r, c, 8.0, output_scale, off_x, off_y);
+                cc_card_shadow(out, renderer, r, c, 8.0, row_shadow, output_scale, off_x, off_y);
                 continue;
             }
             if !row.is_toggle && row.value_label.is_none() { continue; } // header: no card
-            cc_card(out, renderer, r, row_hover, 8.0, output_scale, off_x, off_y);
+            cc_card_shadow(out, renderer, r, row_hover, 8.0, row_shadow, output_scale, off_x, off_y);
             if row.is_toggle {
                 let pill_w = 44.0_f32;
                 let pill_h = 24.0_f32;
                 let pill_col = if row.toggled { accent } else { toggle_off };
                 let pill_x = r.x + r.w - pill_w - 14.0;
                 let pill_y = r.y + (r.h - pill_h) / 2.0;
-                cc_card(out, renderer, Rect::new(pill_x, pill_y, pill_w, pill_h), pill_col, pill_h / 2.0, output_scale, off_x, off_y);
+                cc_card_shadow(out, renderer, Rect::new(pill_x, pill_y, pill_w, pill_h), pill_col, pill_h / 2.0, row_shadow, output_scale, off_x, off_y);
             }
         }
     }
 
     // ── Pass 3: title bar + panel background + drop shadow — furthest back ──
-    cc_card(out, renderer, Rect::new(p.x, p.y, p.w, TITLE_H), section_bg, 16.0, output_scale, off_x, off_y);
-    cc_card(out, renderer, p, panel_bg, 16.0, output_scale, off_x, off_y);
+    cc_card_shadow(out, renderer, Rect::new(p.x, p.y, p.w, TITLE_H), section_bg, 16.0, row_shadow, output_scale, off_x, off_y);
+    cc_card_shadow(out, renderer, p, panel_bg, 16.0, panel_shadow, output_scale, off_x, off_y);
     out.push(solid_element(Rect::new(p.x + 4.0, p.y + 6.0, p.w, p.h), shadow, output_scale, off_x, off_y));
 }
 
@@ -3711,6 +3796,8 @@ fn ds_overlay_bg(
     field_bg: Color32F,
     cancel_col: Color32F,
     ok_col: Color32F,
+    card_col: Color32F,
+    shadow: [f32; 4],
     output_scale: i32,
     off_x: i32,
     off_y: i32,
@@ -3722,10 +3809,10 @@ fn ds_overlay_bg(
     let ah = 180.0;
     let ax = panel.x + (panel.w - aw) / 2.0;
     let ay = panel.y + (panel.h - ah) / 2.0;
-    cc_card(out, renderer, field, field_bg, 8.0, output_scale, off_x, off_y);
-    cc_card(out, renderer, cancel_rect, cancel_col, 8.0, output_scale, off_x, off_y);
-    cc_card(out, renderer, ok_rect, ok_col, 8.0, output_scale, off_x, off_y);
-    cc_card(out, renderer, Rect::new(ax, ay, aw, ah), Color32F::new(0.08, 0.10, 0.16, 0.98), 12.0, output_scale, off_x, off_y);
+    cc_card_shadow(out, renderer, field, field_bg, 8.0, shadow, output_scale, off_x, off_y);
+    cc_card_shadow(out, renderer, cancel_rect, cancel_col, 8.0, shadow, output_scale, off_x, off_y);
+    cc_card_shadow(out, renderer, ok_rect, ok_col, 8.0, shadow, output_scale, off_x, off_y);
+    cc_card_shadow(out, renderer, Rect::new(ax, ay, aw, ah), card_col, 12.0, shadow, output_scale, off_x, off_y);
 }
 
 /// Draw the on-screen keyboard: rounded panel + a draggable title strip +
@@ -5012,6 +5099,26 @@ fn switcher_card_element(
     off_x: i32,
     off_y: i32,
 ) -> BacakElements {
+    card_element(
+        program, tile, color, radius, selected, punch, fade, CARD_SHADOW_COL, output_scale, off_x, off_y,
+    )
+}
+
+/// [`switcher_card_element`] with an explicit drop-shadow colour.
+#[allow(clippy::too_many_arguments)]
+fn card_element(
+    program: GlesPixelProgram,
+    tile: Rect,
+    color: Color32F,
+    radius: f32,
+    selected: bool,
+    punch: Option<(Rect, f32)>,
+    fade: f32,
+    shadow_col: [f32; 4],
+    output_scale: i32,
+    off_x: i32,
+    off_y: i32,
+) -> BacakElements {
     // Element area in output-local LOGICAL px; PixelShaderElement scales
     // it to physical via the output's scale, and the shader divides the
     // physical fragment position back down by `u_scale` (see CARD_SHADER).
@@ -5055,7 +5162,7 @@ fn switcher_card_element(
             Uniform::new("shadow_soft", CARD_SHADOW_SOFT),
             Uniform::new("shadow_off", CARD_SHADOW_OFF),
             Uniform::new("card_col", color.components()),
-            Uniform::new("shadow_col", CARD_SHADOW_COL),
+            Uniform::new("shadow_col", shadow_col),
             Uniform::new("border", border),
             Uniform::new("border_col", SWITCHER_RING_COLOR.components()),
             Uniform::new("punch_min", pmin),
@@ -5896,16 +6003,18 @@ pub(crate) fn render_file_browser(
     let p   = fb.panel;
     let lr  = fb.list_rect;
 
-    let panel_bg   = Color32F::new(0.08, 0.10, 0.16, 0.97);
-    let header_bg  = Color32F::new(0.12, 0.14, 0.22, 1.0);
-    let path_bg    = Color32F::new(0.10, 0.12, 0.19, 1.0);
-    let row_dir    = Color32F::new(0.14, 0.18, 0.30, 0.90);
-    let row_img    = Color32F::new(0.12, 0.24, 0.16, 0.90);
-    let row_other  = Color32F::new(0.10, 0.11, 0.17, 0.70);
-    let btn_cancel = Color32F::new(0.22, 0.22, 0.28, 0.95);
-    let btn_nav    = Color32F::new(0.16, 0.22, 0.38, 0.95);
-    let shadow_col = Color32F::new(0.0,  0.0,  0.0,  0.60);
-    let divider    = Color32F::new(1.0,  1.0,  1.0,  0.07);
+    let dark = state.dark_mode;
+    let t = |c| themed(c, dark);
+    let panel_bg   = t(Color32F::new(0.08, 0.10, 0.16, 0.97));
+    let header_bg  = t(Color32F::new(0.12, 0.14, 0.22, 1.0));
+    let path_bg    = t(Color32F::new(0.10, 0.12, 0.19, 1.0));
+    let row_dir    = t(Color32F::new(0.14, 0.18, 0.30, 0.90));
+    let row_img    = t(Color32F::new(0.12, 0.24, 0.16, 0.90));
+    let row_other  = t(Color32F::new(0.10, 0.11, 0.17, 0.70));
+    let btn_cancel = t(Color32F::new(0.22, 0.22, 0.28, 0.95));
+    let btn_nav    = t(Color32F::new(0.16, 0.22, 0.38, 0.95));
+    let shadow_col = Color32F::new(0.0,  0.0,  0.0,  if dark { 0.60 } else { 0.22 });
+    let divider    = t(Color32F::new(1.0,  1.0,  1.0,  0.07));
 
     const TITLE_H: f32 = 44.0;
     const PATH_H:  f32 = 28.0;
@@ -6007,26 +6116,26 @@ pub(crate) fn render_file_browser(
     out.push(solid_element(fb.cancel_rect,    btn_cancel, scale, off_x, off_y));
     out.push(solid_element(fb.home_rect,      btn_nav,    scale, off_x, off_y));
     out.push(solid_element(fb.up_rect,        btn_nav,    scale, off_x, off_y));
-    out.push(solid_element(fb.scroll_up_rect, Color32F::new(0.18, 0.26, 0.46, 0.95), scale, off_x, off_y));
-    out.push(solid_element(fb.scroll_dn_rect, Color32F::new(0.18, 0.26, 0.46, 0.95), scale, off_x, off_y));
+    out.push(solid_element(fb.scroll_up_rect, t(Color32F::new(0.18, 0.26, 0.46, 0.95)), scale, off_x, off_y));
+    out.push(solid_element(fb.scroll_dn_rect, t(Color32F::new(0.18, 0.26, 0.46, 0.95)), scale, off_x, off_y));
 
     // Scrollbar track + thumb
     {
         let sb = fb.scrollbar_rect;
-        out.push(solid_element(sb, Color32F::new(1.0, 1.0, 1.0, 0.06), scale, off_x, off_y));
+        out.push(solid_element(sb, t(Color32F::new(1.0, 1.0, 1.0, 0.06)), scale, off_x, off_y));
         if fb.scroll_max > 0.0 {
             let content_h = fb.entries.len() as f32 * fb.row_h;
             let thumb_h   = (sb.h * sb.h / content_h).max(20.0).min(sb.h);
             let thumb_y   = sb.y + (sb.h - thumb_h) * (fb.scroll_y / fb.scroll_max);
             out.push(solid_element(
                 Rect::new(sb.x + 2.0, thumb_y, sb.w - 4.0, thumb_h),
-                Color32F::new(0.6, 0.7, 1.0, 0.55), scale, off_x, off_y));
+                t(Color32F::new(0.6, 0.7, 1.0, 0.55)), scale, off_x, off_y));
         }
     }
 
     // ── Pass 3: panel chrome (list area bg, path bar, title bar, shadow) ──
 
-    out.push(solid_element(lr, Color32F::new(0.09, 0.11, 0.17, 1.0), scale, off_x, off_y));
+    out.push(solid_element(lr, t(Color32F::new(0.09, 0.11, 0.17, 1.0)), scale, off_x, off_y));
 
     out.push(solid_element(
         Rect::new(p.x, p.y + TITLE_H + PATH_H - 1.0, p.w, 1.0),
@@ -6055,5 +6164,29 @@ pub(crate) fn render_file_browser(
 
     if let Some(o) = state.wm.output(output) {
         out.push(solid_element(o.bounds, Color32F::new(0.0, 0.0, 0.0, 0.45), scale, off_x, off_y));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::invert_lightness;
+
+    fn close(a: [f32; 3], b: [f32; 3]) -> bool {
+        a.iter().zip(b).all(|(x, y)| (x - y).abs() < 0.01)
+    }
+
+    #[test]
+    fn invert_lightness_flips_greys_and_keeps_hue() {
+        assert!(close(invert_lightness([1.0, 1.0, 1.0]), [0.0, 0.0, 0.0]));
+        assert!(close(invert_lightness([0.2, 0.2, 0.2]), [0.8, 0.8, 0.8]));
+        // Pale label text becomes dark, still blue-tinted (b > r).
+        let [r, _, b] = invert_lightness([232.0 / 255.0, 236.0 / 255.0, 244.0 / 255.0]);
+        assert!(r < 0.15 && b > r);
+        // A saturated green stays green.
+        let [r, g, b] = invert_lightness([0.31, 0.78, 0.47]);
+        assert!(g > r && g > b);
+        // Applying it twice gives the colour back.
+        let c = [0.14, 0.18, 0.30];
+        assert!(close(invert_lightness(invert_lightness(c)), c));
     }
 }
