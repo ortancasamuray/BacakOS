@@ -26,6 +26,7 @@ apt-get install -y \
     git curl \
     build-essential pkg-config clang \
     dpkg-dev \
+    debhelper dh-dkms dkms \
     \
     libdbus-1-dev \
     libpam0g-dev \
