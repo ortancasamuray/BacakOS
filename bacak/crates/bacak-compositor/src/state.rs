@@ -11958,3 +11958,30 @@ mod cc_theme_tests {
         assert!(sub[0] > label[0]);
     }
 }
+
+#[cfg(test)]
+mod cc_layout_tests {
+    use super::*;
+
+    /// The Control Center, power row included, fits on small outputs.
+    #[test]
+    fn control_center_fits_low_resolutions() {
+        let display: Display<BacakState> = Display::new().unwrap();
+        let mut state = BacakState::new(&display, "cc-layout-test-seat");
+        let out = state.wm.primary_output().unwrap();
+        for (w, h) in [(1280.0, 720.0), (1024.0, 768.0), (1366.0, 768.0), (800.0, 600.0), (1920.0, 1080.0)] {
+            let b = Rect::new(0.0, 0.0, w, h);
+            state.wm.set_output_bounds(out, b).unwrap();
+            state.open_control_center(out);
+            let cc = state.control_center.as_ref().unwrap();
+            let p = cc.panel;
+            eprintln!("{w}x{h}: zoom {:.2} panel {:?}", cc.zoom, p);
+            assert!(p.x >= 0.0 && p.y >= 0.0 && p.x + p.w <= w && p.y + p.h <= h, "{w}x{h}: panel {p:?}");
+            for t in &cc.tiles {
+                let r = t.rect;
+                assert!(r.y + r.h <= p.y + p.h + 0.5, "{w}x{h}: tile {r:?} below panel {p:?}");
+            }
+            state.control_center = None;
+        }
+    }
+}
