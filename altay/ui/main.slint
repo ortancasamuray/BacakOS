@@ -14,7 +14,7 @@ export struct EntryModel {
     size-text: string,
     modified-text: string,
     type-text: string,     // "Klasör", "PNG", "MP4", "APK" …
-    glyph: string,
+    kind: string,          // "image", "audio", "pdf" … (fallback badge colour)
     selected: bool,
     has-icon: bool,
     icon: image,
@@ -34,7 +34,6 @@ export struct RootModel {
     label: string,
     path: string,
     kind: int,
-    glyph: string,
     used-text: string,
     total-text: string,
     fraction: float,
@@ -116,27 +115,52 @@ export global Tip {
     in-out property <bool> shown;
 }
 
+// ---- Icons ------------------------------------------------------------------
+// Monochrome symbolic icons, tinted with `colorize`. The software renderer
+// can't draw colour emoji, so the UI never uses emoji glyphs as icons.
+
+export global Icons {
+    out property <image> up: @image-url("icons/up.svg");
+    out property <image> down: @image-url("icons/down.svg");
+    out property <image> home: @image-url("icons/home.svg");
+    out property <image> refresh: @image-url("icons/refresh.svg");
+    out property <image> restore: @image-url("icons/restore.svg");
+    out property <image> edit: @image-url("icons/edit.svg");
+    out property <image> check: @image-url("icons/check.svg");
+    out property <image> close: @image-url("icons/close.svg");
+    out property <image> search: @image-url("icons/search.svg");
+    out property <image> eject: @image-url("icons/eject.svg");
+    out property <image> play: @image-url("icons/play.svg");
+    out property <image> pause: @image-url("icons/pause.svg");
+    out property <image> minus: @image-url("icons/minus.svg");
+    out property <image> plus: @image-url("icons/plus.svg");
+    out property <image> cut: @image-url("icons/cut.svg");
+    out property <image> copy: @image-url("icons/copy.svg");
+    out property <image> paste: @image-url("icons/paste.svg");
+    out property <image> trash: @image-url("icons/trash.svg");
+    out property <image> more: @image-url("icons/more.svg");
+    out property <image> archive: @image-url("icons/archive.svg");
+    out property <image> extract: @image-url("icons/extract.svg");
+    out property <image> app: @image-url("icons/app.svg");
+    out property <image> clock: @image-url("icons/clock.svg");
+    out property <image> image: @image-url("icons/image.svg");
+    out property <image> music: @image-url("icons/music.svg");
+    out property <image> video: @image-url("icons/video.svg");
+    out property <image> document: @image-url("icons/document.svg");
+    out property <image> download: @image-url("icons/download.svg");
+    out property <image> globe: @image-url("icons/globe.svg");
+    out property <image> usb: @image-url("icons/usb.svg");
+    out property <image> drive: @image-url("icons/drive.svg");
+    out property <image> alert: @image-url("icons/alert.svg");
+}
+
 // ---- Localization -----------------------------------------------------------
 
 export global L {
-    in property <string> grid: "⊞";
-    in property <string> list: "≡";
-    in property <string> compact: "≡ Compact";
-    in property <string> folder: "+ Yeni Klasör";
-    in property <string> copy: "📋";
-    in property <string> cut: "✂";
-    in property <string> paste: "📥";
-    in property <string> connect: "🌐 Bağlan";
-    in property <string> import: "📎 İçe Aktar";
-    in property <string> select: "☐";
-    in property <string> selecting: "✓";
-    in property <string> preview: "👁 Önizleme";
-    in property <string> preview-on: "👁 Önizleme ✓";
-    in property <string> trash-btn: "🗑 Çöpe Taşı";
-    in property <string> compress-btn: "🗜 Sıkıştır";
-    in property <string> extract-btn: "📂 Çıkart";
-    in property <string> restore: "♻ Geri Yükle";
-    in property <string> empty-trash: "🗑 Çöpü Boşalt";
+    in property <string> connect: "Bağlan";
+    in property <string> import: "İçe Aktar";
+    in property <string> preview: "Önizleme";
+    in property <string> preview-on: "Önizleme ✓";
     in property <string> search-ph: "Dosyalarda ara…";
     in property <string> search-files-ph: "İçerik ara…";
     in property <string> in-files: "İçerikte";
@@ -147,7 +171,7 @@ export global L {
     in property <string> trash-place: "Çöp Kutusu";
     in property <string> perms: "İzinler: ";
     in property <string> toggle-exec: "Çalıştırılabilir";
-    in property <string> as-admin: "🔑 Yönetici Olarak";
+    in property <string> as-admin: "Yönetici Olarak";
     in property <string> transfers: "Aktarımlar";
     in property <string> clear-finished: "Tamamlananları Temizle";
     in property <string> connect-to-server: "Sunucuya Bağlan";
@@ -218,7 +242,8 @@ export global L {
 // ---- Icon-only button with tooltip ------------------------------------------
 
 component IconButton inherits Rectangle {
-    in property <string> icon;
+    in property <image> icon;
+    in property <length> icon-size: 20px;
     in property <string> tip;
     in property <bool> enabled: true;
     callback clicked();
@@ -242,12 +267,11 @@ component IconButton inherits Rectangle {
             }
         }
     }
-    Text {
-        text: root.icon;
-        color: root.enabled ? Theme.text : Theme.text-dim;
-        font-size: 20px;
-        horizontal-alignment: center;
-        vertical-alignment: center;
+    Image {
+        source: root.icon;
+        colorize: root.enabled ? Theme.text : Theme.text-dim;
+        width: root.icon-size;
+        height: root.icon-size;
     }
 }
 
@@ -255,7 +279,7 @@ component IconButton inherits Rectangle {
 
 component SidebarRow inherits Rectangle {
     in property <string> label;
-    in property <string> glyph;
+    in property <image> icon;
     in property <string> path;
     in property <bool> active;
     callback clicked();
@@ -284,11 +308,12 @@ component SidebarRow inherits Rectangle {
         padding-right: 12px;
         spacing: 10px;
         alignment: start;
-        Text {
-            text: glyph;
-            font-size: 16px;
-            vertical-alignment: center;
-            color: root.active ? Theme.accent : Theme.text-dim;
+        Image {
+            source: root.icon;
+            colorize: root.active ? Theme.accent : Theme.text-dim;
+            width: 18px;
+            height: 18px;
+            y: (parent.height - self.height) / 2;
         }
         Text {
             text: label;
@@ -312,7 +337,7 @@ component SidebarRow inherits Rectangle {
 
 component CategoryRow inherits Rectangle {
     in property <string> label;
-    in property <string> glyph;
+    in property <image> icon;
     in property <color> icon-color;
     in property <bool> active;
     callback clicked();
@@ -334,12 +359,11 @@ component CategoryRow inherits Rectangle {
                 height: 26px;
                 border-radius: 6px;
                 background: root.icon-color;
-                Text {
-                    text: root.glyph;
-                    font-size: 14px;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                    color: white;
+                Image {
+                    source: root.icon;
+                    colorize: white;
+                    width: 16px;
+                    height: 16px;
                 }
             }
         }
@@ -365,7 +389,7 @@ component CategoryRow inherits Rectangle {
 // 2-column category tile used in the sidebar grid
 component CategoryTile inherits Rectangle {
     in property <string> label;
-    in property <string> glyph;
+    in property <image> icon;
     in property <color> icon-color;
     in property <bool> active;
     callback clicked();
@@ -387,12 +411,11 @@ component CategoryTile inherits Rectangle {
             border-radius: 9px;
             background: root.icon-color;
             x: (parent.width - self.width) / 2;
-            Text {
-                text: root.glyph;
-                font-size: 16px;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-                color: white;
+            Image {
+                source: root.icon;
+                colorize: white;
+                width: 20px;
+                height: 20px;
             }
         }
         Text {
@@ -433,14 +456,14 @@ component GridTile inherits Rectangle {
     animate background { duration: 100ms; }
 
     property <color> icon-bg:
-        entry.glyph == "🖼" ? #FF5722 :
-        entry.glyph == "🎵" ? #9C27B0 :
-        entry.glyph == "🎬" ? #2196F3 :
-        entry.glyph == "📕" ? #F44336 :
-        entry.glyph == "📊" ? #4CAF50 :
-        entry.glyph == "📽" ? #FF9800 :
-        entry.glyph == "🗜" ? #795548 :
-        entry.glyph == "📦" ? #607D8B :
+        entry.kind == "image" ? #FF5722 :
+        entry.kind == "audio" ? #9C27B0 :
+        entry.kind == "video" ? #2196F3 :
+        entry.kind == "pdf" ? #F44336 :
+        entry.kind == "sheet" ? #4CAF50 :
+        entry.kind == "slides" ? #FF9800 :
+        entry.kind == "archive" ? #795548 :
+        entry.kind == "package" ? #607D8B :
         #9E9E9E;
 
     Timer {
@@ -507,12 +530,16 @@ component GridTile inherits Rectangle {
                 width: parent.width;
                 height: parent.height;
             }
-            if !entry.has-icon : Text {
-                text: entry.glyph;
-                font-size: root.tile-size / 3.5;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-                color: white;
+            if !entry.has-icon : Image {
+                source: entry.is-dir ? Icons.extract
+                    : entry.kind == "image" ? Icons.image
+                    : entry.kind == "audio" ? Icons.music
+                    : entry.kind == "video" ? Icons.video
+                    : entry.kind == "archive" || entry.kind == "package" ? Icons.archive
+                    : Icons.document;
+                colorize: white;
+                width: parent.height * 0.5;
+                height: parent.height * 0.5;
             }
         }
         Text {
@@ -531,7 +558,7 @@ component GridTile inherits Rectangle {
         background: entry.selected ? Theme.accent : Theme.surface;
         border-width: 2px;
         border-color: Theme.text-dim;
-        Text { text: entry.selected ? "✓" : ""; color: white; font-size: 16px; }
+        if entry.selected : Image { source: Icons.check; colorize: white; width: 16px; height: 16px; }
     }
 }
 
@@ -552,7 +579,13 @@ component VolumeRow inherits Rectangle {
         padding-right: 8px;
         spacing: 10px;
         alignment: center;
-        Text { text: "🔌"; font-size: 16px; vertical-alignment: center; }
+        Image {
+            source: Icons.usb;
+            colorize: Theme.text-dim;
+            width: 18px;
+            height: 18px;
+            y: (parent.height - self.height) / 2;
+        }
         VerticalLayout {
             horizontal-stretch: 1;
             spacing: 1px;
@@ -570,14 +603,18 @@ component VolumeRow inherits Rectangle {
                 overflow: elide;
             }
         }
-        Text {
-            text: vol.mounted ? "●" : "○";
-            color: vol.mounted ? #4caf50 : Theme.text-dim;
-            font-size: 10px;
-            vertical-alignment: center;
+        Rectangle {
+            width: 8px;
+            height: 8px;
+            y: (parent.height - self.height) / 2;
+            border-radius: 4px;
+            background: vol.mounted ? #4caf50 : transparent;
+            border-width: vol.mounted ? 0px : 1.5px;
+            border-color: Theme.text-dim;
         }
         if vol.mounted : IconButton {
-            icon: "⏏";
+            icon: Icons.eject;
+            icon-size: 18px;
             tip: L.tip-eject;
             clicked => { root.eject(); }
         }
@@ -621,14 +658,17 @@ component TransferRow inherits Rectangle {
             }
         }
         if xfer.active : IconButton {
-            icon: xfer.paused ? "▶" : "⏸";
+            icon: xfer.paused ? Icons.play : Icons.pause;
             tip: xfer.paused ? L.tip-resume : L.tip-pause;
             clicked => { if (xfer.paused) { root.resume(); } else { root.pause(); } }
         }
-        if xfer.active : IconButton { icon: "✕"; tip: L.cancel; clicked => { root.cancel(); } }
-        if !xfer.active : Text {
-            text: xfer.status == "Done" ? "✓" : xfer.status == "Cancelled" ? "∅" : "⚠";
-            color: Theme.text-dim; font-size: 18px; vertical-alignment: center;
+        if xfer.active : IconButton { icon: Icons.close; tip: L.cancel; clicked => { root.cancel(); } }
+        if !xfer.active : Image {
+            source: xfer.status == "Done" ? Icons.check : xfer.status == "Cancelled" ? Icons.close : Icons.alert;
+            colorize: xfer.status == "Failed" ? #e05555 : Theme.text-dim;
+            width: 20px;
+            height: 20px;
+            y: (parent.height - self.height) / 2;
         }
     }
 }
@@ -638,7 +678,6 @@ component TransferRow inherits Rectangle {
 component BreadcrumbChip inherits Rectangle {
     in property <string> label;
     callback clicked();
-    height: 30px;
     border-radius: 6px;
     background: ta.has-hover ? Theme.surface-hi : transparent;
     animate background { duration: 100ms; }
@@ -694,7 +733,7 @@ component OpenWithRow inherits Rectangle {
             width: 24px; height: 24px;
             y: (parent.height - 24px) / 2;
             if app.has-icon : Image { source: app.icon; image-fit: contain; width: 24px; height: 24px; }
-            if !app.has-icon : Text { text: "🗔"; font-size: 18px; horizontal-alignment: center; vertical-alignment: center; }
+            if !app.has-icon : Image { source: Icons.app; colorize: Theme.text-dim; width: 22px; height: 22px; }
         }
         Text {
             text: app.name;
@@ -704,14 +743,20 @@ component OpenWithRow inherits Rectangle {
             overflow: elide;
             horizontal-stretch: 1;
         }
-        if app.is-default : Text { text: "✓"; color: Theme.accent; font-size: 14px; vertical-alignment: center; }
+        if app.is-default : Image {
+            source: Icons.check;
+            colorize: Theme.accent;
+            width: 16px;
+            height: 16px;
+            y: (parent.height - self.height) / 2;
+        }
     }
 }
 
 // ---- Bottom action button (Samsung My Files style) --------------------------
 
 component BottomActionButton inherits Rectangle {
-    in property <string> icon;
+    in property <image> icon;
     in property <string> label;
     in property <bool> enabled: true;
     in property <bool> highlighted: false;
@@ -729,11 +774,14 @@ component BottomActionButton inherits Rectangle {
     VerticalLayout {
         alignment: center;
         spacing: 4px;
-        Text {
-            text: root.icon;
-            font-size: 22px;
-            horizontal-alignment: center;
-            color: !root.enabled ? Theme.text-dim : root.highlighted ? Theme.accent : Theme.text;
+        HorizontalLayout {
+            alignment: center;
+            Image {
+                source: root.icon;
+                colorize: !root.enabled ? Theme.text-dim : root.highlighted ? Theme.accent : Theme.text;
+                width: 22px;
+                height: 22px;
+            }
         }
         Text {
             text: root.label;
@@ -769,11 +817,12 @@ component ColHeader inherits Rectangle {
             font-weight: root.col-key == root.sort-col ? 700 : 400;
             vertical-alignment: center;
         }
-        if root.col-key == root.sort-col : Text {
-            text: root.sort-asc ? "↑" : "↓";
-            color: Theme.accent;
-            font-size: 11px;
-            vertical-alignment: center;
+        if root.col-key == root.sort-col : Image {
+            source: root.sort-asc ? Icons.up : Icons.down;
+            colorize: Theme.accent;
+            width: 12px;
+            height: 12px;
+            y: (parent.height - self.height) / 2;
         }
     }
 }
@@ -986,7 +1035,7 @@ export component MainWindow inherits Window {
                         // Recent files
                         CategoryRow {
                             label: L.recent;
-                            glyph: "🕐";
+                            icon: Icons.clock;
                             icon-color: #607D8B;
                             active: root.active-category == "recent";
                             clicked => {
@@ -1009,32 +1058,32 @@ export component MainWindow inherits Window {
                         }
 
                         CategoryRow {
-                            label: L.cat-images;   glyph: "🖼"; icon-color: #FF5722;
+                            label: L.cat-images;   icon: Icons.image; icon-color: #FF5722;
                             active: root.active-category == "images";
                             clicked => { root.active-category = "images"; root.navigate-category("images"); }
                         }
                         CategoryRow {
-                            label: L.cat-audio;    glyph: "🎵"; icon-color: #9C27B0;
+                            label: L.cat-audio;    icon: Icons.music; icon-color: #9C27B0;
                             active: root.active-category == "audio";
                             clicked => { root.active-category = "audio"; root.navigate-category("audio"); }
                         }
                         CategoryRow {
-                            label: L.cat-videos;   glyph: "🎬"; icon-color: #2196F3;
+                            label: L.cat-videos;   icon: Icons.video; icon-color: #2196F3;
                             active: root.active-category == "videos";
                             clicked => { root.active-category = "videos"; root.navigate-category("videos"); }
                         }
                         CategoryRow {
-                            label: L.cat-docs;     glyph: "📄"; icon-color: #F44336;
+                            label: L.cat-docs;     icon: Icons.document; icon-color: #F44336;
                             active: root.active-category == "docs";
                             clicked => { root.active-category = "docs"; root.navigate-category("docs"); }
                         }
                         CategoryRow {
-                            label: L.cat-downloads; glyph: "⬇"; icon-color: #4CAF50;
+                            label: L.cat-downloads; icon: Icons.download; icon-color: #4CAF50;
                             active: root.active-category == "downloads";
                             clicked => { root.active-category = "downloads"; root.navigate-category("downloads"); }
                         }
                         CategoryRow {
-                            label: L.cat-archives;  glyph: "🗜"; icon-color: #795548;
+                            label: L.cat-archives;  icon: Icons.archive; icon-color: #795548;
                             active: root.active-category == "archives";
                             clicked => { root.active-category = "archives"; root.navigate-category("archives"); }
                         }
@@ -1056,7 +1105,7 @@ export component MainWindow inherits Window {
                             spacing: 0px;
                             SidebarRow {
                                 label: r.label;
-                                glyph: r.glyph;
+                                icon: r.kind == 2 ? Icons.globe : Icons.drive;
                                 path: r.path;
                                 active: r.path == active-root-path && root.active-category == "";
                                 dropped => { root.perform-drop(); }
@@ -1150,7 +1199,7 @@ export component MainWindow inherits Window {
                         }
                         for c in connections : SidebarRow {
                             label: c.name;
-                            glyph: "🌐";
+                            icon: Icons.globe;
                             clicked => { root.open-connection(c.uri); }
                         }
 
@@ -1159,7 +1208,7 @@ export component MainWindow inherits Window {
                         // Trash
                         SidebarRow {
                             label: L.trash-place;
-                            glyph: "🗑";
+                            icon: Icons.trash;
                             clicked => {
                                 root.active-category = "";
                                 root.navigate("trash://");
@@ -1189,11 +1238,12 @@ export component MainWindow inherits Window {
                                 padding-right: 10px;
                                 spacing: 6px;
                                 alignment: center;
-                                Text {
-                                    text: "🔍";
-                                    font-size: 13px;
-                                    vertical-alignment: center;
-                                    color: Theme.text-dim;
+                                Image {
+                                    source: Icons.search;
+                                    colorize: Theme.text-dim;
+                                    width: 16px;
+                                    height: 16px;
+                                    y: (parent.height - self.height) / 2;
                                 }
                                 sidebar-search := LineEdit {
                                     text <=> search-text;
@@ -1217,10 +1267,10 @@ export component MainWindow inherits Window {
                         padding-top: 7px;
                         padding-bottom: 7px;
                         spacing: 2px;
-                        IconButton { icon: "⬆"; tip: L.tip-up;      clicked => { root.go-up(); } }
-                        IconButton { icon: "⬇"; tip: L.tip-down;    clicked => { root.go-down(); } }
-                        IconButton { icon: "🏠"; tip: L.tip-home;    clicked => { root.go-home(); } }
-                        IconButton { icon: "⟳"; tip: L.tip-refresh; clicked => { root.refresh(); } }
+                        IconButton { icon: Icons.up;      tip: L.tip-up;      clicked => { root.go-up(); } }
+                        IconButton { icon: Icons.down;    tip: L.tip-down;    clicked => { root.go-down(); } }
+                        IconButton { icon: Icons.home;    tip: L.tip-home;    clicked => { root.go-home(); } }
+                        IconButton { icon: Icons.refresh; tip: L.tip-refresh; clicked => { root.refresh(); } }
                         Rectangle { horizontal-stretch: 1; }
                         // Yeni klasör
                         Rectangle {
@@ -1232,14 +1282,11 @@ export component MainWindow inherits Window {
                                 mouse-cursor: pointer;
                                 clicked => { root.new-folder(); }
                             }
-                            HorizontalLayout {
-                                alignment: center;
-                                Image {
-                                    source: root.new-folder-icon;
-                                    image-fit: contain;
-                                    width: 28px;
-                                    height: 28px;
-                                }
+                            Image {
+                                source: root.new-folder-icon;
+                                image-fit: contain;
+                                width: 28px;
+                                height: 28px;
                             }
                         }
                     }
@@ -1264,21 +1311,28 @@ export component MainWindow inherits Window {
                 background: Theme.surface;
                 HorizontalLayout {
                     padding-left: 10px;
-                    padding-right: 10px;
+                    padding-right: 6px;
+                    padding-top: 2px;
+                    padding-bottom: 2px;
                     spacing: 4px;
-                    alignment: center;
                     // Breadcrumb / path editor
                     Rectangle {
                         horizontal-stretch: 1;
-                        if !editing-path : ScrollView {
-                            HorizontalLayout {
+                        // A long path keeps its tail (the current folder) in view.
+                        if !editing-path : bc-flick := Flickable {
+                            interactive: false;
+                            viewport-width: max(self.width, bc-row.preferred-width);
+                            viewport-x: min(0px, self.width - bc-row.preferred-width);
+                            bc-row := HorizontalLayout {
+                                height: bc-flick.height;
+                                padding-top: 5px;
+                                padding-bottom: 5px;
                                 alignment: start;
                                 spacing: 0px;
                                 for seg[i] in breadcrumbs : HorizontalLayout {
                                     if i > 0 : Text {
                                         text: "›"; color: Theme.text-dim; font-size: 16px;
                                         vertical-alignment: center;
-                                        padding-left: 2px; padding-right: 2px;
                                     }
                                     BreadcrumbChip {
                                         label: seg.label;
@@ -1297,7 +1351,10 @@ export component MainWindow inherits Window {
                         }
                     }
                     IconButton {
-                        icon: editing-path ? "✓" : "✎";
+                        icon: editing-path ? Icons.check : Icons.edit;
+                        icon-size: 18px;
+                        width: 40px;
+                        height: 40px;
                         tip: L.tip-edit;
                         clicked => { root.editing-path = !root.editing-path; }
                     }
@@ -1348,7 +1405,7 @@ export component MainWindow inherits Window {
                                     entry: self.idx < entries.length ? entries[self.idx]
                                         : { name: "", path: "", is-dir: false, is-symlink: false,
                                             is-archive: false, size-text: "", modified-text: "",
-                                            type-text: "", glyph: "", selected: false };
+                                            type-text: "", kind: "", selected: false };
                                     selection-mode: root.selection-mode;
                                     activate => {
                                         root.focused-idx = self.idx;
@@ -1395,12 +1452,11 @@ export component MainWindow inherits Window {
                                     mouse-cursor: pointer;
                                     clicked => { root.show-preview = false; }
                                 }
-                                Text {
-                                    text: "✕";
-                                    color: Theme.text-dim;
-                                    font-size: 14px;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
+                                Image {
+                                    source: Icons.close;
+                                    colorize: Theme.text-dim;
+                                    width: 14px;
+                                    height: 14px;
                                 }
                             }
                         }
@@ -1466,30 +1522,30 @@ export component MainWindow inherits Window {
                             padding-right: 4px;
                             spacing: 0px;
                             BottomActionButton {
-                                icon: "✂";
+                                icon: Icons.cut;
                                 label: L.act-move;
                                 enabled: selection-mode;
                                 clicked => { root.cut-selected(); }
                             }
                             BottomActionButton {
-                                icon: "📋";
+                                icon: Icons.copy;
                                 label: L.act-copy;
                                 enabled: selection-mode;
                                 clicked => { root.copy-selected(); }
                             }
                             BottomActionButton {
-                                icon: "📥";
+                                icon: Icons.paste;
                                 label: L.act-paste;
                                 clicked => { root.paste(); }
                             }
                             BottomActionButton {
-                                icon: "🗑";
+                                icon: Icons.trash;
                                 label: L.act-delete;
                                 enabled: selection-mode;
                                 clicked => { root.trash-selected(); }
                             }
                             BottomActionButton {
-                                icon: "⋯";
+                                icon: Icons.more;
                                 label: L.act-more;
                                 highlighted: root.show-more-actions;
                                 clicked => { root.show-more-actions = !root.show-more-actions; }
@@ -1501,13 +1557,13 @@ export component MainWindow inherits Window {
                             padding-right: 4px;
                             spacing: 0px;
                             BottomActionButton {
-                                icon: "♻";
+                                icon: Icons.restore;
                                 label: L.act-restore;
                                 enabled: selection-mode;
                                 clicked => { root.restore-selected(); }
                             }
                             BottomActionButton {
-                                icon: "🗑";
+                                icon: Icons.trash;
                                 label: L.act-empty-trash;
                                 clicked => { root.empty-trash(); }
                             }
@@ -1527,7 +1583,13 @@ export component MainWindow inherits Window {
                     padding-right: 8px;
                     spacing: 8px;
                     alignment: center;
-                    Text { text: "📦"; font-size: 18px; vertical-alignment: center; }
+                    Image {
+                        source: Icons.archive;
+                        colorize: Theme.text-dim;
+                        width: 20px;
+                        height: 20px;
+                        y: (parent.height - self.height) / 2;
+                    }
                     VerticalLayout {
                         horizontal-stretch: 1;
                         spacing: 4px;
@@ -1573,7 +1635,7 @@ export component MainWindow inherits Window {
                         }
                     }
                     if !root.archive-loading : Button {
-                        text: "📂 " + L.act-extract;
+                        text: L.act-extract;
                         clicked => { root.extract-archive(); }
                     }
                 }
@@ -1671,7 +1733,7 @@ export component MainWindow inherits Window {
                             }
                         }
                         IconButton {
-                            icon: "✕";
+                            icon: Icons.close;
                             tip: L.cancel;
                             clicked => { root.cancel-compress(); }
                         }
@@ -1690,12 +1752,12 @@ export component MainWindow inherits Window {
                         spacing: 4px;
                         alignment: center;
                         IconButton {
-                            icon: "－"; tip: L.tip-zoom-out;
+                            icon: Icons.minus; tip: L.tip-zoom-out;
                             width: 44px; height: 44px;
                             clicked => { root.grid-scale = clamp(root.grid-scale - 0.1, 0.6, 2.2); }
                         }
                         IconButton {
-                            icon: "＋"; tip: L.tip-zoom-in;
+                            icon: Icons.plus; tip: L.tip-zoom-in;
                             width: 44px; height: 44px;
                             clicked => { root.grid-scale = clamp(root.grid-scale + 0.1, 0.6, 2.2); }
                         }

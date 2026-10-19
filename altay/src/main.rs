@@ -1272,9 +1272,9 @@ fn chmod_toggle_exec(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
             ui.set_preview_needs_elevation(true);
             ui.set_status_text(sx(
                 ui,
-                "Permission denied — you don't own this file. Use 🔑 As administrator.",
-                "İzin reddedildi — bu dosya size ait değil. 🔑 Yönetici olarak'ı kullanın.",
-                "Permiso denegado — no eres el propietario de este archivo. Usa 🔑 Como administrador.",
+                "Permission denied — you don't own this file. Use As administrator.",
+                "İzin reddedildi — bu dosya size ait değil. Yönetici olarak'ı kullanın.",
+                "Permiso denegado — no eres el propietario de este archivo. Usa Como administrador.",
             ));
         }
         Err(e) => ui.set_status_text(sx(ui, format!("chmod failed: {e}"), format!("chmod başarısız: {e}"), format!("chmod falló: {e}"))),
@@ -2103,7 +2103,7 @@ fn load_trash(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
     ui.set_current_path(SharedString::from("trash://"));
     ui.set_active_root_path(SharedString::from(""));
     ui.set_breadcrumbs(ModelRc::new(VecModel::from(vec![BreadcrumbModel {
-        label: SharedString::from("🗑 Trash"),
+        label: sx(ui, "Trash", "Çöp", "Papelera"),
         path: SharedString::from("trash://"),
     }])));
     ui.set_in_trash(true);
@@ -2137,7 +2137,7 @@ fn refresh_view(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
                 }),
                 modified_text: SharedString::from(format_time(e.modified)),
                 type_text: SharedString::from(type_text_for(ui, e)),
-                glyph: SharedString::from(glyph_for(e)),
+                kind: SharedString::from(kind_for(e)),
                 selected: s.selected.contains(&i),
                 has_icon: icon.is_some(),
                 icon: icon.unwrap_or_default(),
@@ -2257,25 +2257,10 @@ fn apply_language(ui: &MainWindow, lang: &str) {
             }));
         };
     }
-    t!(set_grid, "▦ Grid", "▦ Izgara", "▦ Cuadrícula");
-    t!(set_list, "≣ List", "≣ Liste", "≣ Lista");
-    t!(set_compact, "≡ Compact", "≡ Sıkışık", "≡ Compacto");
-    t!(set_folder, "＋ Folder", "＋ Klasör", "＋ Carpeta");
-    // Toolbar copy/cut/paste/select are icon-only (language-independent).
-    t!(set_copy, "📋", "📋", "📋");
-    t!(set_cut, "✂", "✂", "✂");
-    t!(set_paste, "📥", "📥", "📥");
-    t!(set_connect, "🌐 Connect", "🌐 Bağlan", "🌐 Conectar");
-    t!(set_import, "📎 Import…", "📎 İçe Aktar…", "📎 Importar…");
-    t!(set_select, "☐", "☐", "☐");
-    t!(set_selecting, "✓", "✓", "✓");
-    t!(set_preview, "👁 Preview", "👁 Önizleme", "👁 Vista previa");
-    t!(set_preview_on, "👁 Preview ✓", "👁 Önizleme ✓", "👁 Vista previa ✓");
-    t!(set_trash_btn, "🗑 Trash", "🗑 Çöp", "🗑 Papelera");
-    t!(set_compress_btn, "🗜 Compress", "🗜 Sıkıştır", "🗜 Comprimir");
-    t!(set_extract_btn, "📂 Extract", "📂 Çıkar", "📂 Extraer");
-    t!(set_restore, "♻ Restore", "♻ Geri Yükle", "♻ Restaurar");
-    t!(set_empty_trash, "🗑 Empty Trash", "🗑 Çöpü Boşalt", "🗑 Vaciar papelera");
+    t!(set_connect, "Connect", "Bağlan", "Conectar");
+    t!(set_import, "Import…", "İçe Aktar…", "Importar…");
+    t!(set_preview, "Preview", "Önizleme", "Vista previa");
+    t!(set_preview_on, "Preview ✓", "Önizleme ✓", "Vista previa ✓");
     t!(set_search_ph, "Search…", "Ara…", "Buscar…");
     t!(set_search_files_ph, "Search in files…", "Dosyalarda ara…", "Buscar en archivos…");
     t!(set_in_files, "In files", "Dosya içinde", "En archivos");
@@ -2286,7 +2271,7 @@ fn apply_language(ui: &MainWindow, lang: &str) {
     t!(set_trash_place, "Trash", "Çöp", "Papelera");
     t!(set_perms, "Permissions: ", "İzinler: ", "Permisos: ");
     t!(set_toggle_exec, "Toggle executable", "Çalıştırma iznini değiştir", "Alternar ejecutable");
-    t!(set_as_admin, "🔑 As administrator", "🔑 Yönetici olarak", "🔑 Como administrador");
+    t!(set_as_admin, "As administrator", "Yönetici olarak", "Como administrador");
     t!(set_transfers, "Transfers", "Aktarımlar", "Transferencias");
     t!(set_clear_finished, "Clear finished", "Bitenleri temizle", "Borrar finalizadas");
     t!(set_connect_to_server, "Connect to server", "Sunucuya bağlan", "Conectar al servidor");
@@ -2387,11 +2372,6 @@ fn populate_roots(ui: &MainWindow, state: &AppState) {
                     RootKind::Removable => 1,
                     RootKind::Network => 2,
                 },
-                glyph: SharedString::from(match r.kind() {
-                    RootKind::Home => "🏠",
-                    RootKind::Removable => "💾",
-                    RootKind::Network => "🌐",
-                }),
                 used_text: SharedString::from(if total > 0 { humansize::format_size(used, humansize::DECIMAL) } else { String::new() }),
                 total_text: SharedString::from(if total > 0 { humansize::format_size(total, humansize::DECIMAL) } else { String::new() }),
                 fraction,
@@ -2405,7 +2385,12 @@ fn populate_roots(ui: &MainWindow, state: &AppState) {
 /// `dir` (ancestors above the root are outside the sandbox, so we start at the
 /// root's friendly label, e.g. "Home › Documents › Work").
 fn set_breadcrumbs(ui: &MainWindow, state: &Rc<RefCell<AppState>>, dir: &std::path::Path) {
-    let segs = breadcrumb_segments(&state.borrow().sandbox, dir);
+    let home = state.borrow().sandbox.home().into_path_buf();
+    let mut segs = breadcrumb_segments(&state.borrow().sandbox, dir);
+    // The home root reads like its sidebar row, in the UI language.
+    if let Some(first) = segs.first_mut().filter(|(_, p)| std::path::Path::new(p) == home) {
+        first.0 = sx(ui, "Internal Storage", "Dahili Depolama", "Almacenamiento interno").to_string();
+    }
     let models: Vec<BreadcrumbModel> = segs
         .into_iter()
         .map(|(label, path)| BreadcrumbModel {
@@ -2472,26 +2457,27 @@ fn format_time(t: Option<std::time::SystemTime>) -> String {
     }
 }
 
-/// Pick an emoji glyph for an entry (fallback when no system icon found).
-fn glyph_for(e: &Entry) -> &'static str {
+/// Coarse file kind for an entry; the UI picks the fallback badge colour and
+/// symbolic icon from it when no themed icon is found.
+fn kind_for(e: &Entry) -> &'static str {
     if e.is_dir {
-        return "📁";
+        return "folder";
     }
     match e.extension.as_str() {
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "svg" | "tiff" | "ico" | "avif" => "🖼",
-        "pdf" => "📕",
-        "doc" | "docx" | "odt" | "rtf" => "📄",
-        "xls" | "xlsx" | "ods" | "csv" => "📊",
-        "ppt" | "pptx" => "📽",
-        "txt" | "md" | "log" => "📝",
-        "mp4" | "mkv" | "webm" | "mov" | "avi" | "m4v" => "🎬",
-        "mp3" | "flac" | "wav" | "ogg" | "m4a" | "opus" => "🎵",
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "svg" | "tiff" | "ico" | "avif" => "image",
+        "pdf" => "pdf",
+        "doc" | "docx" | "odt" | "rtf" => "document",
+        "xls" | "xlsx" | "ods" | "csv" => "sheet",
+        "ppt" | "pptx" => "slides",
+        "txt" | "md" | "log" => "text",
+        "mp4" | "mkv" | "webm" | "mov" | "avi" | "m4v" => "video",
+        "mp3" | "flac" | "wav" | "ogg" | "m4a" | "opus" => "audio",
         "zip" | "zipx" | "7z" | "rar" | "cbr" | "ace" | "alz" | "arj" | "lzh" | "lha" | "zoo"
         | "tar" | "gz" | "tgz" | "bz2" | "bz" | "xz" | "zst" | "lz" | "lzo" | "br" | "rz"
-        | "tbz2" | "txz" | "tlz" | "tzo" | "taz" | "z" => "🗜",
-        "deb" | "rpm" | "appimage" | "apk" | "jar" | "war" | "ear" | "cab" | "iso" | "cpio" => "📦",
-        "sh" | "bin" | "run" => "⚙",
-        _ => "📄",
+        | "tbz2" | "txz" | "tlz" | "tzo" | "taz" | "z" => "archive",
+        "deb" | "rpm" | "appimage" | "apk" | "jar" | "war" | "ear" | "cab" | "iso" | "cpio" => "package",
+        "sh" | "bin" | "run" => "exec",
+        _ => "document",
     }
 }
 
@@ -2533,7 +2519,7 @@ fn load_file_icon(icon_name: &str) -> Option<slint::Image> {
         if let Some(entry) = cache.get(icon_name) {
             return entry.clone();
         }
-        let img = exo::resolve_mime_icon(icon_name)
+        let img = bacak_sdk::simge::bul(icon_name, 128)
             .and_then(|p| slint::Image::load_from_path(&p).ok());
         cache.insert(icon_name.to_string(), img.clone());
         img
