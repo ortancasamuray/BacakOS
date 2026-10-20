@@ -329,6 +329,7 @@ impl BacakState {
         if let Some(id) = self.x11_window_for(surface) {
             self.x11_windows.remove(&id);
             self.windows.retain(|_, v| *v != id);
+            self.begin_window_close(id);
             let _ = self.wm.close(id);
             // Withdraw from foreign-toplevel taskbars (list + management).
             if let Some(handle) = self.foreign_handles.remove(&id) {

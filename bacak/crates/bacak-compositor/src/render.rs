@@ -41,7 +41,7 @@ use smithay::backend::renderer::element::surface::{
     render_elements_from_surface_tree, WaylandSurfaceRenderElement,
 };
 use smithay::backend::renderer::element::texture::TextureRenderElement;
-use smithay::backend::renderer::element::utils::CropRenderElement;
+use smithay::backend::renderer::element::utils::{CropRenderElement, RescaleRenderElement};
 use smithay::backend::renderer::element::{Id, Kind};
 use smithay::backend::renderer::gles::element::PixelShaderElement;
 use smithay::backend::renderer::gles::{
@@ -238,6 +238,8 @@ smithay::render_elements! {
     // Overview preview's surface tree (root + subsurfaces) to its card frame
     // so nothing can paint outside the frame or onto a neighbour card.
     CroppedSurface = CropRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>,
+    // A window's surface tree scaled about its centre while it opens.
+    ScaledSurface = RescaleRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>,
     // The same hard-clip for our own (non-surface) overlay elements, so the
     // apps-menu grid can scroll by sub-row pixel amounts and still confine
     // every icon / label / hover chip to the grid viewport.
@@ -291,7 +293,15 @@ const BACKDROP_RADIUS: f32 = 18.0;
 /// Corner radius of the thumbnail "window" punched into the card.
 const THUMB_RADIUS: f32 = 8.0;
 /// Soft-shadow corner radius for real (rectangular) windows.
-const WINDOW_SHADOW_RADIUS: f32 = 6.0;
+const WINDOW_SHADOW_RADIUS: f32 = 8.0;
+/// Window key shadow: tight, just under the edge.
+const WINDOW_KEY_SHADOW_SOFT: f32 = 12.0;
+const WINDOW_KEY_SHADOW_OFF: [f32; 2] = [0.0, 4.0];
+const WINDOW_KEY_SHADOW_COL: [f32; 4] = [0.0, 0.0, 0.0, 0.32];
+/// Window ambient shadow: wide and soft, cast further down.
+const WINDOW_AMB_SHADOW_SOFT: f32 = 44.0;
+const WINDOW_AMB_SHADOW_OFF: [f32; 2] = [0.0, 16.0];
+const WINDOW_AMB_SHADOW_COL: [f32; 4] = [0.0, 0.0, 0.0, 0.30];
 
 /// GLSL ES 1.00 fragment shader: a rounded rectangle with a soft drop
 /// shadow and an optional selection border, all in one pass. `size`
@@ -315,6 +325,13 @@ uniform float shadow_soft;
 uniform vec2 shadow_off;
 uniform vec4 card_col;
 uniform vec4 shadow_col;
+// Optional second, wider "ambient" shadow (windows); alpha 0 disables it.
+uniform float amb_soft;
+uniform vec2 amb_off;
+uniform vec4 amb_col;
+// 1.0: no shadow inside the card itself, so a translucent body (a passive
+// window) isn't darkened by its own shadow.
+uniform float shadow_cut;
 uniform float border;
 uniform vec4 border_col;
 // Optional rounded "window" punched out of the card. When
@@ -341,13 +358,22 @@ void main() {
     // Shadow: same rounded rect, translated, with a wide soft edge.
     float sd_sh = sd_round_rect(px, c + shadow_off, b, radius);
     float sh_a = (1.0 - smoothstep(0.0, shadow_soft, sd_sh)) * shadow_col.a;
+    vec3 sh_rgb = shadow_col.rgb;
+    if (amb_col.a > 0.0) {
+        float sd_amb = sd_round_rect(px, c + amb_off, b, radius);
+        float amb_a = (1.0 - smoothstep(0.0, amb_soft, sd_amb)) * amb_col.a;
+        float total = sh_a + amb_a * (1.0 - sh_a);
+        sh_rgb = mix(amb_col.rgb, shadow_col.rgb, sh_a / max(total, 0.0001));
+        sh_a = total;
+    }
 
     // Card body: 1px anti-aliased edge.
     float sd_c = sd_round_rect(px, c, b, radius);
     float card_a = (1.0 - smoothstep(-1.0, 1.0, sd_c)) * card_col.a;
+    sh_a *= mix(1.0, smoothstep(-1.0, 1.0, sd_c), shadow_cut);
 
     // Composite shadow first, then the card over it.
-    vec3 rgb = shadow_col.rgb;
+    vec3 rgb = sh_rgb;
     float a = sh_a;
     rgb = mix(rgb, card_col.rgb, card_a);
     a = card_a + sh_a * (1.0 - card_a);
@@ -397,6 +423,10 @@ fn card_program(renderer: &mut GlesRenderer) -> Option<GlesPixelProgram> {
                 UniformName::new("shadow_off", UniformType::_2f),
                 UniformName::new("card_col", UniformType::_4f),
                 UniformName::new("shadow_col", UniformType::_4f),
+                UniformName::new("amb_soft", UniformType::_1f),
+                UniformName::new("amb_off", UniformType::_2f),
+                UniformName::new("amb_col", UniformType::_4f),
+                UniformName::new("shadow_cut", UniformType::_1f),
                 UniformName::new("border", UniformType::_1f),
                 UniformName::new("border_col", UniformType::_4f),
                 UniformName::new("punch_min", UniformType::_2f),
@@ -4433,7 +4463,7 @@ fn capture_window_png(
     let location: Point<i32, smithay::utils::Logical> =
         ((win.geom.x as i32) - off_x, (win.geom.y as i32) - off_y).into();
     let mut scene: Vec<BacakElements> = Vec::new();
-    push_window_decoration(state, renderer, &win, scale, off_x, off_y, &mut scene);
+    push_window_decoration(state, renderer, &win, 1.0, scale, off_x, off_y, &mut scene);
     for el in render_elements_from_surface_tree(
         renderer,
         &wl_surface,
@@ -4656,6 +4686,10 @@ fn render_workspace_windows(
     // One compile attempt up front; cheap thereafter (thread-local).
     let prog = card_program(renderer);
 
+    // Windows whose clients just went away shrink and fade out from their
+    // last snapshot, above everything still open on this workspace.
+    push_closing_windows(state, renderer, prog.clone(), output_scale, ws, off_x, off_y, out);
+
     // `windows` is sorted ascending-z then reversed, so index 0 is the
     // topmost window — exactly the stack rank the shadow ramp wants.
     for (z_rank, win) in windows.iter().enumerate() {
@@ -4674,16 +4708,35 @@ fn render_workspace_windows(
             continue;
         };
 
+        // A just-opened window zooms in from slightly smaller and fades in:
+        // its content, title bar and shadow all follow `shown`.
+        let open = state
+            .window_opens
+            .get(&win.id)
+            .and_then(|t| crate::animation::open_transform(t.elapsed()));
+        let (open_scale, open_alpha) = open.unwrap_or((1.0, 1.0));
+        let base: &crate::wm::Window = win;
+        let scaled_win;
+        let shown: &crate::wm::Window = if open.is_some() {
+            scaled_win = crate::wm::Window {
+                geom: crate::animation::scale_rect(base.geom, open_scale),
+                ..base.clone()
+            };
+            &scaled_win
+        } else {
+            base
+        };
+
         // App menus / tooltips / dropdowns attached to this window. Pushed
         // first in this window's group so they sit above its content *and* its
         // title bar (and behind any higher window, which was drawn earlier).
-        let alpha = if win.focused { 1.0 } else { PASSIVE_WINDOW_ALPHA };
+        let alpha = if win.focused { 1.0 } else { PASSIVE_WINDOW_ALPHA } * open_alpha;
         push_window_popups(renderer, &wl_surface, location, output_scale, alpha, out);
 
         // Server-side title bar, pushed before this window's content (so it's
         // on top of it) but after higher windows (drawn earlier) — correct
         // z-order when windows overlap. No-op for undecorated windows.
-        push_window_decoration(state, renderer, win, output_scale, off_x, off_y, out);
+        push_window_decoration(state, renderer, shown, open_alpha, output_scale, off_x, off_y, out);
 
         // Glassmorphism: passive windows are drawn at reduced alpha
         // over a frosted (pre-blurred) crop of the scene behind them —
@@ -4701,8 +4754,22 @@ fn render_workspace_windows(
                 alpha,
                 Kind::Unspecified,
             );
-        for el in surface_elements {
-            out.push(BacakElements::Surface(el));
+        if open.is_some() {
+            let centre = Point::<i32, Physical>::from((
+                ((win.geom.x + win.geom.w / 2.0 - off_x as f32) * output_scale as f32).round() as i32,
+                ((win.geom.y + win.geom.h / 2.0 - off_y as f32) * output_scale as f32).round() as i32,
+            ));
+            for el in surface_elements {
+                out.push(BacakElements::ScaledSurface(RescaleRenderElement::from_element(
+                    el,
+                    centre,
+                    open_scale as f64,
+                )));
+            }
+        } else {
+            for el in surface_elements {
+                out.push(BacakElements::Surface(el));
+            }
         }
 
         // Frosted backdrop behind this passive window. Pushed *after*
@@ -4763,16 +4830,61 @@ fn render_workspace_windows(
         // solid quad if the shader didn't compile.
         let cfg = &state.config;
         let intensity = (cfg.shadow_top - z_rank as f32 * cfg.shadow_step)
-            .max(cfg.shadow_floor);
+            .max(cfg.shadow_floor)
+            * open_alpha;
         match prog.clone() {
-            Some(p) => out.push(window_shadow_element(p, win.geom, intensity, output_scale, off_x, off_y)),
+            Some(p) => out.push(window_shadow_element(p, shown.geom, intensity, output_scale, off_x, off_y)),
             None => out.push(BacakElements::Solid(SolidColorRenderElement::new(
                 Id::new(),
-                shadow_rect_offset(win.geom, output_scale, off_x, off_y),
+                shadow_rect_offset(shown.geom, output_scale, off_x, off_y),
                 0usize,
                 fade_color(SHADOW_COLOR, intensity),
                 Kind::Unspecified,
             ))),
+        }
+    }
+}
+
+/// Draw the windows on `ws` that are fading out after their client closed them
+/// ([`crate::state::ClosingWindow`]): last snapshot, plain title bar if it had
+/// one, and shadow — all shrinking about the centre and fading together.
+#[allow(clippy::too_many_arguments)]
+fn push_closing_windows(
+    state: &BacakState,
+    renderer: &mut GlesRenderer,
+    prog: Option<GlesPixelProgram>,
+    output_scale: i32,
+    ws: WorkspaceId,
+    off_x: i32,
+    off_y: i32,
+    out: &mut Vec<BacakElements>,
+) {
+    for c in state.window_closes.iter().rev().filter(|c| c.workspace == ws) {
+        let Some((scale, alpha)) = crate::animation::close_transform(c.started.elapsed()) else {
+            continue;
+        };
+        let r = crate::animation::scale_rect(c.geom, scale);
+        if c.decorated {
+            let bar = crate::decoration::bar_rect(r);
+            deco_card(out, renderer, bar, Color32F::new(0.13, 0.15, 0.20, 0.96), 8.0, alpha, output_scale, off_x, off_y);
+        }
+        let tb = TextureBuffer::from_texture(renderer, c.snapshot.tex.clone(), 1, Transform::Normal, None);
+        let s = output_scale as f64;
+        let loc = Point::<f64, Physical>::from((
+            ((r.x - off_x as f32) as f64) * s,
+            ((r.y - off_y as f32) as f64) * s,
+        ));
+        let size = Size::<i32, Logical>::from(((r.w as i32).max(1), (r.h as i32).max(1)));
+        out.push(BacakElements::Texture(TextureRenderElement::from_texture_buffer(
+            loc,
+            &tb,
+            Some(alpha),
+            None,
+            Some(size),
+            Kind::Unspecified,
+        )));
+        if let Some(p) = prog.clone() {
+            out.push(window_shadow_element(p, r, state.config.shadow_top * alpha, output_scale, off_x, off_y));
         }
     }
 }
@@ -4792,7 +4904,7 @@ fn window_shadow_element(
     off_x: i32,
     off_y: i32,
 ) -> BacakElements {
-    switcher_card_element(
+    card_element_ex(
         program,
         win,
         Color32F::new(0.0, 0.0, 0.0, 0.0), // transparent fill → shadow only
@@ -4800,6 +4912,7 @@ fn window_shadow_element(
         false,     // no selection border
         None,      // no punch
         intensity, // element alpha == shadow opacity here
+        &ShadowSpec::window(),
         output_scale,
         off_x,
         off_y,
@@ -5145,31 +5258,97 @@ fn card_element(
     off_x: i32,
     off_y: i32,
 ) -> BacakElements {
+    card_element_ex(
+        program, tile, color, radius, selected, punch, fade, &ShadowSpec::card(shadow_col),
+        output_scale, off_x, off_y,
+    )
+}
+
+/// Drop shadow of a card element: a key shadow plus an optional wider
+/// ambient one, and the margin the element needs around the card to draw them.
+struct ShadowSpec {
+    soft: f32,
+    off: [f32; 2],
+    col: [f32; 4],
+    amb_soft: f32,
+    amb_off: [f32; 2],
+    amb_col: [f32; 4],
+    cut: bool,
+    margin: f32,
+}
+
+impl ShadowSpec {
+    /// The single shadow every overlay card uses.
+    fn card(col: [f32; 4]) -> Self {
+        ShadowSpec {
+            soft: CARD_SHADOW_SOFT,
+            off: CARD_SHADOW_OFF,
+            col,
+            amb_soft: 0.0,
+            amb_off: [0.0, 0.0],
+            amb_col: [0.0; 4],
+            cut: false,
+            margin: CARD_MARGIN,
+        }
+    }
+
+    /// A window's two-layer shadow: a tight key shadow under the edge and a
+    /// wide, soft ambient one that lifts the window off the desktop.
+    fn window() -> Self {
+        ShadowSpec {
+            soft: WINDOW_KEY_SHADOW_SOFT,
+            off: WINDOW_KEY_SHADOW_OFF,
+            col: WINDOW_KEY_SHADOW_COL,
+            amb_soft: WINDOW_AMB_SHADOW_SOFT,
+            amb_off: WINDOW_AMB_SHADOW_OFF,
+            amb_col: WINDOW_AMB_SHADOW_COL,
+            cut: true,
+            margin: WINDOW_AMB_SHADOW_SOFT + WINDOW_AMB_SHADOW_OFF[1] + 4.0,
+        }
+    }
+}
+
+/// [`card_element`] with an explicit [`ShadowSpec`].
+#[allow(clippy::too_many_arguments)]
+fn card_element_ex(
+    program: GlesPixelProgram,
+    tile: Rect,
+    color: Color32F,
+    radius: f32,
+    selected: bool,
+    punch: Option<(Rect, f32)>,
+    fade: f32,
+    shadow: &ShadowSpec,
+    output_scale: i32,
+    off_x: i32,
+    off_y: i32,
+) -> BacakElements {
+    let margin = shadow.margin;
     // Element area in output-local LOGICAL px; PixelShaderElement scales
     // it to physical via the output's scale, and the shader divides the
     // physical fragment position back down by `u_scale` (see CARD_SHADER).
     let area = Rectangle::<i32, smithay::utils::Logical>::new(
         Point::from((
-            (tile.x - off_x as f32 - CARD_MARGIN).round() as i32,
-            (tile.y - off_y as f32 - CARD_MARGIN).round() as i32,
+            (tile.x - off_x as f32 - margin).round() as i32,
+            (tile.y - off_y as f32 - margin).round() as i32,
         )),
         Size::from((
-            (tile.w + 2.0 * CARD_MARGIN).round() as i32,
-            (tile.h + 2.0 * CARD_MARGIN).round() as i32,
+            (tile.w + 2.0 * margin).round() as i32,
+            (tile.h + 2.0 * margin).round() as i32,
         )),
     );
     // Card rect inside the area: offset by the margin on each side.
-    let cmin = [CARD_MARGIN, CARD_MARGIN];
-    let cmax = [CARD_MARGIN + tile.w, CARD_MARGIN + tile.h];
+    let cmin = [margin, margin];
+    let cmax = [margin + tile.w, margin + tile.h];
     let border = if selected { CARD_BORDER } else { 0.0 };
 
     // Punch rect is given in WM-global coords; convert to the same
-    // element-local space as the card (area top-left = tile-CARD_MARGIN).
+    // element-local space as the card (area top-left = tile-margin).
     let (pmin, pmax, prad) = match punch {
         Some((r, pr)) => {
-            // off_x/off_y cancel: element origin is tile - CARD_MARGIN.
-            let lx = r.x - tile.x + CARD_MARGIN;
-            let ly = r.y - tile.y + CARD_MARGIN;
+            // off_x/off_y cancel: element origin is tile - margin.
+            let lx = r.x - tile.x + margin;
+            let ly = r.y - tile.y + margin;
             ([lx, ly], [lx + r.w, ly + r.h], pr)
         }
         None => ([0.0, 0.0], [0.0, 0.0], -1.0),
@@ -5185,10 +5364,14 @@ fn card_element(
             Uniform::new("card_min", cmin),
             Uniform::new("card_max", cmax),
             Uniform::new("radius", radius),
-            Uniform::new("shadow_soft", CARD_SHADOW_SOFT),
-            Uniform::new("shadow_off", CARD_SHADOW_OFF),
+            Uniform::new("shadow_soft", shadow.soft),
+            Uniform::new("shadow_off", shadow.off),
             Uniform::new("card_col", color.components()),
-            Uniform::new("shadow_col", shadow_col),
+            Uniform::new("shadow_col", shadow.col),
+            Uniform::new("amb_soft", shadow.amb_soft),
+            Uniform::new("amb_off", shadow.amb_off),
+            Uniform::new("amb_col", shadow.amb_col),
+            Uniform::new("shadow_cut", if shadow.cut { 1.0f32 } else { 0.0 }),
             Uniform::new("border", border),
             Uniform::new("border_col", SWITCHER_RING_COLOR.components()),
             Uniform::new("punch_min", pmin),
@@ -5441,10 +5624,13 @@ fn deco_label_element(
 /// fullscreen windows. `off_x/off_y` match the content's, so it slides with the
 /// workspace.
 #[allow(clippy::too_many_arguments)]
+/// `anim_alpha` fades the whole bar in/out with its window's animation.
+#[allow(clippy::too_many_arguments)]
 fn push_window_decoration(
     state: &BacakState,
     renderer: &mut GlesRenderer,
     win: &crate::wm::Window,
+    anim_alpha: f32,
     output_scale: i32,
     off_x: i32,
     off_y: i32,
@@ -5467,25 +5653,42 @@ fn push_window_decoration(
     // Front-first push: title text, close "×" glyph, close chip, then the bar
     // plaque behind them all.
     let fade = if win.focused { 1.0 } else { 0.85 };
-    if let Some(el) = deco_label_element(state, renderer, win.id, bar, fade, output_scale, off_x, off_y) {
+    if let Some(el) =
+        deco_label_element(state, renderer, win.id, bar, fade * anim_alpha, output_scale, off_x, off_y)
+    {
         out.push(el);
     }
-    if let Some((_, gw, gh)) = state.deco_close_glyph.as_ref() {
-        let gx = close.x + (close.w - *gw as f32) / 2.0;
-        let gy = close.y + (close.h - *gh as f32) / 2.0;
-        cc_blit_label(out, renderer, &state.deco_close_glyph, gx, gy, output_scale, off_x, off_y);
+    // The "×" glyph has no alpha; it pops in at the end of the animation.
+    if anim_alpha >= 0.999 {
+        if let Some((_, gw, gh)) = state.deco_close_glyph.as_ref() {
+            let gx = close.x + (close.w - *gw as f32) / 2.0;
+            let gy = close.y + (close.h - *gh as f32) / 2.0;
+            cc_blit_label(out, renderer, &state.deco_close_glyph, gx, gy, output_scale, off_x, off_y);
+        }
     }
-    cc_card(
-        out,
-        renderer,
-        close,
-        Color32F::new(0.84, 0.26, 0.26, 0.96),
-        close.h / 2.0,
-        output_scale,
-        off_x,
-        off_y,
-    );
-    cc_card(out, renderer, bar, bar_col, 8.0, output_scale, off_x, off_y);
+    deco_card(out, renderer, close, Color32F::new(0.84, 0.26, 0.26, 0.96), close.h / 2.0, anim_alpha, output_scale, off_x, off_y);
+    deco_card(out, renderer, bar, bar_col, 8.0, anim_alpha, output_scale, off_x, off_y);
+}
+
+/// A title-bar card ([`cc_card`]) at `alpha`.
+#[allow(clippy::too_many_arguments)]
+fn deco_card(
+    out: &mut Vec<BacakElements>,
+    renderer: &mut GlesRenderer,
+    rect: Rect,
+    color: Color32F,
+    radius: f32,
+    alpha: f32,
+    output_scale: i32,
+    off_x: i32,
+    off_y: i32,
+) {
+    match card_program(renderer) {
+        Some(p) => out.push(card_element(
+            p, rect, color, radius, false, None, alpha, CARD_SHADOW_COL, output_scale, off_x, off_y,
+        )),
+        None => out.push(solid_element(rect, fade_color(color, alpha), output_scale, off_x, off_y)),
+    }
 }
 
 /// Draw every mapped override-redirect X11 surface at its own absolute

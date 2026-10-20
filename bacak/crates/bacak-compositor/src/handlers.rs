@@ -163,6 +163,10 @@ impl CompositorHandler for BacakState {
                 }
             }
 
+            // First commit with content: play the open animation.
+            let bbox = bbox_from_surface_tree(surface, (0, 0));
+            self.reveal_window(id, bbox.size.w > 0 && bbox.size.h > 0);
+
             // Center a dialog over its parent once its real size is known.
             // One-shot: we only do this the first commit where the size is no
             // longer the placeholder, then drop the pending marker.
@@ -650,6 +654,7 @@ impl XdgShellHandler for BacakState {
             // can promote a sibling on the same workspace afterwards —
             // otherwise the user is left with no keyboard target.
             let ws = self.wm.get(id).ok().map(|w| w.workspace);
+            self.begin_window_close(id);
             let _ = self.wm.close(id);
             self.focus_history.forget(id);
             self.evict_label(id);

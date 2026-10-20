@@ -225,6 +225,49 @@ impl SlideAnim {
 }
 
 // ---------------------------------------------------------------------------
+// Window open / close
+// ---------------------------------------------------------------------------
+
+/// How long a new window takes to zoom/fade in.
+pub const WINDOW_OPEN: std::time::Duration = std::time::Duration::from_millis(220);
+/// How long a closed window takes to shrink/fade out.
+pub const WINDOW_CLOSE: std::time::Duration = std::time::Duration::from_millis(180);
+/// Scale a window opens from (and shrinks by when closing).
+const WINDOW_OPEN_SCALE: f32 = 0.9;
+const WINDOW_CLOSE_SCALE: f32 = 0.92;
+
+fn ease_out_cubic(t: f32) -> f32 {
+    let u = 1.0 - t.clamp(0.0, 1.0);
+    1.0 - u * u * u
+}
+
+/// `(scale, alpha)` of a window `elapsed` into its open animation, or `None`
+/// once it has finished (draw it normally).
+pub fn open_transform(elapsed: std::time::Duration) -> Option<(f32, f32)> {
+    if elapsed >= WINDOW_OPEN {
+        return None;
+    }
+    let p = ease_out_cubic(elapsed.as_secs_f32() / WINDOW_OPEN.as_secs_f32());
+    Some((WINDOW_OPEN_SCALE + (1.0 - WINDOW_OPEN_SCALE) * p, p))
+}
+
+/// `(scale, alpha)` of a closed window `elapsed` into its close animation, or
+/// `None` once it has finished (drop it).
+pub fn close_transform(elapsed: std::time::Duration) -> Option<(f32, f32)> {
+    if elapsed >= WINDOW_CLOSE {
+        return None;
+    }
+    let p = ease_out_cubic(elapsed.as_secs_f32() / WINDOW_CLOSE.as_secs_f32());
+    Some((1.0 - (1.0 - WINDOW_CLOSE_SCALE) * p, 1.0 - p))
+}
+
+/// `r` scaled by `s` about its centre.
+pub fn scale_rect(r: Rect, s: f32) -> Rect {
+    let (w, h) = (r.w * s, r.h * s);
+    Rect::new(r.x + (r.w - w) / 2.0, r.y + (r.h - h) / 2.0, w, h)
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -232,6 +275,31 @@ impl SlideAnim {
 mod tests {
     use super::*;
     use crate::wm::SnapZone;
+
+    #[test]
+    fn window_open_grows_and_fades_in() {
+        use std::time::Duration;
+        let (s0, a0) = open_transform(Duration::ZERO).unwrap();
+        assert_eq!((s0, a0), (WINDOW_OPEN_SCALE, 0.0));
+        let (s1, a1) = open_transform(WINDOW_OPEN / 2).unwrap();
+        assert!(s1 > s0 && s1 < 1.0 && a1 > 0.5 && a1 < 1.0, "{s1} {a1}");
+        assert!(open_transform(WINDOW_OPEN).is_none());
+    }
+
+    #[test]
+    fn window_close_shrinks_and_fades_out() {
+        use std::time::Duration;
+        assert_eq!(close_transform(Duration::ZERO), Some((1.0, 1.0)));
+        let (s, a) = close_transform(WINDOW_CLOSE / 2).unwrap();
+        assert!(s < 1.0 && s > WINDOW_CLOSE_SCALE && a < 0.5 && a > 0.0, "{s} {a}");
+        assert!(close_transform(WINDOW_CLOSE + Duration::from_millis(1)).is_none());
+    }
+
+    #[test]
+    fn scale_rect_keeps_centre() {
+        let r = scale_rect(Rect::new(100.0, 50.0, 200.0, 100.0), 0.5);
+        assert_eq!((r.x, r.y, r.w, r.h), (150.0, 75.0, 100.0, 50.0));
+    }
 
     fn run_to_settle(spring: &mut Spring) -> usize {
         let mut steps = 0;
