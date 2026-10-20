@@ -139,6 +139,17 @@ pub struct WindowSnapshot {
     pub captured: Instant,
 }
 
+/// A window whose client has gone away, still shrinking/fading out on screen
+/// from its last [`WindowSnapshot`].
+pub struct ClosingWindow {
+    pub snapshot: WindowSnapshot,
+    pub geom: Rect,
+    pub workspace: WorkspaceId,
+    /// Had a server-side title bar (drawn plain while fading).
+    pub decorated: bool,
+    pub started: Instant,
+}
+
 
 /// Live 3-finger touchpad workspace swipe (udev only). Created on
 /// `GestureSwipeBegin` with three fingers, fed by `GestureSwipeUpdate`
@@ -805,6 +816,13 @@ pub struct BacakState {
     /// animation settles, the entry is removed and (if `commit_zone` is set)
     /// the WM is informed via [`WindowManager::snap`].
     pub animations: std::collections::HashMap<WindowId, WindowAnim>,
+    /// Open ("zoom in") animation start per window, set by the first commit
+    /// that gives the window content. Pruned once it finishes.
+    pub window_opens: std::collections::HashMap<WindowId, Instant>,
+    /// Windows that already started their open animation (one-shot).
+    pub window_revealed: std::collections::HashSet<WindowId>,
+    /// Destroyed windows still fading out.
+    pub window_closes: Vec<ClosingWindow>,
 
     /// Per-output workspace-slide transitions. The WM's `active_workspace_on`
     /// has already been switched the instant the slide starts; this map
@@ -1524,6 +1542,9 @@ impl BacakState {
             two_finger_target: None,
             two_finger_win_start: Rect::new(0.0, 0.0, 0.0, 0.0),
             animations: std::collections::HashMap::new(),
+            window_opens: std::collections::HashMap::new(),
+            window_revealed: std::collections::HashSet::new(),
+            window_closes: Vec::new(),
             workspace_slides: std::collections::HashMap::new(),
             ws_swipe: None,
             ws_bounce: None,
@@ -8841,6 +8862,34 @@ impl BacakState {
         }
     }
 
+    /// Start the open animation the first time window `id` commits content
+    /// (`has_content`: its surface tree has a non-empty size).
+    pub fn reveal_window(&mut self, id: WindowId, has_content: bool) {
+        if has_content && self.window_revealed.insert(id) {
+            self.window_opens.insert(id, Instant::now());
+        }
+    }
+
+    /// Call just before window `id` leaves the WM: if it is on screen and we
+    /// have a snapshot of it, keep that fading out where the window was.
+    pub fn begin_window_close(&mut self, id: WindowId) {
+        self.window_opens.remove(&id);
+        self.window_revealed.remove(&id);
+        let Ok(win) = self.wm.get(id) else { return };
+        if matches!(win.state, WinState::Minimized) {
+            return;
+        }
+        let (geom, workspace) = (win.geom, win.workspace);
+        let Some(snapshot) = self.snapshots.lock().remove(&id) else { return };
+        self.window_closes.push(ClosingWindow {
+            snapshot,
+            geom,
+            workspace,
+            decorated: self.decorated.contains(&id),
+            started: Instant::now(),
+        });
+    }
+
     /// Advance every live window animation by the wall-clock delta since the
     /// previous call. Returns `true` while at least one animation is still
     /// in motion — backends use this to keep `needs_redraw` flagged.
@@ -8884,7 +8933,16 @@ impl BacakState {
         let ds_pending = self.ds_rx.is_some();
         // Wallpaper image decode pending / cache out of date.
         let wp_pending = self.wallpaper_pending();
+        // Open/close animations are time-based: drop the finished ones. Checked
+        // before pruning so the frame after the last one still redraws (the
+        // window settles at full size / the ghost disappears).
+        let window_fading = !self.window_opens.is_empty() || !self.window_closes.is_empty();
+        self.window_opens
+            .retain(|_, t| crate::animation::open_transform(t.elapsed()).is_some());
+        self.window_closes
+            .retain(|c| crate::animation::close_transform(c.started.elapsed()).is_some());
         if self.animations.is_empty()
+            && !window_fading
             && self.workspace_slides.is_empty()
             && self.switcher_fade.is_none()
             && !ov_animating
@@ -8903,7 +8961,7 @@ impl BacakState {
             return false;
         }
 
-        let mut still_running = false;
+        let mut still_running = window_fading;
 
         // --- Bluetooth coprocess events ---------------------------------
         if bt_open {
