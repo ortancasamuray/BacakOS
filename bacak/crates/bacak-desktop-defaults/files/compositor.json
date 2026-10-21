@@ -1,9 +1,9 @@
 {
   "blur": false,
   "blur_radius": 24.0,
-  "shadow_top": 1.0,
+  "shadow_top": 0.0,
   "shadow_step": 0.18,
-  "shadow_floor": 0.3,
+  "shadow_floor": 0.0,
   "dock_slot_w": 96.0,
   "dock_slot_h": 12.0,
   "dock": true,

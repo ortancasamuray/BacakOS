@@ -4832,6 +4832,10 @@ fn render_workspace_windows(
         let intensity = (cfg.shadow_top - z_rank as f32 * cfg.shadow_step)
             .max(cfg.shadow_floor)
             * open_alpha;
+        // Shadows are off by default (`shadow_top` 0): push nothing.
+        if intensity <= 0.0 {
+            continue;
+        }
         match prog.clone() {
             Some(p) => out.push(window_shadow_element(p, shown.geom, intensity, output_scale, off_x, off_y)),
             None => out.push(BacakElements::Solid(SolidColorRenderElement::new(
@@ -4883,7 +4887,7 @@ fn push_closing_windows(
             Some(size),
             Kind::Unspecified,
         )));
-        if let Some(p) = prog.clone() {
+        if let Some(p) = prog.clone().filter(|_| state.config.shadow_top > 0.0) {
             out.push(window_shadow_element(p, r, state.config.shadow_top * alpha, output_scale, off_x, off_y));
         }
     }
