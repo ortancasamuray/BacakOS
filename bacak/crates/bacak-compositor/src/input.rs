@@ -867,6 +867,12 @@ impl TouchArbiter {
         }
     }
 
+    /// Claim the current sequence for the compositor mid-way (a two-finger
+    /// hold on a window). The caller cancels the client's touch.
+    pub fn claim(&mut self) {
+        self.claimed = true;
+    }
+
     /// Whether the current sequence is a claimed gesture — motion/up of a free
     /// touch then bypass the client.
     pub fn is_gesture(&self) -> bool {

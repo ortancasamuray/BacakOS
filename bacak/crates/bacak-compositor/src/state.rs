@@ -8284,21 +8284,8 @@ impl BacakState {
     /// title bar sits *above* the window content, so it never overlaps the
     /// client's own input region.
     pub fn title_press(&mut self, px: f32, py: f32) -> bool {
-        use crate::decoration::{hit, DecoHit};
-        let mut wins = self.wm.list_visible();
-        wins.sort_by_key(|w| std::cmp::Reverse(w.z)); // topmost first
-        let mut found: Option<(WindowId, Rect, DecoHit)> = None;
-        for w in &wins {
-            if !self.decorated.contains(&w.id) {
-                continue;
-            }
-            let h = hit(w.geom, px, py);
-            if h != DecoHit::None {
-                found = Some((w.id, w.geom, h));
-                break;
-            }
-        }
-        let Some((id, geom, h)) = found else { return false };
+        use crate::decoration::DecoHit;
+        let Some((id, geom, h)) = self.decoration_at(px, py) else { return false };
         match h {
             DecoHit::Close => self.close_window(id),
             DecoHit::Drag => {
@@ -8328,6 +8315,22 @@ impl BacakState {
             DecoHit::None => {}
         }
         true
+    }
+
+    /// The topmost decorated window whose title bar (or close button) is at
+    /// `(px, py)`, with its content rect and which part was hit.
+    fn decoration_at(
+        &self,
+        px: f32,
+        py: f32,
+    ) -> Option<(WindowId, Rect, crate::decoration::DecoHit)> {
+        use crate::decoration::{hit, DecoHit};
+        let mut wins = self.wm.list_visible();
+        wins.sort_by_key(|w| std::cmp::Reverse(w.z)); // topmost first
+        wins.iter()
+            .filter(|w| self.decorated.contains(&w.id))
+            .map(|w| (w.id, w.geom, hit(w.geom, px, py)))
+            .find(|(_, _, h)| *h != DecoHit::None)
     }
 
     /// A touch press on a server-side title bar's close button. Unlike
@@ -8472,7 +8475,17 @@ impl BacakState {
         self.two_finger.down(slot, x, y, now_ms);
         if !was_active && self.two_finger.is_active() {
             if let Some((cx, cy)) = self.two_finger.live_centroid() {
-                self.two_finger_target = self.wm.hit_test(cx, cy);
+                // On a title bar there is nothing for the app to scroll: move
+                // without waiting for the hold. (The bar sits above the
+                // content, outside `hit_test`.)
+                let bar = self
+                    .decoration_at(cx, cy)
+                    .filter(|(_, _, h)| *h == crate::decoration::DecoHit::Drag)
+                    .map(|(id, _, _)| id);
+                if bar.is_some() {
+                    self.two_finger.hold_now();
+                }
+                self.two_finger_target = bar.or_else(|| self.wm.hit_test(cx, cy));
                 self.two_finger_win_start = self
                     .two_finger_target
                     .and_then(|id| self.wm.get(id).ok())
@@ -8484,6 +8497,21 @@ impl BacakState {
                 }
             }
         }
+    }
+
+    /// Per-frame poll of the two-finger hold. Returns `true` the moment two
+    /// fingers have rested on a window long enough: the caller then takes the
+    /// touch from the app (cancel + [`TouchArbiter::claim`]) so the drag moves
+    /// the window. Also restarts the window's geometry snapshot, which may
+    /// have changed while the fingers rested.
+    pub fn two_finger_tick(&mut self, now_ms: u64) -> bool {
+        if !self.two_finger.tick(now_ms) {
+            return false;
+        }
+        let Some(id) = self.two_finger_target else { return false };
+        let Ok(w) = self.wm.get(id) else { return false };
+        self.two_finger_win_start = w.geom;
+        true
     }
 
     /// Two-finger motion. Moves the target window to its drag-start geometry

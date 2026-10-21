@@ -163,9 +163,15 @@ fn dist(ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
 // Two-finger window gesture recogniser
 // ---------------------------------------------------------------------------
 
-/// Centroid travel (logical px) that promotes a two-finger touch from a tap to
-/// a window move.
+/// Centroid travel / finger-spread change (logical px) past which a two-finger
+/// touch is no longer stationary: before the hold it is the app's (scroll,
+/// pinch), and it can no longer be a tap.
 const TWO_FINGER_SLOP: f32 = 28.0;
+/// How long two fingers must rest before the compositor takes the touch and
+/// a drag moves the window. A scroll / pinch moves within the first ~100 ms,
+/// so this stays short. A held touch that lifts without moving still counts
+/// as a tap (double-tap keeps working).
+const TWO_FINGER_HOLD_MS: u64 = 250;
 /// Longest a two-finger touch can last and still count as a tap, not a drag.
 const TWO_FINGER_TAP_MS: u64 = 420;
 /// Longest gap between two two-finger taps to chain them into a double-tap.
@@ -181,8 +187,10 @@ pub enum TwoFingerOut {
     DoubleTap,
 }
 
-/// Recognises two-finger window gestures: drag the two-finger centroid to move
-/// a window, double-tap with two fingers to toggle fullscreen. Distinct from
+/// Recognises two-finger window gestures: press and hold two fingers, then
+/// drag the centroid to move a window; double-tap with two fingers to toggle
+/// fullscreen. Two fingers that move before the hold belong to the app
+/// (two-finger scroll, pinch-to-zoom), so the hold is what tells them apart. Distinct from
 /// the single-finger [`SelectionRecognizer`] and the 3-/4-finger
 /// [`crate::input::TouchAggregator`]. Pure + unit-tested; the integration layer
 /// ([`crate::state::BacakState`]) maps the output onto the target window.
@@ -194,8 +202,15 @@ pub struct TwoFingerRecognizer {
     start_centroid: Option<(f32, f32)>,
     /// When the two-finger phase began (for tap-duration timing).
     down_ms: u64,
-    /// Set once the centroid passes [`TWO_FINGER_SLOP`] — it's a move now.
+    /// Set once the fingers move past [`TWO_FINGER_SLOP`] — not a tap.
     moved: bool,
+    /// The hold completed: the compositor owns this touch, drags move the window.
+    held: bool,
+    /// The fingers landed on a title bar: nothing there for the app to
+    /// scroll, so the hold completes on the next tick without waiting.
+    instant: bool,
+    /// Distance between the two fingers when they landed (pinch detection).
+    start_spread: f32,
     /// A third finger landed: this is a workspace/overview gesture, not ours.
     cancelled: bool,
     /// Time of the last completed two-finger tap, for double-tap chaining.
@@ -214,6 +229,20 @@ impl TwoFingerRecognizer {
         let a = self.fingers[0];
         let b = self.fingers[1];
         Some(((a.1 + b.1) / 2.0, (a.2 + b.2) / 2.0))
+    }
+
+    fn spread(&self) -> f32 {
+        if self.fingers.len() != 2 {
+            return 0.0;
+        }
+        let (a, b) = (self.fingers[0], self.fingers[1]);
+        ((a.1 - b.1).powi(2) + (a.2 - b.2).powi(2)).sqrt()
+    }
+
+    /// Complete the hold on the next [`Self::tick`] without waiting (the
+    /// fingers are on a title bar).
+    pub fn hold_now(&mut self) {
+        self.instant = true;
     }
 
     /// The current two-finger centroid, if exactly two fingers are down. The
@@ -240,8 +269,11 @@ impl TwoFingerRecognizer {
         match self.fingers.len() {
             2 => {
                 self.start_centroid = self.centroid();
+                self.start_spread = self.spread();
                 self.down_ms = now_ms;
                 self.moved = false;
+                self.held = false;
+                self.instant = false;
                 self.cancelled = false;
             }
             n if n > 2 => self.cancelled = true,
@@ -249,8 +281,9 @@ impl TwoFingerRecognizer {
         }
     }
 
-    /// A finger moved. Returns [`TwoFingerOut::MoveTo`] once the centroid has
-    /// travelled past the slop, then on every subsequent move.
+    /// A finger moved. Before the hold this only notes that the fingers left
+    /// the slop (the touch stays the app's); after it, returns
+    /// [`TwoFingerOut::MoveTo`] on every move.
     pub fn motion(&mut self, slot: i32, x: f32, y: f32) -> Option<TwoFingerOut> {
         if let Some(f) = self.fingers.iter_mut().find(|f| f.0 == slot) {
             f.1 = x;
@@ -262,10 +295,32 @@ impl TwoFingerRecognizer {
         let (cx, cy) = self.centroid()?;
         let (sx, sy) = self.start_centroid?;
         let (dx, dy) = (cx - sx, cy - sy);
-        if !self.moved && (dx * dx + dy * dy).sqrt() > TWO_FINGER_SLOP {
+        let pinch = (self.spread() - self.start_spread).abs();
+        if (dx * dx + dy * dy).sqrt() > TWO_FINGER_SLOP || pinch > TWO_FINGER_SLOP {
             self.moved = true;
         }
-        self.moved.then_some(TwoFingerOut::MoveTo { dx, dy })
+        self.held.then_some(TwoFingerOut::MoveTo { dx, dy })
+    }
+
+    /// Per-frame poll. Returns `true` the moment two still fingers have been
+    /// down for [`TWO_FINGER_HOLD_MS`]: the caller takes the touch from the
+    /// app, and from then on [`Self::motion`] moves the window.
+    pub fn tick(&mut self, now_ms: u64) -> bool {
+        if !self.is_active() || self.held {
+            return false;
+        }
+        if !self.instant
+            && (self.moved || now_ms.saturating_sub(self.down_ms) < TWO_FINGER_HOLD_MS)
+        {
+            return false;
+        }
+        self.held = true;
+        // The drag restarts from here: only moves after the hold spoil a tap.
+        self.moved = false;
+        self.start_spread = self.spread();
+        // Measure the drag from where the fingers rest now (no jump).
+        self.start_centroid = self.centroid();
+        true
     }
 
     /// A finger lifted. Returns [`TwoFingerOut::DoubleTap`] when this completes a
@@ -293,6 +348,8 @@ impl TwoFingerRecognizer {
         if self.fingers.len() < 2 {
             self.start_centroid = None;
             self.moved = false;
+            self.held = false;
+            self.instant = false;
             self.cancelled = false;
         }
         out
@@ -303,6 +360,8 @@ impl TwoFingerRecognizer {
         self.fingers.clear();
         self.start_centroid = None;
         self.moved = false;
+        self.held = false;
+        self.instant = false;
         self.cancelled = false;
         self.last_tap_ms = None;
     }
@@ -404,17 +463,66 @@ mod tests {
     // --- two-finger recogniser ------------------------------------------
 
     #[test]
-    fn two_finger_drag_moves_by_centroid_delta() {
+    fn two_finger_hold_then_drag_moves_by_centroid_delta() {
         let mut r = TwoFingerRecognizer::new();
         r.down(0, 100.0, 100.0, 0);
         r.down(1, 200.0, 100.0, 5); // centroid (150,100)
-        // Small jitter under slop → no move yet.
+        // Small jitter under slop doesn't spoil the hold.
         assert_eq!(r.motion(0, 104.0, 100.0), None);
-        // Both fingers shift right by 60 → centroid +30 in x, past slop.
-        assert_eq!(r.motion(0, 160.0, 100.0), Some(TwoFingerOut::MoveTo { dx: 30.0, dy: 0.0 }));
-        let _ = r.motion(1, 260.0, 100.0); // centroid (210,100) → dx 60
+        assert!(!r.tick(5 + TWO_FINGER_HOLD_MS - 1), "not held yet");
+        assert!(r.tick(5 + TWO_FINGER_HOLD_MS), "hold completes");
+        assert!(!r.tick(5 + TWO_FINGER_HOLD_MS + 100), "fires once");
+        // Measured from the resting centroid (102,100): both fingers shift
+        // right by 60 → +60.
+        let _ = r.motion(0, 164.0, 100.0);
         assert_eq!(r.motion(1, 260.0, 100.0), Some(TwoFingerOut::MoveTo { dx: 60.0, dy: 0.0 }));
-        assert!(r.is_active());
+    }
+
+    #[test]
+    fn two_finger_on_title_bar_holds_without_waiting() {
+        let mut r = TwoFingerRecognizer::new();
+        r.down(0, 100.0, 10.0, 0);
+        r.down(1, 160.0, 10.0, 0);
+        r.hold_now();
+        assert!(r.tick(16), "held on the first tick");
+        assert_eq!(r.motion(0, 140.0, 10.0), Some(TwoFingerOut::MoveTo { dx: 20.0, dy: 0.0 }));
+    }
+
+    #[test]
+    fn held_but_stationary_two_finger_taps_still_double_tap() {
+        let mut r = TwoFingerRecognizer::new();
+        r.down(0, 100.0, 100.0, 0);
+        r.down(1, 200.0, 100.0, 0);
+        assert!(r.tick(TWO_FINGER_HOLD_MS));
+        assert_eq!(r.up(0, 300), None);
+        r.up(1, 305);
+        r.down(0, 100.0, 100.0, 400);
+        r.down(1, 200.0, 100.0, 400);
+        assert!(r.tick(400 + TWO_FINGER_HOLD_MS));
+        assert_eq!(r.up(0, 700), Some(TwoFingerOut::DoubleTap));
+    }
+
+    #[test]
+    fn two_finger_drag_without_hold_stays_with_the_app() {
+        let mut r = TwoFingerRecognizer::new();
+        r.down(0, 100.0, 100.0, 0);
+        r.down(1, 200.0, 100.0, 0);
+        // Scrolling: both fingers move before the hold → never a window move.
+        assert_eq!(r.motion(0, 100.0, 160.0), None);
+        assert_eq!(r.motion(1, 200.0, 160.0), None);
+        assert!(!r.tick(TWO_FINGER_HOLD_MS + 50));
+        assert_eq!(r.motion(0, 100.0, 300.0), None);
+    }
+
+    #[test]
+    fn two_finger_pinch_is_not_a_hold() {
+        let mut r = TwoFingerRecognizer::new();
+        r.down(0, 100.0, 100.0, 0);
+        r.down(1, 200.0, 100.0, 0);
+        // Fingers spread apart around a fixed centroid (pinch-to-zoom).
+        assert_eq!(r.motion(0, 70.0, 100.0), None);
+        assert_eq!(r.motion(1, 230.0, 100.0), None);
+        assert!(!r.tick(TWO_FINGER_HOLD_MS + 50));
     }
 
     #[test]

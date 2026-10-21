@@ -741,6 +741,28 @@ pub fn run() -> Result<()> {
         // forward a competing gesture, so their selection + context menu run
         // cleanly. Fighting them was the source of the "selection + right-click
         // both fire" mess.
+        // Two fingers held still on a window: the compositor takes the touch
+        // from the app, and the drag that follows moves the window.
+        if loop_data.state.two_finger_tick(now_ms) {
+            loop_data.state.loupe = None;
+            loop_data.touch.cancel(&mut loop_data.state);
+            loop_data.state.touch_arbiter.claim();
+            if loop_data.state.touch_pointer_slot.take().is_some() {
+                loop_data.pointer.button(
+                    &mut loop_data.state,
+                    &ButtonEvent {
+                        button: BTN_LEFT,
+                        state: ButtonState::Released,
+                        serial: SERIAL_COUNTER.next_serial(),
+                        time: 0,
+                    },
+                );
+                loop_data.pointer.frame(&mut loop_data.state);
+            }
+            for t in loop_data.targets.iter_mut() {
+                t.needs_redraw = true;
+            }
+        }
         if let Some(crate::gestures::SelectionGesture::LongPress { x, y }) =
             loop_data.state.selection_recognizer.tick(now_ms)
         {
@@ -3294,7 +3316,9 @@ fn forward_libinput_event(
             // both fingers' positions when the second lands (it acts only at
             // exactly two fingers; see `BacakState::two_finger_down`).
             if gestures {
-                data.state.two_finger_down(slot, tx, ty, event.time() / 1000);
+                // Start-time clock, like the per-frame hold poll (`two_finger_tick`).
+                let now_ms = data.state.start_time.elapsed().as_millis() as u64;
+                data.state.two_finger_down(slot, tx, ty, now_ms);
             }
             // Feed the single-finger selection recogniser (long-press → action
             // menu). A second finger means a gesture/pinch, not a selection, so
@@ -3425,11 +3449,15 @@ fn forward_libinput_event(
                 data.pointer.frame(&mut data.state);
                 return;
             }
-            // Gesture sequences (3+ fingers) bypass the client (see the down arbitration).
+            // Feed the two-finger recogniser every motion: before its hold it
+            // only notes that the fingers moved (a scroll / pinch must never
+            // turn into a window move); after it, it moves the window.
+            let window_moved = data.state.two_finger_motion(slot, tx, ty);
+            // Claimed sequences (3+ fingers, or a two-finger hold on a window)
+            // bypass the client (see the down arbitration / `two_finger_tick`).
             if data.state.touch_arbiter.is_gesture() {
                 // 3-/4-finger workspace/overview swipes are classified at touch-up.
-                // two_finger_motion feeds its recognizer for any secondary overlap.
-                if data.state.two_finger_motion(slot, tx, ty) {
+                if window_moved {
                     for t in data.targets.iter_mut() {
                         t.needs_redraw = true;
                     }
@@ -3512,7 +3540,8 @@ fn forward_libinput_event(
             }
             let gestures = data.state.config.touch_gestures_for(event.device().id_vendor());
             // Two-finger double-tap → toggle fullscreen / restore on the target.
-            if gestures && data.state.two_finger_up(slot, event.time() / 1000) {
+            let up_ms = data.state.start_time.elapsed().as_millis() as u64;
+            if gestures && data.state.two_finger_up(slot, up_ms) {
                 for t in data.targets.iter_mut() {
                     t.needs_redraw = true;
                 }
