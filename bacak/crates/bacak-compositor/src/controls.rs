@@ -22,6 +22,7 @@ use std::process::{Command, Stdio};
 const IP:             &str = "/usr/sbin/ip";
 const WPA_CLI:        &str = "/usr/sbin/wpa_cli";
 const WPA_SUPPLICANT: &str = "/usr/sbin/wpa_supplicant";
+const NMCLI:          &str = "/usr/bin/nmcli";
 
 // IMPORTANT: the compositor installs `SIGCHLD = SIG_IGN` (see `launcher.rs`),
 // so the kernel auto-reaps children and any `wait()` on them fails with
@@ -96,12 +97,80 @@ fn capture(cmd: &str, args: &[&str]) -> Option<String> {
     Some(s.trim().to_string())
 }
 
+/// Like [`capture`], but also returns the trimmed stderr (read on a helper
+/// thread so neither pipe can fill up and stall the child).
+fn capture_both(cmd: &str, args: &[&str]) -> Option<(String, String)> {
+    let mut child = Command::new(cmd)
+        .args(args)
+        .stdin(Stdio::null())
+        .stderr(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .ok()?;
+    let mut stderr = child.stderr.take()?;
+    let err = std::thread::spawn(move || {
+        let mut e = String::new();
+        let _ = stderr.read_to_string(&mut e);
+        e
+    });
+    let mut out = String::new();
+    child.stdout.take()?.read_to_string(&mut out).ok()?;
+    let e = err.join().unwrap_or_default();
+    Some((out.trim().to_string(), e.trim().to_string()))
+}
+
 // ----- Wi-Fi (wpa_supplicant / sysfs) ----------------------------------
 //
 // nmcli is not required. Status is read from sysfs; scanning and connecting
 // go through wpa_cli when the control socket exists at /run/wpa_supplicant/<dev>.
 
 const WPA_CTRL: &str = "/run/wpa_supplicant";
+
+/// NetworkManager manages `dev` (the BacakOS default). Then connect / radio go
+/// through nmcli: NM owns that wpa_supplicant, so a network added behind its
+/// back got no DHCP (and WPA3-only networks never associated).
+fn nm_manages(dev: &str) -> bool {
+    capture(NMCLI, &["-t", "-g", "GENERAL.NM-MANAGED", "device", "show", dev])
+        .is_some_and(|s| s == "yes")
+}
+
+/// NetworkManager reports `dev` fully connected (`GENERAL.STATE` 100).
+fn nm_connected(dev: &str) -> bool {
+    capture(NMCLI, &["-t", "-g", "GENERAL.STATE", "device", "show", dev])
+        .is_some_and(|s| s.starts_with("100"))
+}
+
+/// Connect through NetworkManager. nmcli's exit status is unreadable under
+/// `SIGCHLD = SIG_IGN`, so success is the device state once nmcli returns.
+fn nm_wifi_connect(dev: &str, ssid: &str, password: Option<&str>) -> (bool, String) {
+    let mut args = vec!["--wait", "30", "device", "wifi", "connect", ssid];
+    if let Some(pw) = password.filter(|p| !p.is_empty()) {
+        args.extend_from_slice(&["password", pw]);
+    }
+    args.extend_from_slice(&["ifname", dev]);
+    let Some((_, err)) = capture_both(NMCLI, &args) else {
+        return (false, "nmcli çalıştırılamadı".to_string());
+    };
+    if nm_connected(dev) && wifi_ssid().as_deref() == Some(ssid) {
+        return (true, format!("Bağlandı: {ssid}"));
+    }
+    tracing::warn!(ssid, stderr = %err, "nmcli wifi connect failed");
+    // "Secrets were required" / psk errors: the password was wrong.
+    if err.contains("ecrets") || err.contains("psk") {
+        return (false, "Parola yanlış".to_string());
+    }
+    let line = err.lines().next().unwrap_or("").trim();
+    let line = line
+        .strip_prefix("Error:")
+        .or_else(|| line.strip_prefix("Hata:"))
+        .unwrap_or(line)
+        .trim();
+    if line.is_empty() {
+        (false, "Bağlanılamadı".to_string())
+    } else {
+        (false, format!("Bağlanılamadı: {line}"))
+    }
+}
 
 /// Find the first wireless device from sysfs (has a `wireless/` subdirectory).
 fn wifi_device_sysfs() -> Option<String> {
@@ -131,6 +200,10 @@ pub fn wifi_enabled() -> bool {
 /// Bring the Wi-Fi radio up (ip link + wpa_supplicant) or down.
 pub fn set_wifi(on: bool) {
     let Some(dev) = wifi_device_sysfs() else { return };
+    if nm_manages(&dev) {
+        run_logged(NMCLI, &["radio", "wifi", if on { "on" } else { "off" }]);
+        return;
+    }
     if on {
         run_ok(IP, &["link", "set", &dev, "up"]);
         // Start wpa_supplicant daemon for this interface if not already running.
@@ -242,11 +315,15 @@ pub fn wifi_rescan_trigger() {
     }
 }
 
-/// Connect to a Wi-Fi network using wpa_cli. Blocking — run on a background thread.
+/// Connect to a Wi-Fi network (NetworkManager when it manages the device,
+/// else wpa_cli). Blocking — run on a background thread.
 pub fn wifi_connect(ssid: &str, password: Option<&str>) -> (bool, String) {
     let Some(dev) = wifi_device_sysfs() else {
         return (false, "Wi-Fi arayüzü bulunamadı".to_string());
     };
+    if nm_manages(&dev) {
+        return nm_wifi_connect(&dev, ssid, password);
+    }
     if !wpa_socket_exists(&dev) {
         return (false, "wpa_supplicant bağlantı soketi yok — Wi-Fi etkinleştirin".to_string());
     }
