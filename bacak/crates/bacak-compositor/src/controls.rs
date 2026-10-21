@@ -475,16 +475,38 @@ pub fn wifi_details() -> Option<WifiDetails> {
         }
     }
 
+    // NetworkManager: the real profile name + its settings, so the details
+    // screen's switches show (and change) what NM will actually do.
+    let (mut conn, mut autoconnect, mut dhcp, mut dns) = (ssid, true, true, String::new());
+    if nm_manages(&dev) {
+        if let Some(name) = capture(NMCLI, &["-t", "-g", "GENERAL.CONNECTION", "device", "show", &dev])
+            .filter(|n| !n.is_empty())
+        {
+            if let Some(out) = capture(
+                NMCLI,
+                &["-t", "-g", "connection.autoconnect,ipv4.method", "connection", "show", &name],
+            ) {
+                let mut l = out.lines();
+                autoconnect = l.next() != Some("no");
+                dhcp = l.next() != Some("manual");
+            }
+            conn = name;
+        }
+        dns = capture(NMCLI, &["-t", "-g", "IP4.DNS", "device", "show", &dev])
+            .and_then(|s| s.split('|').next().map(|d| d.trim().to_string()))
+            .unwrap_or_default();
+    }
+
     Some(WifiDetails {
         device: dev,
         mac,
-        conn: ssid,
-        autoconnect: true,
-        dhcp: true,
+        conn,
+        autoconnect,
+        dhcp,
         ipv4,
         ipv6,
         gateway,
-        dns: String::new(),
+        dns,
         connected,
         managed: true,
     })
@@ -573,11 +595,46 @@ pub fn net_details(eth: bool) -> Option<WifiDetails> {
     }
 }
 
-/// Toggle auto-reconnect for a saved wpa_supplicant network (no-op without nmcli).
-pub fn wifi_set_autoconnect(_conn: &str, _on: bool) {}
+/// The NetworkManager profile `conn` can be changed: NM manages the Wi-Fi
+/// device and the details screen named a profile (empty when it couldn't).
+fn nm_profile(conn: &str) -> bool {
+    !conn.is_empty() && wifi_device_sysfs().is_some_and(|d| nm_manages(&d))
+}
 
-/// Switch to DHCP: runs dhcpcd. Returns true if dhcpcd spawned.
-pub fn wifi_set_dhcp(_conn: &str) -> bool {
+/// Change NetworkManager profile `conn`, then re-activate it so the new IP
+/// settings apply now. Blocking (each step waits for nmcli to finish).
+fn nm_modify_and_up(conn: &str, settings: &[&str]) -> bool {
+    let mut args = vec!["connection", "modify", conn];
+    args.extend_from_slice(settings);
+    let Some((_, err)) = capture_both(NMCLI, &args) else { return false };
+    // Exit status is unreadable (SIGCHLD ignored); stderr may be a mere warning.
+    if !err.is_empty() {
+        tracing::warn!(conn, stderr = %err, "nmcli connection modify reported");
+    }
+    if let Some((_, err)) = capture_both(NMCLI, &["--wait", "30", "connection", "up", conn]) {
+        if !err.is_empty() {
+            tracing::warn!(conn, stderr = %err, "nmcli connection up reported");
+        }
+    }
+    true
+}
+
+/// Toggle auto-reconnect for a saved NetworkManager network (no-op without it).
+pub fn wifi_set_autoconnect(conn: &str, on: bool) {
+    if nm_profile(conn) {
+        let v = if on { "yes" } else { "no" };
+        run_logged(NMCLI, &["connection", "modify", conn, "connection.autoconnect", v]);
+    }
+}
+
+/// Switch to DHCP (NetworkManager, else dhcpcd). Returns true if applied/spawned.
+pub fn wifi_set_dhcp(conn: &str) -> bool {
+    if nm_profile(conn) {
+        return nm_modify_and_up(
+            conn,
+            &["ipv4.method", "auto", "ipv4.addresses", "", "ipv4.gateway", "", "ipv4.dns", ""],
+        );
+    }
     if let Some(dev) = wifi_device_sysfs() {
         run_ok("dhcpcd", &["-n", &dev])
     } else {
@@ -585,8 +642,31 @@ pub fn wifi_set_dhcp(_conn: &str) -> bool {
     }
 }
 
-/// Switch to static IP via `ip addr` + `ip route`. Returns true if commands spawned.
-pub fn wifi_set_static(_conn: &str, ip_prefix: &str, gateway: &str, _dns: &str) -> bool {
+/// A static address with its prefix; a bare address defaults to /24 (NM would
+/// otherwise take it as /32 — no route to anything).
+fn with_prefix(ip: &str) -> String {
+    if ip.contains('/') {
+        ip.to_string()
+    } else {
+        format!("{ip}/24")
+    }
+}
+
+/// Switch to a static IP (NetworkManager, else `ip addr` + `ip route`).
+/// Returns true if applied/spawned.
+pub fn wifi_set_static(conn: &str, ip_prefix: &str, gateway: &str, dns: &str) -> bool {
+    if nm_profile(conn) {
+        let addr = with_prefix(ip_prefix.trim());
+        return nm_modify_and_up(
+            conn,
+            &[
+                "ipv4.method", "manual",
+                "ipv4.addresses", &addr,
+                "ipv4.gateway", gateway.trim(),
+                "ipv4.dns", dns.trim(),
+            ],
+        );
+    }
     let Some(dev) = wifi_device_sysfs() else { return false };
     run_ok(IP, &["addr", "add", ip_prefix, "dev", &dev]);
     if !gateway.is_empty() {
@@ -850,3 +930,13 @@ pub fn datetime() -> String {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn static_address_defaults_to_a_slash_24() {
+        assert_eq!(with_prefix("192.168.1.50"), "192.168.1.50/24");
+        assert_eq!(with_prefix("10.0.0.5/8"), "10.0.0.5/8");
+    }
+}
