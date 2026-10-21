@@ -199,9 +199,9 @@ impl Default for CompositorConfig {
         Self {
             blur: false,
             blur_radius: 24.0,
-            shadow_top: 1.0,
+            shadow_top: 0.0,
             shadow_step: 0.18,
-            shadow_floor: 0.30,
+            shadow_floor: 0.0,
             dock_slot_w: 96.0,
             dock_slot_h: 12.0,
             dock: false,
@@ -567,9 +567,9 @@ mod tests {
         let d = CompositorConfig::default();
         assert!(!d.blur);
         assert_eq!(d.blur_radius, 24.0);
-        assert_eq!(d.shadow_top, 1.0);
+        assert_eq!(d.shadow_top, 0.0); // window shadows off
         assert_eq!(d.shadow_step, 0.18);
-        assert_eq!(d.shadow_floor, 0.30);
+        assert_eq!(d.shadow_floor, 0.0);
         assert_eq!((d.dock_slot_w, d.dock_slot_h), (96.0, 12.0));
     }
 
