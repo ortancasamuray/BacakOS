@@ -191,6 +191,7 @@ export global L {
     in property <string> compress-skip-builds: "Derleme çıktılarını ve önbellekleri hariç tut";
     in property <string> compress-exclude: "Ek olarak hariç tut";
     in property <string> compress-exclude-ph: "örn. *.img, .git";
+    in property <string> compress-name: "Arşiv adı";
     in property <string> rename-item: "Yeniden Adlandır…";
     in property <string> extract-here: "Buraya Çıkart";
     in property <string> move-to-trash: "Çöpe Taşı";
@@ -954,6 +955,8 @@ export component MainWindow inherits Window {
     callback confirm-cancelled();
     // Compress dialog: what to leave out of the archive.
     in-out property <bool> show-compress: false;
+    in-out property <string> compress-name;
+    in property <string> compress-error;
     in-out property <bool> compress-skip-builds: false;
     in-out property <string> compress-exclude;
     in property <string> compress-builds-hint;
@@ -1991,6 +1994,15 @@ export component MainWindow inherits Window {
             compress-col := VerticalLayout {
                 padding: 20px; spacing: 12px;
                 Text { text: L.ctx-compress; color: Theme.text; font-size: 18px; font-weight: 700; }
+                Text { text: L.compress-name; color: Theme.text-dim; }
+                LineEdit {
+                    text <=> root.compress-name;
+                    accepted(_t) => { root.do-compress(); if (!root.show-compress) { key-scope.focus(); } }
+                }
+                if root.compress-error != "" : Text {
+                    text: root.compress-error;
+                    color: #e53935; wrap: word-wrap;
+                }
                 CheckBox { text: L.compress-skip-builds; checked <=> root.compress-skip-builds; }
                 Text {
                     text: root.compress-builds-hint;
@@ -2000,12 +2012,12 @@ export component MainWindow inherits Window {
                 LineEdit {
                     text <=> root.compress-exclude;
                     placeholder-text: L.compress-exclude-ph;
-                    accepted(_t) => { root.do-compress(); }
+                    accepted(_t) => { root.do-compress(); if (!root.show-compress) { key-scope.focus(); } }
                 }
                 HorizontalLayout {
                     spacing: 10px; alignment: end;
                     Button { text: L.cancel; clicked => { root.show-compress = false; key-scope.focus(); } }
-                    Button { text: L.ctx-compress; primary: true; clicked => { root.do-compress(); key-scope.focus(); } }
+                    Button { text: L.ctx-compress; primary: true; clicked => { root.do-compress(); if (!root.show-compress) { key-scope.focus(); } } }
                 }
             }
         }
