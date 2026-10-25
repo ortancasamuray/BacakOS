@@ -66,6 +66,9 @@ struct AppState {
     index: Option<search::Index>,
     /// Path currently shown in the preview pane (target of chmod actions).
     preview_path: Option<PathBuf>,
+    /// (mtime, size) of the previewed entry when it was loaded, to notice a
+    /// change on disk and reload the pane.
+    preview_stamp: Option<(Option<SystemTime>, u64)>,
     /// A chmod that was refused for lack of ownership, awaiting elevation.
     pending_chmod: Option<(PathBuf, u32)>,
     /// File currently shown in the "Open With" dialog.
@@ -125,6 +128,7 @@ impl AppState {
             last_terminal: 0,
             index: None,
             preview_path: None,
+            preview_stamp: None,
             pending_chmod: None,
             open_with_path: None,
             archive_path: None,
@@ -1245,11 +1249,19 @@ fn update_preview(ui: &MainWindow, state: &Rc<RefCell<AppState>>, idx: usize) {
         Some(e) => e,
         None => return,
     };
+    fill_preview(ui, state, &entry);
+    // Surface the pane automatically on first preview.
+    ui.set_show_preview(true);
+}
+
+/// Load `entry` into the preview pane (without opening the pane).
+fn fill_preview(ui: &MainWindow, state: &Rc<RefCell<AppState>>, entry: &Entry) {
     ui.set_preview_title(SharedString::from(entry.name.clone()));
     // Remember the previewed path and refresh its permission display.
     {
         let mut s = state.borrow_mut();
         s.preview_path = Some(entry.path.clone());
+        s.preview_stamp = Some((entry.modified, entry.size));
         s.pending_chmod = None;
     }
     ui.set_preview_needs_elevation(false);
@@ -1263,7 +1275,7 @@ fn update_preview(ui: &MainWindow, state: &Rc<RefCell<AppState>>, idx: usize) {
     let meta_date = format_time(entry.modified);
     ui.set_preview_meta(SharedString::from(format!("{meta_size}\n{meta_date}")));
     refresh_preview_perms(ui, state, &entry.path);
-    let content = preview::load(&state.borrow().sandbox, &entry);
+    let content = preview::load(&state.borrow().sandbox, entry);
     match content {
         Ok(preview::Content::Image(path)) => {
             match slint::Image::load_from_path(&path) {
@@ -1290,8 +1302,46 @@ fn update_preview(ui: &MainWindow, state: &Rc<RefCell<AppState>>, idx: usize) {
             ui.set_preview_text(SharedString::from(format!("No preview: {e}")));
         }
     }
-    // Surface the pane automatically on first preview.
-    ui.set_show_preview(true);
+}
+
+/// After the listing was re-read: drop the preview of an item that no longer
+/// exists, and reload it if the item changed on disk (edited, resized, or —
+/// for a folder — entries added/removed). An item in another folder (the
+/// user navigated away) is left as it is.
+fn sync_preview(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
+    let (path, stamp) = {
+        let s = state.borrow();
+        let Some(path) = s.preview_path.clone() else { return };
+        (path, s.preview_stamp)
+    };
+    if std::fs::symlink_metadata(&path).is_err() {
+        clear_preview(ui, state);
+        return;
+    }
+    let changed = {
+        let s = state.borrow();
+        s.entries.iter().find(|e| e.path == path).filter(|e| Some((e.modified, e.size)) != stamp).cloned()
+    };
+    if let Some(entry) = changed {
+        fill_preview(ui, state, &entry);
+    }
+}
+
+fn clear_preview(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
+    {
+        let mut s = state.borrow_mut();
+        s.preview_path = None;
+        s.preview_stamp = None;
+        s.pending_chmod = None;
+    }
+    ui.set_show_preview(false);
+    ui.set_preview_title(SharedString::new());
+    ui.set_preview_meta(SharedString::new());
+    ui.set_preview_text(SharedString::new());
+    ui.set_preview_is_image(false);
+    ui.set_preview_can_chmod(false);
+    ui.set_preview_needs_elevation(false);
+    ui.set_preview_perms(SharedString::new());
 }
 
 /// Refresh the preview pane's permission line for `path`.
@@ -1554,6 +1604,7 @@ fn reload_keeping(ui: &MainWindow, state: &Rc<RefCell<AppState>>, keep: &HashSet
                     w.set_dir(&dir);
                 }
             }
+            sync_preview(ui, state);
             ui.set_current_path(SharedString::from(dir.to_string_lossy().to_string()));
             ui.set_active_root_path(SharedString::from(active_root(&state.borrow(), &dir)));
             set_breadcrumbs(ui, state, &dir);
