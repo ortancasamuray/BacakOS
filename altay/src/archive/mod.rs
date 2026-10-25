@@ -178,6 +178,10 @@ pub enum ArchiveError {
     /// archive being written) so the user can see which one failed.
     #[error("{}: {source}", path.display())]
     File { path: PathBuf, source: std::io::Error },
+    /// A member that would land outside the destination, either by its name
+    /// ("../x", "/etc/x") or by being written through a symbolic link.
+    #[error("unsafe archive member: {}", .0.display())]
+    Unsafe(PathBuf),
 }
 
 impl ArchiveError {
@@ -564,6 +568,117 @@ mod tests {
     }
 
     #[test]
+    fn zip_keeps_symlinks() {
+        let d = workdir("zip-links");
+        std::os::unix::fs::symlink("a.txt", d.join("src/link-to-file")).unwrap();
+        std::os::unix::fs::symlink("sub", d.join("src/link-to-dir")).unwrap();
+        std::os::unix::fs::symlink("nowhere", d.join("src/dangling")).unwrap();
+        roundtrip_dir(&d, "bundle.zip");
+        let out = d.join("out/src");
+        assert_eq!(fs::read_link(out.join("link-to-file")).unwrap(), Path::new("a.txt"));
+        assert_eq!(fs::read_link(out.join("link-to-dir")).unwrap(), Path::new("sub"));
+        assert_eq!(fs::read_link(out.join("dangling")).unwrap(), Path::new("nowhere"));
+        assert_eq!(fs::read(out.join("link-to-file")).unwrap(), b"hello altay");
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn tar_keeps_symlinks_and_hard_links() {
+        let d = workdir("tar-links");
+        let archive = d.join("links.tar");
+        {
+            let mut b = tar::Builder::new(fs::File::create(&archive).unwrap());
+            b.append_path_with_name(d.join("src/a.txt"), "a.txt").unwrap();
+            let mut h = tar::Header::new_gnu();
+            h.set_entry_type(tar::EntryType::Symlink);
+            h.set_size(0);
+            b.append_link(&mut h, "soft", "a.txt").unwrap();
+            let mut h = tar::Header::new_gnu();
+            h.set_entry_type(tar::EntryType::Link);
+            h.set_size(0);
+            b.append_link(&mut h, "hard", "a.txt").unwrap();
+            b.finish().unwrap();
+        }
+        let out = d.join("out");
+        let mut noop = |_: Progress| {};
+        backend_for(Format::Tar).unwrap().extract(&archive, &out, &Options::default(), &mut noop).unwrap();
+        assert_eq!(fs::read_link(out.join("soft")).unwrap(), Path::new("a.txt"));
+        assert_eq!(fs::read(out.join("hard")).unwrap(), b"hello altay");
+        assert!(!fs::symlink_metadata(out.join("hard")).unwrap().file_type().is_symlink());
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// A zip with `entries` written in order: (name, Some(link target)) for a
+    /// symlink, (name, None) for a file containing "pwned".
+    fn crafted_zip(path: &Path, entries: &[(&str, Option<&str>)]) {
+        let mut z = zip::ZipWriter::new(fs::File::create(path).unwrap());
+        let opts = zip::write::SimpleFileOptions::default();
+        for (name, link) in entries {
+            match link {
+                Some(t) => z.add_symlink(*name, *t, opts).unwrap(),
+                None => {
+                    z.start_file(*name, opts).unwrap();
+                    std::io::Write::write_all(&mut z, b"pwned").unwrap();
+                }
+            }
+        }
+        z.finish().unwrap();
+    }
+
+    fn crafted_tar(path: &Path, entries: &[(&str, Option<&str>)]) {
+        let mut b = tar::Builder::new(fs::File::create(path).unwrap());
+        for (name, link) in entries {
+            let mut h = tar::Header::new_gnu();
+            match link {
+                Some(t) => {
+                    h.set_entry_type(tar::EntryType::Symlink);
+                    h.set_size(0);
+                    b.append_link(&mut h, name, t).unwrap();
+                }
+                None => {
+                    h.set_size(5);
+                    h.set_mode(0o644);
+                    b.append_data(&mut h, name, &b"pwned"[..]).unwrap();
+                }
+            }
+        }
+        b.finish().unwrap();
+    }
+
+    /// Writing through, or on top of, a symlink from the same archive must be
+    /// refused, leaving everything outside the destination untouched.
+    #[test]
+    fn extraction_never_writes_through_symlinks() {
+        for fmt in ["zip", "tar"] {
+            let d = workdir(&format!("evil-{fmt}"));
+            let outside = d.join("outside");
+            fs::create_dir_all(&outside).unwrap();
+            let victim = d.join("victim.txt");
+            fs::write(&victim, b"original").unwrap();
+            let cases: [(&str, Vec<(&str, Option<&str>)>); 2] = [
+                ("dir", vec![("d", Some(outside.to_str().unwrap())), ("d/evil", None)]),
+                // The zip writer refuses duplicate names, but "./x" is the
+                // same member once normalised — the same trick a crafted
+                // archive would use.
+                ("file", vec![("x", Some(victim.to_str().unwrap())), (if fmt == "zip" { "./x" } else { "x" }, None)]),
+            ];
+            for (case, entries) in cases {
+                let archive = d.join(format!("{case}.{fmt}"));
+                if fmt == "zip" { crafted_zip(&archive, &entries) } else { crafted_tar(&archive, &entries) }
+                let out = d.join(format!("out-{case}"));
+                fs::create_dir_all(&out).unwrap();
+                let mut noop = |_: Progress| {};
+                let format = if fmt == "zip" { Format::Zip } else { Format::Tar };
+                let err = backend_for(format).unwrap().extract(&archive, &out, &Options::default(), &mut noop).unwrap_err();
+                assert!(matches!(err, ArchiveError::Unsafe(_)), "{fmt}/{case}: {err}");
+            }
+            assert!(fs::read_dir(&outside).unwrap().next().is_none(), "{fmt}: wrote into the outside dir");
+            assert_eq!(fs::read(&victim).unwrap(), b"original", "{fmt}: overwrote the victim");
+            let _ = fs::remove_dir_all(&d);
+        }
+    }
+
+    #[test]
     fn zip_skips_fifos() {
         let d = workdir("zip-fifo");
         let fifo = d.join("src/pipe");
@@ -702,13 +817,99 @@ pub(crate) fn safe_join(dest: &Path, member: &Path) -> Result<PathBuf, ArchiveEr
         match comp {
             Normal(c) => out.push(c),
             CurDir => {}
-            RootDir | Prefix(_) | ParentDir => {
-                return Err(ArchiveError::Backend(format!(
-                    "unsafe archive member path: {}",
-                    member.display()
-                )))
-            }
+            RootDir | Prefix(_) | ParentDir => return Err(ArchiveError::Unsafe(member.to_path_buf())),
         }
     }
     Ok(out)
+}
+
+// ---- Writing extracted members ----------------------------------------------
+//
+// Symbolic links are recreated as they are stored, but nothing is ever written
+// through one or on top of one: an archive could otherwise first create
+// `d -> /etc` and then a member `d/passwd` (or a link `x -> ~/.bashrc` followed
+// by a file `x`) and write outside the destination. Same policy as bsdtar's
+// default. Name checks alone (`safe_join`) cannot catch this, since a chain of
+// links resolves differently from the path text.
+
+/// Refuse `out_path` if any existing directory between `dest` and it is a
+/// symbolic link.
+fn check_ancestors(dest: &Path, out_path: &Path) -> Result<(), ArchiveError> {
+    let rel = out_path.strip_prefix(dest).map_err(|_| ArchiveError::Unsafe(out_path.to_path_buf()))?;
+    let mut cur = dest.to_path_buf();
+    let mut comps = rel.components().peekable();
+    while let Some(c) = comps.next() {
+        if comps.peek().is_none() {
+            break; // the member itself, checked by the caller
+        }
+        cur.push(c);
+        match std::fs::symlink_metadata(&cur) {
+            Ok(m) if m.file_type().is_symlink() => return Err(ArchiveError::Unsafe(out_path.to_path_buf())),
+            Ok(_) => {}
+            Err(_) => break, // not created yet: create_dir_all makes a real dir
+        }
+    }
+    Ok(())
+}
+
+/// Create the parent directories of a member that is about to be written.
+fn prepare_parent(dest: &Path, out_path: &Path) -> Result<(), ArchiveError> {
+    check_ancestors(dest, out_path)?;
+    if let Some(parent) = out_path.parent() {
+        std::fs::create_dir_all(parent).map_err(ArchiveError::at(parent))?;
+    }
+    Ok(())
+}
+
+/// Create (or truncate, for a duplicate member) a regular file. Fails rather
+/// than following a symbolic link already at `out_path`.
+pub(crate) fn create_member_file(dest: &Path, out_path: &Path) -> Result<std::fs::File, ArchiveError> {
+    use std::os::unix::fs::OpenOptionsExt;
+    prepare_parent(dest, out_path)?;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(out_path)
+        .map_err(|e| {
+            if e.raw_os_error() == Some(libc::ELOOP) {
+                ArchiveError::Unsafe(out_path.to_path_buf())
+            } else {
+                ArchiveError::File { path: out_path.to_path_buf(), source: e }
+            }
+        })
+}
+
+pub(crate) fn create_member_dir(dest: &Path, out_path: &Path) -> Result<(), ArchiveError> {
+    check_ancestors(dest, out_path)?;
+    if std::fs::symlink_metadata(out_path).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err(ArchiveError::Unsafe(out_path.to_path_buf()));
+    }
+    std::fs::create_dir_all(out_path).map_err(ArchiveError::at(out_path))
+}
+
+/// Copy a member's content, attributing a failure to the side it came from:
+/// reading the archive (corrupt data) or writing the output (disk full, …).
+pub(crate) fn copy_member(src: &mut impl std::io::Read, dst: &mut std::fs::File, archive: &Path, out: &Path) -> Result<u64, ArchiveError> {
+    let mut buf = [0u8; 64 * 1024];
+    let mut total = 0u64;
+    loop {
+        let n = src.read(&mut buf).map_err(ArchiveError::at(archive))?;
+        if n == 0 {
+            return Ok(total);
+        }
+        std::io::Write::write_all(dst, &buf[..n]).map_err(ArchiveError::at(out))?;
+        total += n as u64;
+    }
+}
+
+/// Recreate a symbolic link member pointing at `target` (stored verbatim).
+pub(crate) fn create_member_symlink(dest: &Path, out_path: &Path, target: &Path) -> Result<(), ArchiveError> {
+    prepare_parent(dest, out_path)?;
+    if std::fs::symlink_metadata(out_path).is_ok() {
+        // Duplicate member: never replace what is already there with a link.
+        return Err(ArchiveError::Unsafe(out_path.to_path_buf()));
+    }
+    std::os::unix::fs::symlink(target, out_path).map_err(ArchiveError::at(out_path))
 }

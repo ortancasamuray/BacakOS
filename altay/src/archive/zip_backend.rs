@@ -5,11 +5,12 @@
 //! (incl. password-protected entries) and creation (optionally AES-encrypted).
 
 use std::io::{Read, Write};
+use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 
 use crate::filesystem::Progress;
 
-use super::{safe_join, ArchiveError, Backend, Member, Options};
+use super::{copy_member, create_member_dir, create_member_file, create_member_symlink, safe_join, ArchiveError, Backend, Member, Options};
 
 pub struct ZipBackend;
 
@@ -50,30 +51,31 @@ impl Backend for ZipBackend {
         opts: &Options,
         on_progress: &mut dyn FnMut(Progress),
     ) -> Result<(), ArchiveError> {
-        let file = std::fs::File::open(archive)?;
-        let mut zip = zip::ZipArchive::new(file).map_err(zip_err)?;
+        let file = std::fs::File::open(archive).map_err(ArchiveError::at(archive))?;
+        let mut zip = zip::ZipArchive::new(file).map_err(|e| zip_err_at(e, archive))?;
         let total = zip.len() as u64;
         let mut state = Progress { bytes_done: 0, bytes_total: 0, files_done: 0, files_total: total };
 
         for i in 0..zip.len() {
             // Determine the (safe) output path without holding a decrypted borrow.
-            let (out_path, is_dir) = {
-                let raw = zip.by_index_raw(i).map_err(zip_err)?;
-                let name = raw
-                    .enclosed_name()
-                    .ok_or_else(|| ArchiveError::Backend(format!("unsafe entry: {}", raw.name())))?;
-                (safe_join(into, &name)?, raw.is_dir())
+            let (out_path, is_dir, is_symlink) = {
+                let raw = zip.by_index_raw(i).map_err(|e| zip_err_at(e, archive))?;
+                let name = raw.enclosed_name().ok_or_else(|| ArchiveError::Unsafe(PathBuf::from(raw.name())))?;
+                (safe_join(into, &name)?, raw.is_dir(), raw.is_symlink())
             };
 
             if is_dir {
-                std::fs::create_dir_all(&out_path)?;
+                create_member_dir(into, &out_path)?;
+            } else if is_symlink {
+                // The link target is stored as the entry's content.
+                let mut target = Vec::new();
+                open_entry(&mut zip, i, opts)?.read_to_end(&mut target).map_err(ArchiveError::at(archive))?;
+                let target = PathBuf::from(std::ffi::OsString::from_vec(target));
+                create_member_symlink(into, &out_path, &target)?;
             } else {
-                if let Some(parent) = out_path.parent() {
-                    std::fs::create_dir_all(parent)?;
-                }
                 let mut entry = open_entry(&mut zip, i, opts)?;
-                let mut out = std::fs::File::create(&out_path)?;
-                let written = std::io::copy(&mut entry, &mut out)?;
+                let mut out = create_member_file(into, &out_path)?;
+                let written = copy_member(&mut entry, &mut out, archive, &out_path)?;
                 state.bytes_done = state.bytes_done.saturating_add(written);
             }
             state.files_done += 1;
@@ -164,7 +166,15 @@ fn add_to_zip(
             }
             add_to_zip(zip, archive, &entry.path(), base, options, exclude, state, on_progress, cancel)?;
         }
-    } else if !meta.is_file() && !meta.file_type().is_symlink() {
+    } else if meta.file_type().is_symlink() {
+        // Store the link itself, not what it points to: following it would
+        // pull in files outside the selection, fail on links to folders and
+        // loop on cyclic links. Extraction recreates it as a link.
+        let target = std::fs::read_link(path).map_err(ArchiveError::at(path))?;
+        zip.add_symlink(name, target.to_string_lossy(), options).map_err(|e| zip_err_at(e, archive))?;
+        state.files_done += 1;
+        on_progress(*state);
+    } else if !meta.is_file() {
         // FIFOs, sockets and device nodes have no content to archive, and
         // opening a FIFO would block until a writer appears.
         log::info!("compress: skipping special file {}", path.display());
@@ -174,8 +184,7 @@ fn add_to_zip(
         // Without ZIP64 the zip writer refuses entries past 4 GiB ("Large
         // file option has not been set"). Margin for deflate overhead on
         // incompressible data, which can grow slightly past the input size.
-        let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(meta.len());
-        let options = options.large_file(size >= LARGE_FILE_THRESHOLD);
+        let options = options.large_file(meta.len() >= LARGE_FILE_THRESHOLD);
         zip.start_file(name, options).map_err(|e| zip_err_at(e, archive))?;
         let mut f = std::fs::File::open(path).map_err(ArchiveError::at(path))?;
         let mut buf = [0u8; 64 * 1024];

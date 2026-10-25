@@ -9,7 +9,7 @@ use std::process::{Command, Stdio};
 
 use crate::filesystem::Progress;
 
-use super::{safe_join, ArchiveError, Backend, Codec, Member, Options};
+use super::{copy_member, create_member_dir, create_member_file, create_member_symlink, safe_join, ArchiveError, Backend, Codec, Member, Options};
 
 pub struct TarBackend {
     pub codec: Option<Codec>,
@@ -64,19 +64,30 @@ impl Backend for TarBackend {
         let reader = decompressing_reader(archive, self.codec)?;
         let mut tar = tar::Archive::new(reader);
         let mut state = Progress { bytes_done: 0, bytes_total: 0, files_done: 0, files_total: 0 };
-        for entry in tar.entries().map_err(io_err)? {
-            let mut entry = entry.map_err(io_err)?;
-            let member = entry.path().map_err(io_err)?.into_owned();
+        for entry in tar.entries().map_err(ArchiveError::at(archive))? {
+            let mut entry = entry.map_err(ArchiveError::at(archive))?;
+            let member = entry.path().map_err(ArchiveError::at(archive))?.into_owned();
             let out_path = safe_join(into, &member)?;
-            if entry.header().entry_type().is_dir() {
-                std::fs::create_dir_all(&out_path)?;
-            } else {
-                if let Some(parent) = out_path.parent() {
-                    std::fs::create_dir_all(parent)?;
-                }
-                let mut out = std::fs::File::create(&out_path)?;
-                let n = io::copy(&mut entry, &mut out)?;
+            let kind = entry.header().entry_type();
+            if kind.is_dir() {
+                create_member_dir(into, &out_path)?;
+            } else if kind.is_symlink() {
+                let target = entry.link_name().map_err(ArchiveError::at(archive))?.unwrap_or_default().into_owned();
+                create_member_symlink(into, &out_path, &target)?;
+            } else if kind.is_hard_link() {
+                // Hard links name another member of the same archive.
+                let target = entry.link_name().map_err(ArchiveError::at(archive))?.unwrap_or_default();
+                let source = safe_join(into, &target)?;
+                let mut src = std::fs::File::open(&source).map_err(ArchiveError::at(&source))?;
+                let mut out = create_member_file(into, &out_path)?;
+                io::copy(&mut src, &mut out).map_err(ArchiveError::at(&out_path))?;
+            } else if kind.is_file() || kind == tar::EntryType::Continuous {
+                let mut out = create_member_file(into, &out_path)?;
+                let n = copy_member(&mut entry, &mut out, archive, &out_path)?;
                 state.bytes_done = state.bytes_done.saturating_add(n);
+            } else {
+                // Device nodes and FIFOs: nothing a user can open.
+                log::info!("extract: skipping special member {}", member.display());
             }
             state.files_done += 1;
             on_progress(state);
