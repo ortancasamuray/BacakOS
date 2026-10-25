@@ -1828,7 +1828,6 @@ fn compress_selected(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
             );
             let cancelled =
                 cancel_thread.load(std::sync::atomic::Ordering::SeqCst) || matches!(result, Err(archive::ArchiveError::Cancelled));
-            let result = result.map_err(|e| e.to_string());
             let target_name =
                 target.file_name().unwrap_or_default().to_string_lossy().into_owned();
             let target_for_cleanup = target.clone();
@@ -1870,16 +1869,53 @@ fn compress_selected(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
                             }
                         });
                     }
-                    Err(e) => ui.set_status_text(sx(
-                        &ui,
-                        format!("Compress failed: {e}"),
-                        format!("Sıkıştırma başarısız: {e}"),
-                        format!("Error al comprimir: {e}"),
-                    )),
+                    Err(e) => {
+                        log::warn!("compress into {} failed: {e}", target_for_cleanup.display());
+                        // Don't leave a truncated, unreadable archive behind.
+                        let _ = std::fs::remove_file(&target_for_cleanup);
+                        let why = describe_archive_error(&ui, &e);
+                        ui.set_status_text(sx(
+                            &ui,
+                            format!("Compress failed: {why}"),
+                            format!("Sıkıştırma başarısız: {why}"),
+                            format!("Error al comprimir: {why}"),
+                        ));
+                        APP.with(|a| {
+                            if let Some(state) = a.borrow().as_ref() {
+                                reload(&ui, state);
+                            }
+                        });
+                    }
                 }
             });
         })
         .ok();
+}
+
+/// A user-facing reason for an archive failure: common I/O causes (disk full,
+/// read-only medium, …) in plain words plus the file involved, instead of the
+/// raw OS message.
+fn describe_archive_error(ui: &MainWindow, e: &archive::ArchiveError) -> SharedString {
+    let Some((io, path)) = e.io() else {
+        return SharedString::from(e.to_string());
+    };
+    let reason = match io.raw_os_error() {
+        Some(libc::ENOSPC) => Some(sx(ui, "no space left on the disk", "diskte yer kalmadı", "no queda espacio en el disco")),
+        Some(libc::EDQUOT) => Some(sx(ui, "disk quota exceeded", "disk kotası doldu", "cuota de disco excedida")),
+        Some(libc::EROFS) => Some(sx(ui, "the disk is read-only", "disk salt okunur", "el disco es de solo lectura")),
+        // e.g. a file over 4 GiB on a FAT32 USB stick.
+        Some(libc::EFBIG) => Some(sx(ui, "file too large for this disk", "dosya bu disk için çok büyük", "archivo demasiado grande para este disco")),
+        _ => match io.kind() {
+            std::io::ErrorKind::PermissionDenied => Some(sx(ui, "permission denied", "izin yok", "permiso denegado")),
+            std::io::ErrorKind::NotFound => Some(sx(ui, "file not found", "dosya bulunamadı", "archivo no encontrado")),
+            _ => None,
+        },
+    };
+    let reason = reason.unwrap_or_else(|| SharedString::from(io.to_string()));
+    match path {
+        Some(p) => SharedString::from(format!("{reason} ({})", p.display())),
+        None => reason,
+    }
 }
 
 fn extract_selected(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {

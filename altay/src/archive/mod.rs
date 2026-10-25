@@ -171,6 +171,26 @@ pub enum ArchiveError {
     Cancelled,
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+    /// An I/O error tied to a specific file (a source being read, or the
+    /// archive being written) so the user can see which one failed.
+    #[error("{}: {source}", path.display())]
+    File { path: PathBuf, source: std::io::Error },
+}
+
+impl ArchiveError {
+    /// `map_err` adapter that attaches `path` to an I/O error.
+    pub fn at(path: &Path) -> impl FnOnce(std::io::Error) -> ArchiveError + '_ {
+        move |source| ArchiveError::File { path: path.to_path_buf(), source }
+    }
+
+    /// The underlying I/O error and the file it concerns, if any.
+    pub fn io(&self) -> Option<(&std::io::Error, Option<&Path>)> {
+        match self {
+            ArchiveError::Io(e) => Some((e, None)),
+            ArchiveError::File { path, source } => Some((source, Some(path))),
+            _ => None,
+        }
+    }
 }
 
 /// Options shared across create/extract operations.
@@ -455,6 +475,12 @@ mod tests {
 
     fn roundtrip(archive_name: &str) {
         let d = workdir(archive_name);
+        roundtrip_dir(&d, archive_name);
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// Archive `d/src`, list it and extract it again, checking `a.txt`.
+    fn roundtrip_dir(d: &Path, archive_name: &str) {
         let archive = d.join(archive_name);
         let format = Format::from_path(&archive).unwrap();
         let backend = backend_for(format).unwrap();
@@ -477,12 +503,60 @@ mod tests {
             .or_else(|_| fs::read(out.join("a.txt")))
             .expect("extracted a.txt");
         assert_eq!(extracted, b"hello altay");
-        let _ = fs::remove_dir_all(&d);
     }
 
     #[test]
     fn zip_roundtrip() {
         roundtrip("bundle.zip");
+    }
+
+    #[test]
+    fn zip_error_names_the_unreadable_file() {
+        let d = workdir("zip-unreadable");
+        let missing = d.join("src/gone.txt");
+        let archive = d.join("bundle.zip");
+        let mut noop = |_: Progress| {};
+        let err = backend_for(Format::Zip)
+            .unwrap()
+            .create(&archive, &[missing.clone()], &Options::default(), &mut noop)
+            .unwrap_err();
+        let (io, path) = err.io().expect("an I/O error");
+        assert_eq!(io.kind(), std::io::ErrorKind::NotFound);
+        assert_eq!(path, Some(missing.as_path()));
+        assert!(err.to_string().contains("gone.txt"), "{err}");
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn zip_skips_fifos() {
+        let d = workdir("zip-fifo");
+        let fifo = d.join("src/pipe");
+        let c = std::ffi::CString::new(fifo.to_string_lossy().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        // Opening the FIFO would block forever; creation must skip it.
+        roundtrip_dir(&d, "bundle.zip");
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// Over 4 GiB needs ZIP64. Sparse input, so it costs CPU (~4 GiB of
+    /// deflate) but no disk; run with `cargo test --release -- --ignored`.
+    #[test]
+    #[ignore]
+    fn zip_file_over_4gib() {
+        let d = workdir("zip-large");
+        let big = d.join("src/big.img");
+        let f = fs::File::create(&big).unwrap();
+        let size = u32::MAX as u64 + 4096;
+        f.set_len(size).unwrap();
+        drop(f);
+        let archive = d.join("bundle.zip");
+        let mut noop = |_: Progress| {};
+        let backend = backend_for(Format::Zip).unwrap();
+        backend.create(&archive, &[d.join("src")], &Options::default(), &mut noop).unwrap();
+        let members = backend.list(&archive, &Options::default()).unwrap();
+        let m = members.iter().find(|m| m.path.ends_with("big.img")).expect("big.img listed");
+        assert_eq!(m.size, size);
+        let _ = fs::remove_dir_all(&d);
     }
 
     #[test]
