@@ -93,6 +93,9 @@ struct AppState {
     /// Bumped with each new undoable action so an older expiry timer leaves
     /// a newer undo alone.
     undo_gen: u64,
+    /// Bumped each time the Recent view is requested; a background scan
+    /// only fills the view if it is still the latest request.
+    recent_req: u64,
 }
 
 /// A destructive action that runs only after the user confirms it.
@@ -133,6 +136,7 @@ impl AppState {
             view_gen: Arc::new(AtomicU64::new(0)),
             undo_trash: None,
             undo_gen: 0,
+            recent_req: 0,
         }
     }
 }
@@ -750,9 +754,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let st = state.clone();
         ui.on_show_recent(move || {
             if let Some(ui) = ui_w.upgrade() {
-                // Navigate home; future work: filter by mtime descending
-                let home = st.borrow().sandbox.home().into_path_buf();
-                navigate(&ui, &st, &home.to_string_lossy());
+                show_recent(&ui, &st);
             }
         });
     }
@@ -1567,8 +1569,11 @@ fn reload_keeping(ui: &MainWindow, state: &Rc<RefCell<AppState>>, keep: &HashSet
 }
 
 /// The view no longer shows the plain listing of `current`: stop live refresh.
+/// Also invalidates a Recent scan still in flight, so it can't overwrite the
+/// view (search, category, …) that replaced it.
 fn leave_listing(s: &mut AppState) {
     s.listing = false;
+    s.recent_req += 1;
     if let Some(w) = s.dir_watch.as_mut() {
         w.clear();
     }
@@ -1730,6 +1735,64 @@ fn show_category_files(
                             format!("{count} archivos comprimidos"),
                         ));
                     }
+                });
+            });
+        })
+        .ok();
+}
+
+/// The Recent view: files under home modified or opened in the last 30 days,
+/// newest first (see [`search::recent`]). Gathered off the UI thread.
+fn show_recent(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
+    let home = state.borrow().sandbox.home().into_path_buf();
+    let req = {
+        let mut s = state.borrow_mut();
+        s.current = home.clone();
+        s.in_trash_view = false;
+        s.archive_path = None;
+        s.entries = Vec::new();
+        s.selected.clear();
+        leave_listing(&mut s);
+        s.recent_req += 1;
+        s.recent_req
+    };
+    ui.set_current_path(SharedString::from(home.to_string_lossy().to_string()));
+    ui.set_active_root_path(SharedString::from(active_root(&state.borrow(), &home)));
+    set_breadcrumbs(ui, state, &home);
+    ui.set_in_trash(false);
+    ui.set_in_archive(false);
+    refresh_view(ui, state);
+    ui.set_status_text(sx(ui, "Looking for recent files…", "Son dosyalar aranıyor…", "Buscando archivos recientes…"));
+
+    let (sandbox, index) = {
+        let s = state.borrow();
+        (s.sandbox.clone(), s.index.clone())
+    };
+    let weak = ui.as_weak();
+    std::thread::Builder::new()
+        .name("recent-scan".into())
+        .spawn(move || {
+            let hits = search::recent::recent_files(&sandbox, &home, index.as_ref());
+            let _ = weak.upgrade_in_event_loop(move |ui| {
+                APP.with(|a| {
+                    let Some(state) = a.borrow().as_ref().cloned() else { return };
+                    {
+                        // Dropped if another view took over meanwhile: a listing
+                        // sets `listing`, every other view bumps `recent_req`.
+                        let s = state.borrow();
+                        if s.listing || s.recent_req != req {
+                            return;
+                        }
+                    }
+                    let count = hits.len();
+                    state.borrow_mut().entries = hits;
+                    refresh_view(&ui, &state);
+                    ui.set_status_text(sx(
+                        &ui,
+                        format!("{count} recent files (last 30 days)"),
+                        format!("{count} son dosya (son 30 gün)"),
+                        format!("{count} archivos recientes (últimos 30 días)"),
+                    ));
                 });
             });
         })

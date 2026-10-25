@@ -114,6 +114,15 @@ impl Index {
         self.ready.load(Ordering::SeqCst)
     }
 
+    /// Regular files under the root modified at or after `since` (no order).
+    pub fn modified_since(&self, since: std::time::SystemTime) -> Vec<Entry> {
+        let map = self.map.read().unwrap();
+        map.values()
+            .filter(|e| !e.is_dir && e.modified.is_some_and(|m| m >= since))
+            .cloned()
+            .collect()
+    }
+
     /// Run a query against the index, restricted to entries under `scope`
     /// (which must be inside the root). Honours `query.limit`.
     pub fn query(&self, scope: &Path, query: &Query) -> Vec<Entry> {
@@ -187,8 +196,10 @@ fn watch_budget() -> usize {
 }
 
 /// Whether `dir` (under `root`) should get a live watch: not inside a hidden
-/// directory or one of [`UNWATCHED_DIRS`].
-fn should_watch(root: &Path, dir: &Path) -> bool {
+/// directory or one of [`UNWATCHED_DIRS`]. Applied to a file, it tells
+/// whether the file is the user's own content rather than a cache or build
+/// output (used by the Recent view).
+pub(crate) fn should_watch(root: &Path, dir: &Path) -> bool {
     let Ok(rel) = dir.strip_prefix(root) else { return false };
     rel.components().all(|c| match c {
         std::path::Component::Normal(name) => {
