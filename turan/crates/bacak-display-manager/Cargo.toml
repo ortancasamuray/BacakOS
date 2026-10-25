@@ -63,9 +63,9 @@ conf-files = [
     "/etc/bacak-display-manager/weston-greeter.ini",
 ]
 assets = [
-    ["../../target/release/bacak-display-manager", "usr/bin/", "755"],
-    ["../../target/release/bacak-greeter", "usr/bin/", "755"],
-    ["../../target/release/bacak-session-launcher", "usr/bin/", "755"],
+    ["target/release/bacak-display-manager", "usr/bin/", "755"],
+    ["target/release/bacak-greeter", "usr/bin/", "755"],
+    ["target/release/bacak-session-launcher", "usr/bin/", "755"],
     # Prototype/fallback compositor (weston wrapper). NOT at /usr/bin/bacak-
     # compositor — that path belongs to the real compositor's own package. Point
     # `[daemon] compositor` here to use the weston fallback.

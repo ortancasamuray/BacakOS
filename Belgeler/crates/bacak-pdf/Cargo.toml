@@ -28,6 +28,6 @@ priority   = "optional"
 extended-description = "Bacak OS PDF reader powered by MuPDF with page navigation and zoom."
 depends    = "$auto, libwayland-client0, libwayland-cursor0, libwayland-egl1, libxkbcommon0, libegl1, libgl1, libmupdf25.1"
 assets = [
-    ["../../target/release/bacak-pdf", "usr/bin/", "755"],
+    ["target/release/bacak-pdf", "usr/bin/", "755"],
     ["../../icons/hicolor/scalable/apps/application-pdf.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
 ]
