@@ -30,6 +30,6 @@ priority   = "optional"
 extended-description = "Service management CLI for the Bacak OS desktop environment."
 depends = "$auto"
 assets = [
-    ["../../target/release/bacak", "usr/bin/bacak", "755"],
+    ["target/release/bacak", "usr/bin/bacak", "755"],
     ["../../packaging/changelog.Debian.gz", "usr/share/doc/bacak/changelog.Debian.gz", "644"],
 ]

@@ -154,7 +154,7 @@ recommends = "bacak-display-manager, lxpolkit"
 replaces = "bacak (<= 0.1.0)"
 breaks = "bacak (<= 0.1.0)"
 assets = [
-    ["../../target/release/bacak-compositor", "usr/bin/", "755"],
+    ["target/release/bacak-compositor", "usr/bin/", "755"],
     ["../../packaging/bacak-session", "usr/bin/bacak-session", "755"],
     ["../../packaging/changelog.Debian.gz", "usr/share/doc/bacak-compositor/changelog.Debian.gz", "644"],
     # Wayland session entry: makes the Bacak session visible in any display manager.
