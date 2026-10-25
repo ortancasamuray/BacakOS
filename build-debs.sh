@@ -61,7 +61,7 @@ setup_arch() {
     esac
     OUT="$DIST/$arch"
     mkdir -p "$OUT"
-    unset LD
+    unset LD MAKE LLVM_OBJDUMP
     if [ "$arch" = "$HOST_ARCH" ]; then
         TARGET_ARGS=()
         return
@@ -96,6 +96,41 @@ setup_arch() {
         ln -sfn "$h" "$ff/include/$(basename "$h")"
     done
     export FFMPEG_DIR="$ff"
+
+    # mozjs_sys (tahta → servo) makefile.cargo'su Rust üçlüsünü configure'a
+    # --target olarak verir; aarch64'ü GNU adına çevirir ama riscv64gc'yi
+    # çevirmez ve config.sub "riscv64gc-unknown" makinesini tanımaz. MAKE
+    # sarmalayıcısı makefile.cargo'nun eşleme eklenmiş bir kopyasını çalıştırır.
+    if [ "$arch" = riscv64 ]; then
+        local mk="${XDG_CACHE_HOME:-$HOME/.cache}/bacak-cross/make-riscv64"
+        cat > "$mk" <<'EOF'
+#!/usr/bin/env bash
+args=()
+while [ $# -gt 0 ]; do
+    if [ "$1" = -f ] && [ "${2##*/}" = makefile.cargo ]; then
+        awk '/^\tifeq \(aarch64-unknown-linux-gnu,\$\(TARGET\)\)/ {
+                 print "\tifeq (riscv64gc-unknown-linux-gnu,$(TARGET))"
+                 print "\t\tTARGET = riscv64-linux-gnu"
+                 print "\tendif"
+             } { print }' "$2" > "$PWD/makefile.cargo.riscv64"
+        args+=(-f "$PWD/makefile.cargo.riscv64"); shift 2; continue
+    fi
+    args+=("$1"); shift
+done
+exec make "${args[@]}"
+EOF
+        chmod +x "$mk"
+        export MAKE="$mk"
+
+        # riscv64 için hazır mozjs arşivi yok, kaynaktan derlenir ve configure
+        # llvm-objdump ister; Debian yalnız sürümlü olanı kurar (llvm-19).
+        if ! command -v llvm-objdump >/dev/null; then
+            local od
+            od="$(ls /usr/lib/llvm-*/bin/llvm-objdump 2>/dev/null | sort -V | tail -1)"
+            [ -n "$od" ] || die "llvm-objdump yok — önce: sudo bash setup-deps.sh"
+            export LLVM_OBJDUMP="$od"
+        fi
+    fi
 }
 
 # BACAK_CROSS_TARGET_DIR verilirse çapraz derleme çıktısı ana diski doldurmasın
