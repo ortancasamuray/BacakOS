@@ -24,9 +24,12 @@ mod trash;
 mod userdirs;
 
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::SystemTime;
 
 use filesystem::{Entry, SortKey};
 use security::{RootKind, Sandbox};
@@ -79,6 +82,12 @@ struct AppState {
     dir_watch: Option<filesystem::watch::DirWatch>,
     /// Destructive action waiting for the confirm dialog.
     pending_confirm: Option<Confirm>,
+    /// Item counts shown for sub-folders, keyed by path and the folder's
+    /// mtime (which changes when entries are added, removed or renamed).
+    child_counts: HashMap<PathBuf, (SystemTime, usize)>,
+    /// Bumped on every view rebuild, so a background count started for an
+    /// older view is dropped instead of being patched into the current one.
+    view_gen: Arc<AtomicU64>,
 }
 
 /// A destructive action that runs only after the user confirms it.
@@ -115,6 +124,8 @@ impl AppState {
             listing: false,
             dir_watch: None,
             pending_confirm: None,
+            child_counts: HashMap::new(),
+            view_gen: Arc::new(AtomicU64::new(0)),
         }
     }
 }
@@ -761,8 +772,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Initial load. Deferred so the window paints its first frame before the
-    // directory scan (child_count() per entry + icon loading) runs — without
-    // this, nothing appears on screen until the scan finishes.
+    // directory listing and icon loading run — without this, nothing appears
+    // on screen until the listing finishes.
     {
         let ui_w = ui.as_weak();
         let st = state.clone();
@@ -2406,9 +2417,17 @@ fn load_trash(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
 
 // ---- View synchronisation ---------------------------------------------------
 
+/// A sub-folder whose item count is not known yet: (row, path, cache key).
+type PendingCount = (usize, PathBuf, Option<SystemTime>);
+
 fn refresh_view(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
     ui.set_focused_idx(-1);
     let s = state.borrow();
+    let gen = s.view_gen.fetch_add(1, Ordering::SeqCst) + 1;
+    // Counting a folder's items reads it: done off the UI thread (see
+    // `spawn_child_counts`) so a slow mount or a huge listing can't freeze
+    // the window. Rows show "…" until their count arrives.
+    let mut pending: Vec<PendingCount> = Vec::new();
     let models: Vec<EntryModel> = s
         .entries
         .iter()
@@ -2416,18 +2435,27 @@ fn refresh_view(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
         .map(|(i, e)| {
             let icon_name = icon_name_for(e);
             let icon = load_file_icon(icon_name);
+            let size_text = if e.is_dir {
+                // A symlink's own mtime says nothing about its target's
+                // contents, so linked folders are always recounted.
+                let key = e.modified.filter(|_| !e.is_symlink);
+                match key.and_then(|m| s.child_counts.get(&e.path).filter(|(t, _)| *t == m)) {
+                    Some((_, n)) => items_text(ui, *n),
+                    None => {
+                        pending.push((i, e.path.clone(), key));
+                        SharedString::from("…")
+                    }
+                }
+            } else {
+                SharedString::from(humansize::format_size(e.size, humansize::DECIMAL))
+            };
             EntryModel {
                 name: SharedString::from(e.name.clone()),
                 path: SharedString::from(e.path.to_string_lossy().to_string()),
                 is_dir: e.is_dir,
                 is_archive: !e.is_dir && archive::Format::from_path(&e.path).is_some(),
                 is_symlink: e.is_symlink,
-                size_text: SharedString::from(if e.is_dir {
-                    let n = filesystem::child_count(&e.path);
-                    sx(ui, format!("{n} items"), format!("{n} öğe"), format!("{n} elementos")).to_string()
-                } else {
-                    humansize::format_size(e.size, humansize::DECIMAL)
-                }),
+                size_text,
                 modified_text: SharedString::from(format_time(e.modified)),
                 type_text: SharedString::from(type_text_for(ui, e)),
                 kind: SharedString::from(kind_for(e)),
@@ -2438,6 +2466,87 @@ fn refresh_view(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
         })
         .collect();
     ui.set_entries(ModelRc::new(VecModel::from(models)));
+    let view_gen = s.view_gen.clone();
+    drop(s);
+    if !pending.is_empty() {
+        spawn_child_counts(ui, view_gen, gen, pending);
+    }
+}
+
+fn items_text(ui: &MainWindow, n: usize) -> SharedString {
+    sx(ui, format!("{n} items"), format!("{n} öğe"), format!("{n} elementos"))
+}
+
+/// Count the items of `dirs` on a background thread and patch them into the
+/// view built as generation `gen`, in batches so a long listing fills in
+/// progressively. Stops early once the view has been rebuilt.
+fn spawn_child_counts(ui: &MainWindow, view_gen: Arc<AtomicU64>, gen: u64, dirs: Vec<PendingCount>) {
+    const BATCH_EVERY: std::time::Duration = std::time::Duration::from_millis(50);
+    let weak = ui.as_weak();
+    std::thread::Builder::new()
+        .name("child-count".into())
+        .spawn(move || {
+            let mut batch = Vec::new();
+            let mut last = std::time::Instant::now();
+            for (row, path, key) in dirs {
+                if view_gen.load(Ordering::SeqCst) != gen {
+                    break;
+                }
+                let n = filesystem::child_count(&path);
+                batch.push((row, path, key, n));
+                if last.elapsed() >= BATCH_EVERY {
+                    post_child_counts(&weak, gen, std::mem::take(&mut batch));
+                    last = std::time::Instant::now();
+                }
+            }
+            post_child_counts(&weak, gen, batch);
+        })
+        .ok();
+}
+
+fn post_child_counts(weak: &slint::Weak<MainWindow>, gen: u64, batch: Vec<(usize, PathBuf, Option<SystemTime>, usize)>) {
+    if batch.is_empty() {
+        return;
+    }
+    let _ = weak.upgrade_in_event_loop(move |ui| {
+        APP.with(|a| {
+            if let Some(state) = a.borrow().as_ref() {
+                apply_child_counts(&ui, state, gen, batch);
+            }
+        });
+    });
+}
+
+/// Cache the counts, and write them into the rows if the view is still the
+/// one they were computed for (rows are matched by path as well, to be safe).
+fn apply_child_counts(
+    ui: &MainWindow,
+    state: &Rc<RefCell<AppState>>,
+    gen: u64,
+    batch: Vec<(usize, PathBuf, Option<SystemTime>, usize)>,
+) {
+    use slint::Model;
+    let mut s = state.borrow_mut();
+    // Bounded: an old entry is only a cache miss, never a wrong count.
+    if s.child_counts.len() > 20_000 {
+        s.child_counts.clear();
+    }
+    let current = s.view_gen.load(Ordering::SeqCst) == gen;
+    let model = ui.get_entries();
+    let rows = model.as_any().downcast_ref::<VecModel<EntryModel>>().filter(|_| current);
+    for (row, path, key, n) in batch {
+        if let Some(rows) = rows {
+            if let Some(mut data) = rows.row_data(row) {
+                if data.path.as_str() == path.to_string_lossy() {
+                    data.size_text = items_text(ui, n);
+                    rows.set_row_data(row, data);
+                }
+            }
+        }
+        if let Some(m) = key {
+            s.child_counts.insert(path, (m, n));
+        }
+    }
 }
 
 /// Rebuild the sandbox (re-scanning mount points) and refresh the sidebar.
