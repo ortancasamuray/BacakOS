@@ -84,6 +84,12 @@ struct AppState {
     /// Set while `entries` is the plain listing of `current` (not search,
     /// trash, archive or category results) — only then is it live-refreshed.
     listing: bool,
+    /// The folder `entries` was listed from, while `listing` is set.
+    listed_dir: Option<PathBuf>,
+    /// Latest folder listing requested, and the latest one applied (see
+    /// [`request_listing`]).
+    list_req: u64,
+    list_done: u64,
     /// Live refresh of the listed directory (see [`filesystem::watch`]).
     dir_watch: Option<filesystem::watch::DirWatch>,
     /// Destructive action waiting for the confirm dialog.
@@ -138,6 +144,9 @@ impl AppState {
             archive_path: None,
             compress_cancel: None,
             listing: false,
+            listed_dir: None,
+            list_req: 0,
+            list_done: 0,
             dir_watch: None,
             pending_confirm: None,
             child_counts: HashMap::new(),
@@ -326,7 +335,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ui.on_refresh(move || {
             if let Some(ui) = ui_w.upgrade() {
                 reload_roots(&ui); // pick up newly-mounted devices manually too
-                reload(&ui, &st);
+                show_listing(&ui, &st);
             }
         });
     }
@@ -671,7 +680,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             cfg.prefs.show_hidden = show;
             let _ = config::save(&cfg);
             if let Some(ui) = ui_w.upgrade() {
-                reload(&ui, &st);
+                show_listing(&ui, &st);
             }
         });
     }
@@ -778,7 +787,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     _      => SortKey::Name,
                 };
                 st.borrow_mut().sort = key;
-                reload(&ui, &st);
+                show_listing(&ui, &st);
             }
         });
     }
@@ -797,7 +806,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let st = state.clone();
         slint::Timer::single_shot(std::time::Duration::ZERO, move || {
             if let Some(ui) = ui_w.upgrade() {
-                reload(&ui, &st);
+                show_listing(&ui, &st);
             }
         });
     }
@@ -829,7 +838,7 @@ fn navigate(ui: &MainWindow, state: &Rc<RefCell<AppState>>, target: &str) {
                 s.archive_path = None;
                 s.selected.clear();
             }
-            reload(ui, state);
+            show_listing(ui, state);
         }
         Err(e) => {
             ui.set_status_text(sx(ui, format!("Access denied: {e}"), format!("Erişim reddedildi: {e}"), format!("Acceso denegado: {e}")));
@@ -1585,17 +1594,106 @@ fn extract_from_archive_view(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
         .ok();
 }
 
+/// Re-list `current` after an action (paste, rename, trash, …), keeping the
+/// status line: it carries that action's result.
 fn reload(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
-    reload_keeping(ui, state, &HashSet::new());
+    request_listing(ui, state, HashSet::new(), false);
 }
 
-/// List `current` again, re-selecting the entries whose paths are in `keep`.
-fn reload_keeping(ui: &MainWindow, state: &Rc<RefCell<AppState>>, keep: &HashSet<PathBuf>) {
-    let (dir, show_hidden, sort) = {
-        let s = state.borrow();
-        (s.current.clone(), s.show_hidden, s.sort)
+/// Open `current` (navigation, F5, sort/hidden change): like [`reload`] but
+/// the status line then shows the item count.
+fn show_listing(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
+    request_listing(ui, state, HashSet::new(), true);
+}
+
+/// Read `current` off the UI thread — on a network share or a slow USB stick
+/// a listing can take seconds — and show it when it arrives. Only the latest
+/// request is applied; a view change (trash, search, …) cancels it, see
+/// [`leave_listing`]. Entries whose paths are in `keep` are re-selected.
+fn request_listing(ui: &MainWindow, state: &Rc<RefCell<AppState>>, keep: HashSet<PathBuf>, announce: bool) {
+    /// Below this, a listing appears without a "Loading…" flash.
+    const LOADING_AFTER: std::time::Duration = std::time::Duration::from_millis(200);
+    let (dir, show_hidden, sort, sandbox, req, switching) = {
+        let mut s = state.borrow_mut();
+        s.list_req += 1;
+        let switching = !s.listing || s.listed_dir.as_deref() != Some(s.current.as_path());
+        (s.current.clone(), s.show_hidden, s.sort, s.sandbox.clone(), s.list_req, switching)
     };
-    let listing = filesystem::list_dir(&state.borrow().sandbox, &dir, show_hidden, sort);
+    if switching {
+        // A different folder: drop the previous rows right away so nothing
+        // stale can be opened or trashed while the new listing loads.
+        {
+            let mut s = state.borrow_mut();
+            s.entries.clear();
+            s.selected.clear();
+        }
+        show_listing_location(ui, state, &dir);
+        refresh_view(ui, state);
+    }
+    // A quiet refresh of the same folder keeps its rows and the action's
+    // status line on screen meanwhile, so it shows no placeholder.
+    if switching || announce {
+        let weak = ui.as_weak();
+        slint::Timer::single_shot(LOADING_AFTER, move || {
+            let Some(ui) = weak.upgrade() else { return };
+            APP.with(|a| {
+                if let Some(state) = a.borrow().as_ref() {
+                    if state.borrow().list_req == req && state.borrow().list_done != req {
+                        ui.set_status_text(loading_text(&ui));
+                    }
+                }
+            });
+        });
+    }
+    let weak = ui.as_weak();
+    std::thread::Builder::new()
+        .name("list-dir".into())
+        .spawn(move || {
+            let listing = filesystem::list_dir(&sandbox, &dir, show_hidden, sort);
+            let _ = weak.upgrade_in_event_loop(move |ui| {
+                APP.with(|a| {
+                    if let Some(state) = a.borrow().as_ref() {
+                        apply_listing(&ui, state, req, &dir, listing, &keep, announce);
+                    }
+                });
+            });
+        })
+        .ok();
+}
+
+fn loading_text(ui: &MainWindow) -> SharedString {
+    sx(ui, "Loading…", "Yükleniyor…", "Cargando…")
+}
+
+/// Path bar, breadcrumbs and view flags for a folder listing.
+fn show_listing_location(ui: &MainWindow, state: &Rc<RefCell<AppState>>, dir: &std::path::Path) {
+    let dir = &dir.to_path_buf();
+    ui.set_current_path(SharedString::from(dir.to_string_lossy().to_string()));
+    ui.set_active_root_path(SharedString::from(active_root(&state.borrow(), dir)));
+    set_breadcrumbs(ui, state, dir);
+    ui.set_in_trash(false);
+    ui.set_in_archive(false);
+}
+
+fn apply_listing(
+    ui: &MainWindow,
+    state: &Rc<RefCell<AppState>>,
+    req: u64,
+    dir: &std::path::Path,
+    listing: Result<Vec<Entry>, filesystem::ListError>,
+    keep: &HashSet<PathBuf>,
+    announce: bool,
+) {
+    {
+        let mut s = state.borrow_mut();
+        // Superseded by a newer listing or by another view.
+        if s.list_req != req || s.current != dir {
+            return;
+        }
+        s.list_done = req;
+    }
+    // The "Loading…" placeholder is replaced either way.
+    let announce = announce || ui.get_status_text() == loading_text(ui);
     match listing {
         Ok(entries) => {
             let count = entries.len();
@@ -1604,17 +1702,16 @@ fn reload_keeping(ui: &MainWindow, state: &Rc<RefCell<AppState>>, keep: &HashSet
                 s.selected = entries.iter().enumerate().filter(|(_, e)| keep.contains(&e.path)).map(|(i, _)| i).collect();
                 s.entries = entries;
                 s.listing = true;
+                s.listed_dir = Some(dir.to_path_buf());
                 if let Some(w) = s.dir_watch.as_mut() {
-                    w.set_dir(&dir);
+                    w.set_dir(dir);
                 }
             }
             sync_preview(ui, state);
-            ui.set_current_path(SharedString::from(dir.to_string_lossy().to_string()));
-            ui.set_active_root_path(SharedString::from(active_root(&state.borrow(), &dir)));
-            set_breadcrumbs(ui, state, &dir);
-            ui.set_in_trash(false);
-            ui.set_in_archive(false);
-            ui.set_status_text(sx(ui, format!("{count} items"), format!("{count} öğe"), format!("{count} elementos")));
+            show_listing_location(ui, state, dir);
+            if announce {
+                ui.set_status_text(sx(ui, format!("{count} items"), format!("{count} öğe"), format!("{count} elementos")));
+            }
             refresh_view(ui, state);
         }
         Err(e) => {
@@ -1629,13 +1726,14 @@ fn reload_keeping(ui: &MainWindow, state: &Rc<RefCell<AppState>>, keep: &HashSet
 fn leave_listing(s: &mut AppState) {
     s.listing = false;
     s.recent_req += 1;
+    s.list_req += 1;
     if let Some(w) = s.dir_watch.as_mut() {
         w.clear();
     }
 }
 
 /// The listed directory changed on disk: list it again, keeping the selection
-/// and the status line. If the directory itself is gone, step up to the
+/// (and, as with any [`reload`], the status line). If the directory itself is gone, step up to the
 /// nearest ancestor that still exists.
 fn live_reload(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
     let (dir, keep) = {
@@ -1653,14 +1751,12 @@ fn live_reload(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
         return;
     }
     log::debug!("live refresh: {}", dir.display());
-    let status = ui.get_status_text();
-    reload_keeping(ui, state, &keep);
-    ui.set_status_text(status);
+    request_listing(ui, state, keep, false);
 }
 
 fn run_search(ui: &MainWindow, state: &Rc<RefCell<AppState>>, term: &str) {
     if term.trim().is_empty() {
-        reload(ui, state);
+        show_listing(ui, state);
         return;
     }
     let in_content = ui.get_search_in_content();
@@ -1951,11 +2047,8 @@ fn undo_trash(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
         Ok(n) => ui.set_status_text(sx(ui, format!("Restored {n} item(s)"), format!("{n} öğe geri yüklendi"), format!("{n} elemento(s) restaurado(s)"))),
         Err(e) => ui.set_status_text(sx(ui, format!("Undo failed: {e}"), format!("Geri alma başarısız: {e}"), format!("Error al deshacer: {e}"))),
     }
-    let listing = state.borrow().listing;
-    if listing {
-        let status = ui.get_status_text();
+    if state.borrow().listing {
         reload(ui, state);
-        ui.set_status_text(status);
     }
 }
 
