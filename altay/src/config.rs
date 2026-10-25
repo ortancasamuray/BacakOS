@@ -47,6 +47,13 @@ pub struct Prefs {
     /// UI language: "en", "tr", or "" to auto-detect from the locale.
     #[serde(default)]
     pub lang: String,
+    /// Compress dialog: leave out build output and caches
+    /// (`archive::exclude::BUILD_OUTPUTS`).
+    #[serde(default)]
+    pub compress_skip_builds: bool,
+    /// Compress dialog: extra comma-separated name patterns to leave out.
+    #[serde(default)]
+    pub compress_exclude: String,
 }
 
 fn default_view() -> i32 {
@@ -69,6 +76,8 @@ impl Default for Prefs {
             grid_scale: default_scale(),
             dark: default_dark(),
             lang: String::new(),
+            compress_skip_builds: false,
+            compress_exclude: String::new(),
         }
     }
 }

@@ -11,8 +11,11 @@ use std::path::{Path, PathBuf};
 use crate::filesystem::Progress;
 use crate::security::{AccessDenied, Sandbox};
 
+pub use exclude::Exclude;
+
 mod cmd_backend;
 mod deb_backend;
+pub mod exclude;
 mod rar_backend;
 mod rpm_backend;
 mod sevenz;
@@ -204,6 +207,10 @@ pub struct Options {
     /// returns [`ArchiveError::Cancelled`]. Backends that don't support
     /// mid-operation cancellation simply ignore it.
     pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// Names left out of a created archive, at any depth below the given
+    /// sources (the sources themselves are always included). Honoured by
+    /// the zip writer, which is what the UI creates.
+    pub exclude: Exclude,
 }
 
 /// Implemented by each format backend.
@@ -524,6 +531,35 @@ mod tests {
         assert_eq!(io.kind(), std::io::ErrorKind::NotFound);
         assert_eq!(path, Some(missing.as_path()));
         assert!(err.to_string().contains("gone.txt"), "{err}");
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn zip_honours_exclude_patterns() {
+        let d = workdir("zip-exclude");
+        fs::create_dir_all(d.join("src/target/release")).unwrap();
+        fs::write(d.join("src/target/release/app"), b"binary").unwrap();
+        fs::write(d.join("src/sub/disk.img"), b"image").unwrap();
+        let archive = d.join("bundle.zip");
+        let mut noop = |_: Progress| {};
+        let backend = backend_for(Format::Zip).unwrap();
+        let opts = Options { exclude: Exclude::new("*.img", true), ..Default::default() };
+        backend.create(&archive, &[d.join("src")], &opts, &mut noop).unwrap();
+        let names: Vec<String> = backend
+            .list(&archive, &Options::default())
+            .unwrap()
+            .iter()
+            .map(|m| m.path.to_string_lossy().into_owned())
+            .collect();
+        assert!(names.iter().any(|n| n.ends_with("a.txt")), "{names:?}");
+        assert!(names.iter().any(|n| n.ends_with("sub/b.txt")), "{names:?}");
+        assert!(!names.iter().any(|n| n.contains("target") || n.ends_with(".img")), "{names:?}");
+
+        // A source the user picked explicitly is kept even if it matches.
+        let picked = d.join("picked.zip");
+        backend.create(&picked, &[d.join("src/target")], &opts, &mut noop).unwrap();
+        let names = backend.list(&picked, &Options::default()).unwrap();
+        assert!(names.iter().any(|m| m.path.to_string_lossy().ends_with("release/app")));
         let _ = fs::remove_dir_all(&d);
     }
 

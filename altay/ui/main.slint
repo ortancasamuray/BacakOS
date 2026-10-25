@@ -188,6 +188,9 @@ export global L {
     in property <string> ctx-copy: "Kopyala";
     in property <string> ctx-cut: "Kes";
     in property <string> ctx-compress: "Sıkıştır";
+    in property <string> compress-skip-builds: "Derleme çıktılarını ve önbellekleri hariç tut";
+    in property <string> compress-exclude: "Ek olarak hariç tut";
+    in property <string> compress-exclude-ph: "örn. *.img, .git";
     in property <string> rename-item: "Yeniden Adlandır…";
     in property <string> extract-here: "Buraya Çıkart";
     in property <string> move-to-trash: "Çöpe Taşı";
@@ -949,6 +952,12 @@ export component MainWindow inherits Window {
     in property <string> confirm-action;
     callback confirm-accepted();
     callback confirm-cancelled();
+    // Compress dialog: what to leave out of the archive.
+    in-out property <bool> show-compress: false;
+    in-out property <bool> compress-skip-builds: false;
+    in-out property <string> compress-exclude;
+    in property <string> compress-builds-hint;
+    callback do-compress();
     callback grid-scale-changed(float);
     changed grid-scale => { root.grid-scale-changed(root.grid-scale); }
     changed focused-idx => {
@@ -1962,6 +1971,41 @@ export component MainWindow inherits Window {
                     spacing: 10px; alignment: end;
                     Button { text: L.cancel;       clicked => { root.show-rename = false; } }
                     Button { text: L.rename-title; primary: true; clicked => { root.do-rename(); } }
+                }
+            }
+        }
+    }
+
+    // ---- Compress dialog ----
+    if show-compress : Rectangle {
+        width: root.width; height: root.height;
+        background: #00000099;
+        TouchArea {}
+        Rectangle {
+            width: min(460px, parent.width - 32px);
+            height: compress-col.preferred-height;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            background: Theme.surface;
+            border-radius: 14px;
+            compress-col := VerticalLayout {
+                padding: 20px; spacing: 12px;
+                Text { text: L.ctx-compress; color: Theme.text; font-size: 18px; font-weight: 700; }
+                CheckBox { text: L.compress-skip-builds; checked <=> root.compress-skip-builds; }
+                Text {
+                    text: root.compress-builds-hint;
+                    color: Theme.text-dim; font-size: 12px; wrap: word-wrap;
+                }
+                Text { text: L.compress-exclude; color: Theme.text-dim; }
+                LineEdit {
+                    text <=> root.compress-exclude;
+                    placeholder-text: L.compress-exclude-ph;
+                    accepted(_t) => { root.do-compress(); }
+                }
+                HorizontalLayout {
+                    spacing: 10px; alignment: end;
+                    Button { text: L.cancel; clicked => { root.show-compress = false; key-scope.focus(); } }
+                    Button { text: L.ctx-compress; primary: true; clicked => { root.do-compress(); key-scope.focus(); } }
                 }
             }
         }

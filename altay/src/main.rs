@@ -150,6 +150,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ui.set_view_mode(0);
     ui.set_grid_scale(cfg.prefs.grid_scale.clamp(0.6, 2.2));
     ui.set_show_hidden_pref(cfg.prefs.show_hidden);
+    ui.set_compress_builds_hint(SharedString::from(archive::exclude::BUILD_OUTPUTS.join(", ")));
     // Dark mode is desktop-wide (BacakOsSDK): read it now, follow changes made
     // in the Control Center or any other app.
     ui.global::<Theme>().set_dark(bacak_sdk::Gorunum::load().koyu);
@@ -495,6 +496,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ctx_handler!(on_open_with_dialog, open_with_dialog);
     ctx_handler!(on_key_rename, key_rename);
     ctx_handler!(on_confirm_accepted, confirm_accepted);
+    ctx_handler!(on_do_compress, do_compress);
     ctx_handler!(on_confirm_cancelled, confirm_cancelled);
     {
         let ui_w = ui.as_weak();
@@ -1772,7 +1774,30 @@ fn do_trash(ui: &MainWindow, state: &Rc<RefCell<AppState>>, paths: Vec<PathBuf>)
     }
 }
 
+/// Open the compress dialog (what to leave out), prefilled with the last
+/// choices. The archive is written by [`do_compress`].
 fn compress_selected(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
+    if state.borrow().selected.is_empty() {
+        ui.set_status_text(sx(ui, "Select items to compress", "Sıkıştırılacak öğeleri seçin", "Seleccione elementos para comprimir"));
+        return;
+    }
+    let prefs = config::load().prefs;
+    ui.set_compress_skip_builds(prefs.compress_skip_builds);
+    ui.set_compress_exclude(SharedString::from(prefs.compress_exclude));
+    ui.set_show_compress(true);
+}
+
+fn do_compress(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
+    ui.set_show_compress(false);
+    let skip_builds = ui.get_compress_skip_builds();
+    let exclude_list = ui.get_compress_exclude().to_string();
+    {
+        let mut cfg = config::load();
+        cfg.prefs.compress_skip_builds = skip_builds;
+        cfg.prefs.compress_exclude = exclude_list.trim().to_string();
+        let _ = config::save(&cfg);
+    }
+    let exclude = archive::Exclude::new(&exclude_list, skip_builds);
     let (dir, paths, sandbox) = {
         let s = state.borrow();
         let paths: Vec<PathBuf> =
@@ -1804,7 +1829,7 @@ fn compress_selected(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
         .name("compress".into())
         .spawn(move || {
             let progress_weak = weak.clone();
-            let opts = archive::Options { cancel: Some(cancel_thread.clone()), ..Default::default() };
+            let opts = archive::Options { cancel: Some(cancel_thread.clone()), exclude, ..Default::default() };
             let result = archive::create(
                 &sandbox,
                 &target,
@@ -2475,6 +2500,9 @@ fn apply_language(ui: &MainWindow, lang: &str) {
     t!(set_ctx_copy, "Copy", "Kopyala", "Copiar");
     t!(set_ctx_cut, "Cut", "Kes", "Cortar");
     t!(set_ctx_compress, "Compress", "Sıkıştır", "Comprimir");
+    t!(set_compress_skip_builds, "Leave out build output and caches", "Derleme çıktılarını ve önbellekleri hariç tut", "Excluir compilaciones y cachés");
+    t!(set_compress_exclude, "Also leave out", "Ek olarak hariç tut", "Excluir también");
+    t!(set_compress_exclude_ph, "e.g. *.img, .git", "örn. *.img, .git", "p. ej. *.img, .git");
     t!(set_rename_item, "Rename…", "Yeniden adlandır…", "Renombrar…");
     t!(set_extract_here, "Extract here", "Buraya çıkar", "Extraer aquí");
     t!(set_move_to_trash, "Move to Trash", "Çöpe taşı", "Mover a la papelera");
