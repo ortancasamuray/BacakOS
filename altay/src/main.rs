@@ -1777,10 +1777,21 @@ fn do_trash(ui: &MainWindow, state: &Rc<RefCell<AppState>>, paths: Vec<PathBuf>)
 /// Open the compress dialog (what to leave out), prefilled with the last
 /// choices. The archive is written by [`do_compress`].
 fn compress_selected(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
-    if state.borrow().selected.is_empty() {
+    let (dir, paths) = {
+        let s = state.borrow();
+        let paths: Vec<PathBuf> =
+            s.selected.iter().filter_map(|i| s.entries.get(*i)).map(|e| e.path.clone()).collect();
+        (s.current.clone(), paths)
+    };
+    if paths.is_empty() {
         ui.set_status_text(sx(ui, "Select items to compress", "Sıkıştırılacak öğeleri seçin", "Seleccione elementos para comprimir"));
         return;
     }
+    let suggested = unique_path(&dir, &suggested_archive_stem(&dir, &paths), "zip");
+    ui.set_compress_name(SharedString::from(
+        suggested.file_name().unwrap_or_default().to_string_lossy().into_owned(),
+    ));
+    ui.set_compress_error(SharedString::new());
     let prefs = config::load().prefs;
     ui.set_compress_skip_builds(prefs.compress_skip_builds);
     ui.set_compress_exclude(SharedString::from(prefs.compress_exclude));
@@ -1788,6 +1799,26 @@ fn compress_selected(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
 }
 
 fn do_compress(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
+    // Validate the name first; on error the dialog stays open with a reason.
+    let Some(name) = archive_file_name(&ui.get_compress_name()) else {
+        ui.set_compress_error(sx(
+            ui,
+            "Enter a file name (it cannot contain \"/\").",
+            "Bir dosya adı girin (\"/\" içeremez).",
+            "Introduzca un nombre de archivo (no puede contener \"/\").",
+        ));
+        return;
+    };
+    let target = state.borrow().current.join(&name);
+    if target.symlink_metadata().is_ok() {
+        ui.set_compress_error(sx(
+            ui,
+            format!("\u{201c}{name}\u{201d} already exists; choose another name."),
+            format!("\u{201c}{name}\u{201d} zaten var; başka bir ad seçin."),
+            format!("\u{201c}{name}\u{201d} ya existe; elija otro nombre."),
+        ));
+        return;
+    }
     ui.set_show_compress(false);
     let skip_builds = ui.get_compress_skip_builds();
     let exclude_list = ui.get_compress_exclude().to_string();
@@ -1798,17 +1829,16 @@ fn do_compress(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
         let _ = config::save(&cfg);
     }
     let exclude = archive::Exclude::new(&exclude_list, skip_builds);
-    let (dir, paths, sandbox) = {
+    let (paths, sandbox) = {
         let s = state.borrow();
         let paths: Vec<PathBuf> =
             s.selected.iter().filter_map(|i| s.entries.get(*i)).map(|e| e.path.clone()).collect();
-        (s.current.clone(), paths, s.sandbox.clone())
+        (paths, s.sandbox.clone())
     };
     if paths.is_empty() {
         ui.set_status_text(sx(ui, "Select items to compress", "Sıkıştırılacak öğeleri seçin", "Seleccione elementos para comprimir"));
         return;
     }
-    let target = unique_path(&dir, "Archive", "zip");
     let count = paths.len();
 
     // Fresh cancel token, shared with the worker and the cancel button.
@@ -2048,6 +2078,30 @@ fn archive_stem(path: &std::path::Path) -> String {
 }
 
 /// Build a non-colliding `dir/<base>.<ext>` (or `dir/<base>` if ext empty).
+/// Default archive name for the selection: a single folder keeps its name, a
+/// single file drops its extension, several items take the name of the
+/// folder they are in.
+fn suggested_archive_stem(dir: &std::path::Path, paths: &[PathBuf]) -> String {
+    let name = match paths {
+        [one] if one.is_dir() => one.file_name().map(|n| n.to_string_lossy().into_owned()),
+        [one] => one.file_stem().map(|n| n.to_string_lossy().into_owned()),
+        _ => dir.file_name().map(|n| n.to_string_lossy().into_owned()),
+    };
+    name.filter(|n| !n.is_empty()).unwrap_or_else(|| "Archive".into())
+}
+
+/// Normalise the name typed in the compress dialog: trimmed, with `.zip`
+/// appended when missing. `None` for an empty name or one that is a path.
+fn archive_file_name(input: &str) -> Option<String> {
+    let name = input.trim();
+    if matches!(name, "" | "." | "..") || name.contains('/') || name.contains('\0') {
+        return None;
+    }
+    let name = if name.to_lowercase().ends_with(".zip") { name.to_string() } else { format!("{name}.zip") };
+    // Just ".zip" typed: an extension with no name.
+    (name.len() > ".zip".len()).then_some(name)
+}
+
 fn unique_path(dir: &std::path::Path, base: &str, ext: &str) -> PathBuf {
     let make = |n: u32| {
         let stem = if n == 1 { base.to_string() } else { format!("{base} {n}") };
@@ -2503,6 +2557,7 @@ fn apply_language(ui: &MainWindow, lang: &str) {
     t!(set_compress_skip_builds, "Leave out build output and caches", "Derleme çıktılarını ve önbellekleri hariç tut", "Excluir compilaciones y cachés");
     t!(set_compress_exclude, "Also leave out", "Ek olarak hariç tut", "Excluir también");
     t!(set_compress_exclude_ph, "e.g. *.img, .git", "örn. *.img, .git", "p. ej. *.img, .git");
+    t!(set_compress_name, "Archive name", "Arşiv adı", "Nombre del archivo");
     t!(set_rename_item, "Rename…", "Yeniden adlandır…", "Renombrar…");
     t!(set_extract_here, "Extract here", "Buraya çıkar", "Extraer aquí");
     t!(set_move_to_trash, "Move to Trash", "Çöpe taşı", "Mover a la papelera");
@@ -2851,8 +2906,37 @@ fn xdg_dir_for_category(category: &str, home: &std::path::Path) -> std::path::Pa
 
 #[cfg(test)]
 mod tests {
-    use super::{breadcrumb_segments, copy_external};
+    use super::{archive_file_name, breadcrumb_segments, copy_external, suggested_archive_stem};
     use crate::security::{AllowedRoot, Sandbox};
+
+    #[test]
+    fn archive_name_normalisation() {
+        assert_eq!(archive_file_name(" bacakos ").as_deref(), Some("bacakos.zip"));
+        assert_eq!(archive_file_name("yedek.zip").as_deref(), Some("yedek.zip"));
+        assert_eq!(archive_file_name("Yedek.ZIP").as_deref(), Some("Yedek.ZIP"));
+        assert_eq!(archive_file_name(".gizli").as_deref(), Some(".gizli.zip"));
+        assert_eq!(archive_file_name("v1.2").as_deref(), Some("v1.2.zip"));
+        for bad in ["", "  ", ".", "..", ".zip", "a/b", "../x"] {
+            assert_eq!(archive_file_name(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn archive_name_suggestion() {
+        let d = std::env::temp_dir().join(format!("altay-sugg-{}", std::process::id()));
+        std::fs::create_dir_all(d.join("bacakos")).unwrap();
+        std::fs::create_dir_all(d.join("v1.2")).unwrap();
+        std::fs::write(d.join("rapor.pdf"), b"x").unwrap();
+        // One folder keeps its whole name (dots included).
+        assert_eq!(suggested_archive_stem(&d, &[d.join("bacakos")]), "bacakos");
+        assert_eq!(suggested_archive_stem(&d, &[d.join("v1.2")]), "v1.2");
+        // One file drops its extension.
+        assert_eq!(suggested_archive_stem(&d, &[d.join("rapor.pdf")]), "rapor");
+        // Several items: the folder they are in.
+        let dir_name = d.file_name().unwrap().to_string_lossy().into_owned();
+        assert_eq!(suggested_archive_stem(&d, &[d.join("bacakos"), d.join("rapor.pdf")]), dir_name);
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     #[test]
     fn breadcrumbs_start_at_root_label() {
