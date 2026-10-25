@@ -72,6 +72,22 @@ struct AppState {
     /// Cancel flag for an in-flight compress operation. Set to `true` by the
     /// cancel button to abort the background thread.
     compress_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// Set while `entries` is the plain listing of `current` (not search,
+    /// trash, archive or category results) — only then is it live-refreshed.
+    listing: bool,
+    /// Live refresh of the listed directory (see [`filesystem::watch`]).
+    dir_watch: Option<filesystem::watch::DirWatch>,
+    /// Destructive action waiting for the confirm dialog.
+    pending_confirm: Option<Confirm>,
+}
+
+/// A destructive action that runs only after the user confirms it.
+enum Confirm {
+    /// Move these paths to the trash (captured when asking, so a live refresh
+    /// while the dialog is open cannot change the target).
+    Trash(Vec<PathBuf>),
+    /// Permanently delete everything in the trash.
+    EmptyTrash,
 }
 
 impl AppState {
@@ -96,6 +112,9 @@ impl AppState {
             open_with_path: None,
             archive_path: None,
             compress_cancel: None,
+            listing: false,
+            dir_watch: None,
+            pending_confirm: None,
         }
     }
 }
@@ -163,6 +182,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let weak = ui.as_weak();
         devices::monitor(move || {
             let _ = weak.upgrade_in_event_loop(|ui| reload_roots(&ui));
+        });
+    }
+
+    // Live refresh: files added/removed/renamed in the listed directory by
+    // another app (or another Altay window) show up without pressing F5.
+    {
+        let weak = ui.as_weak();
+        state.borrow_mut().dir_watch = filesystem::watch::DirWatch::new(move || {
+            let _ = weak.upgrade_in_event_loop(|ui| {
+                APP.with(|a| {
+                    if let Some(state) = a.borrow().as_ref() {
+                        live_reload(&ui, state);
+                    }
+                });
+            });
         });
     }
 
@@ -460,6 +494,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ctx_handler!(on_do_rename, do_rename);
     ctx_handler!(on_open_with_dialog, open_with_dialog);
     ctx_handler!(on_key_rename, key_rename);
+    ctx_handler!(on_confirm_accepted, confirm_accepted);
+    ctx_handler!(on_confirm_cancelled, confirm_cancelled);
     {
         let ui_w = ui.as_weak();
         let st = state.clone();
@@ -1344,6 +1380,7 @@ fn open_archive_view(ui: &MainWindow, state: &Rc<RefCell<AppState>>, archive: &s
         s.archive_path = Some(archive_path.clone());
         s.entries = Vec::new();
         s.selected.clear();
+        leave_listing(&mut s);
     }
     ui.set_in_archive(true);
     ui.set_archive_loading(true);
@@ -1472,6 +1509,11 @@ fn extract_from_archive_view(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
 }
 
 fn reload(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
+    reload_keeping(ui, state, &HashSet::new());
+}
+
+/// List `current` again, re-selecting the entries whose paths are in `keep`.
+fn reload_keeping(ui: &MainWindow, state: &Rc<RefCell<AppState>>, keep: &HashSet<PathBuf>) {
     let (dir, show_hidden, sort) = {
         let s = state.borrow();
         (s.current.clone(), s.show_hidden, s.sort)
@@ -1482,8 +1524,12 @@ fn reload(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
             let count = entries.len();
             {
                 let mut s = state.borrow_mut();
+                s.selected = entries.iter().enumerate().filter(|(_, e)| keep.contains(&e.path)).map(|(i, _)| i).collect();
                 s.entries = entries;
-                s.selected.clear();
+                s.listing = true;
+                if let Some(w) = s.dir_watch.as_mut() {
+                    w.set_dir(&dir);
+                }
             }
             ui.set_current_path(SharedString::from(dir.to_string_lossy().to_string()));
             ui.set_active_root_path(SharedString::from(active_root(&state.borrow(), &dir)));
@@ -1497,6 +1543,38 @@ fn reload(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
             ui.set_status_text(sx(ui, format!("Cannot open folder: {e}"), format!("Klasör açılamadı: {e}"), format!("No se puede abrir la carpeta: {e}")));
         }
     }
+}
+
+/// The view no longer shows the plain listing of `current`: stop live refresh.
+fn leave_listing(s: &mut AppState) {
+    s.listing = false;
+    if let Some(w) = s.dir_watch.as_mut() {
+        w.clear();
+    }
+}
+
+/// The listed directory changed on disk: list it again, keeping the selection
+/// and the status line. If the directory itself is gone, step up to the
+/// nearest ancestor that still exists.
+fn live_reload(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
+    let (dir, keep) = {
+        let s = state.borrow();
+        if !s.listing {
+            return;
+        }
+        let keep: HashSet<PathBuf> = s.selected.iter().filter_map(|i| s.entries.get(*i)).map(|e| e.path.clone()).collect();
+        (s.current.clone(), keep)
+    };
+    if !dir.is_dir() {
+        if let Some(up) = dir.ancestors().skip(1).find(|p| p.is_dir()) {
+            navigate(ui, state, &up.to_string_lossy());
+        }
+        return;
+    }
+    log::debug!("live refresh: {}", dir.display());
+    let status = ui.get_status_text();
+    reload_keeping(ui, state, &keep);
+    ui.set_status_text(status);
 }
 
 fn run_search(ui: &MainWindow, state: &Rc<RefCell<AppState>>, term: &str) {
@@ -1541,6 +1619,7 @@ fn run_search(ui: &MainWindow, state: &Rc<RefCell<AppState>>, term: &str) {
         let mut s = state.borrow_mut();
         s.entries = hits;
         s.selected.clear();
+        leave_listing(&mut s);
     }
     let how_tr = match how {
         "indexed" => "indeksli",
@@ -1585,6 +1664,7 @@ fn show_category_files(
         s.archive_path = None;
         s.entries = Vec::new();
         s.selected.clear();
+        leave_listing(&mut s);
     }
     ui.set_current_path(SharedString::from(home.to_string_lossy().to_string()));
     ui.set_active_root_path(SharedString::from(active_root(&state.borrow(), &home)));
@@ -1650,6 +1730,8 @@ fn make_new_folder(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
     }
 }
 
+/// Ask before moving the selection to the trash (Delete key, bottom bar,
+/// context menu). A single tap on a touch screen must not trash anything.
 fn trash_selected(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
     let paths: Vec<PathBuf> = {
         let s = state.borrow();
@@ -1659,6 +1741,27 @@ fn trash_selected(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
         ui.set_status_text(sx(ui, "Nothing selected", "Seçim yok", "Nada seleccionado"));
         return;
     }
+    let message = match paths.as_slice() {
+        [one] => {
+            let name = one.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            sx(ui, format!("Move \u{201c}{name}\u{201d} to the Trash?"), format!("\u{201c}{name}\u{201d} çöpe taşınsın mı?"), format!("¿Mover \u{201c}{name}\u{201d} a la papelera?"))
+        }
+        many => {
+            let n = many.len();
+            sx(ui, format!("Move {n} items to the Trash?"), format!("{n} öğe çöpe taşınsın mı?"), format!("¿Mover {n} elementos a la papelera?"))
+        }
+    };
+    ask_confirm(
+        ui,
+        state,
+        Confirm::Trash(paths),
+        sx(ui, "Move to Trash", "Çöpe taşı", "Mover a la papelera"),
+        message,
+        sx(ui, "Move to Trash", "Çöpe taşı", "Mover a la papelera"),
+    );
+}
+
+fn do_trash(ui: &MainWindow, state: &Rc<RefCell<AppState>>, paths: Vec<PathBuf>) {
     let trashed = trash::move_many_to_trash(&state.borrow().sandbox, &paths);
     match trashed {
         Ok(()) => {
@@ -2069,7 +2172,24 @@ fn restore_selected(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
 }
 
 /// Permanently empty the trash.
+/// Ask before emptying the trash — this one cannot be undone.
 fn empty_trash(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
+    ask_confirm(
+        ui,
+        state,
+        Confirm::EmptyTrash,
+        sx(ui, "Empty Trash", "Çöpü boşalt", "Vaciar papelera"),
+        sx(
+            ui,
+            "All items in the Trash will be deleted permanently. This cannot be undone.",
+            "Çöpteki tüm öğeler kalıcı olarak silinecek. Bu işlem geri alınamaz.",
+            "Todos los elementos de la papelera se eliminarán definitivamente. No se puede deshacer.",
+        ),
+        sx(ui, "Empty Trash", "Çöpü boşalt", "Vaciar papelera"),
+    );
+}
+
+fn do_empty_trash(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
     match trash::empty() {
         Ok(()) => {
             ui.set_status_text(sx(ui, "Trash emptied", "Çöp boşaltıldı", "Papelera vaciada"));
@@ -2077,6 +2197,36 @@ fn empty_trash(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
         }
         Err(e) => ui.set_status_text(sx(ui, format!("Empty failed: {e}"), format!("Boşaltma başarısız: {e}"), format!("Error al vaciar: {e}"))),
     }
+}
+
+fn ask_confirm(
+    ui: &MainWindow,
+    state: &Rc<RefCell<AppState>>,
+    action: Confirm,
+    title: SharedString,
+    message: SharedString,
+    button: SharedString,
+) {
+    state.borrow_mut().pending_confirm = Some(action);
+    ui.set_confirm_title(title);
+    ui.set_confirm_message(message);
+    ui.set_confirm_action(button);
+    ui.set_show_confirm(true);
+}
+
+fn confirm_accepted(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
+    ui.set_show_confirm(false);
+    let action = state.borrow_mut().pending_confirm.take();
+    match action {
+        Some(Confirm::Trash(paths)) => do_trash(ui, state, paths),
+        Some(Confirm::EmptyTrash) => do_empty_trash(ui, state),
+        None => {}
+    }
+}
+
+fn confirm_cancelled(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
+    ui.set_show_confirm(false);
+    state.borrow_mut().pending_confirm = None;
 }
 
 fn load_trash(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
@@ -2099,6 +2249,7 @@ fn load_trash(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
         s.entries = entries;
         s.in_trash_view = true;
         s.selected.clear();
+        leave_listing(&mut s);
     }
     ui.set_current_path(SharedString::from("trash://"));
     ui.set_active_root_path(SharedString::from(""));

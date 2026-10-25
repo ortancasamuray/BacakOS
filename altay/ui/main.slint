@@ -941,6 +941,14 @@ export component MainWindow inherits Window {
     in-out property <bool> show-rename: false;
     in-out property <string> rename-text;
     callback do-rename();
+    // Confirmation for destructive actions (trash, empty trash); the pending
+    // action itself is kept on the Rust side.
+    in-out property <bool> show-confirm: false;
+    in property <string> confirm-title;
+    in property <string> confirm-message;
+    in property <string> confirm-action;
+    callback confirm-accepted();
+    callback confirm-cancelled();
     callback grid-scale-changed(float);
     changed grid-scale => { root.grid-scale-changed(root.grid-scale); }
     changed focused-idx => {
@@ -1954,6 +1962,39 @@ export component MainWindow inherits Window {
                     spacing: 10px; alignment: end;
                     Button { text: L.cancel;       clicked => { root.show-rename = false; } }
                     Button { text: L.rename-title; primary: true; clicked => { root.do-rename(); } }
+                }
+            }
+        }
+    }
+
+    // ---- Confirm dialog ----
+    if show-confirm : Rectangle {
+        width: root.width; height: root.height;
+        background: #00000099;
+        TouchArea {}
+        confirm-keys := FocusScope {
+            init => { self.focus(); }
+            key-pressed(e) => {
+                if (e.text == Key.Return) { root.confirm-accepted(); key-scope.focus(); return EventResult.accept; }
+                if (e.text == Key.Escape) { root.confirm-cancelled(); key-scope.focus(); return EventResult.accept; }
+                EventResult.reject
+            }
+        }
+        Rectangle {
+            width: min(420px, parent.width - 32px);
+            height: confirm-col.preferred-height;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            background: Theme.surface;
+            border-radius: 14px;
+            confirm-col := VerticalLayout {
+                padding: 20px; spacing: 12px;
+                Text { text: root.confirm-title; color: Theme.text; font-size: 18px; font-weight: 700; }
+                Text { text: root.confirm-message; color: Theme.text-dim; wrap: word-wrap; }
+                HorizontalLayout {
+                    spacing: 10px; alignment: end;
+                    Button { text: L.cancel; clicked => { root.confirm-cancelled(); key-scope.focus(); } }
+                    Button { text: root.confirm-action; primary: true; clicked => { root.confirm-accepted(); key-scope.focus(); } }
                 }
             }
         }

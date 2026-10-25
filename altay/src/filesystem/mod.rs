@@ -10,6 +10,7 @@ use std::time::SystemTime;
 use crate::security::{AccessDenied, SafePath, Sandbox};
 
 mod ops;
+pub mod watch;
 
 pub use ops::{OperationError, Progress};
 
