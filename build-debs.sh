@@ -324,25 +324,40 @@ KUR_SRC="$HERE/kur"
 # ---------------------------------------------------------------------------
 # eta-touchdrv: Fatih akıllı tahta dokunmatik sürücüsü (Pardus kaynağı, DKMS)
 # ---------------------------------------------------------------------------
-# İç içe ayrı bir git deposu (bacakos'ta takip edilmez). Kaynak ağacı kirletmemek
-# ve dpkg-buildpackage'ın ../ altına yazdığı dosyalar depo köküne düşmesin diye
-# geçici bir kopyada derlenir. debhelper + dh-dkms gerekir (setup-deps.sh).
+# eta-touchdrv/ upstream Pardus deposunun klonudur (bacakos'ta takip edilmez);
+# BacakOS değişiklikleri paketleme/eta-touchdrv/yamalar/ altındadır. Kaynak,
+# paketleme/eta-touchdrv/TABAN commit'inden git archive ile geçici bir dizine
+# çıkarılır ve yamalar sırayla uygulanır — klonun çalışma ağacı derlemeyi
+# etkilemez. debhelper + dh-dkms gerekir (setup-deps.sh).
+# Vestel sunucu programları hazır ikili: amd64 tam, arm64 yalnız 4 kameralı
+# (OTD) sensör; riscv64 için ikili yok.
 ETA_SRC="$HERE/eta-touchdrv"
-if [ "$ARCH" != amd64 ]; then
-    log "eta-touchdrv ATLANDI: yalnız amd64 (Vestel sunucu programları x86 ikili)"
-elif [ -d "$ETA_SRC/debian" ]; then
+ETA_PKG="$HERE/paketleme/eta-touchdrv"
+if [ "$ARCH" != amd64 ] && [ "$ARCH" != arm64 ]; then
+    log "eta-touchdrv ATLANDI: $ARCH için Vestel sunucu programı yok"
+elif [ ! -d "$ETA_SRC/.git" ]; then
+    log "eta-touchdrv ATLANDI: kaynak yok (git clone https://github.com/pardus/eta-touchdrv.git)"
+elif ! command -v dh >/dev/null || [ ! -x /usr/bin/dh_dkms ]; then
+    log "eta-touchdrv ATLANDI: debhelper/dh-dkms yok (sudo bash setup-deps.sh)"
+else
     log "=== eta-touchdrv derleniyor ==="
-    if command -v dh >/dev/null && [ -x /usr/bin/dh_dkms ]; then
-        ETA_TMP=$(mktemp -d)
-        cp -r "$ETA_SRC" "$ETA_TMP/eta-touchdrv"
-        rm -rf "$ETA_TMP/eta-touchdrv/.git"
-        (cd "$ETA_TMP/eta-touchdrv" && dpkg-buildpackage -b -us -uc)
-        cp "$ETA_TMP"/eta-touchdrv_*_amd64.deb "$OUT/"
-        rm -rf "$ETA_TMP"
-        log "ISO'ya almak için: cp $OUT/eta-touchdrv_*_amd64.deb Buildeba/config/packages.chroot/"
-    else
-        log "eta-touchdrv ATLANDI: debhelper/dh-dkms yok (sudo bash setup-deps.sh)"
-    fi
+    ETA_BASE="$(cat "$ETA_PKG/TABAN")"
+    git -C "$ETA_SRC" cat-file -e "$ETA_BASE^{commit}" 2>/dev/null \
+        || die "eta-touchdrv: taban commit $ETA_BASE klonda yok (git -C eta-touchdrv fetch)"
+    ETA_TMP=$(mktemp -d)
+    mkdir "$ETA_TMP/eta-touchdrv"
+    git -C "$ETA_SRC" archive "$ETA_BASE" | tar -x -C "$ETA_TMP/eta-touchdrv"
+    while read -r yama; do
+        [ -n "$yama" ] || continue
+        patch -s -p1 -d "$ETA_TMP/eta-touchdrv" < "$ETA_PKG/yamalar/$yama" \
+            || die "eta-touchdrv: yama uygulanamadı: $yama"
+    done < "$ETA_PKG/yamalar/series"
+    ETA_ARCH_ARGS=()
+    [ "$ARCH" = "$HOST_ARCH" ] || ETA_ARCH_ARGS=(-a "$ARCH")
+    (cd "$ETA_TMP/eta-touchdrv" && dpkg-buildpackage -b -us -uc "${ETA_ARCH_ARGS[@]}")
+    cp "$ETA_TMP"/eta-touchdrv_*_"$ARCH".deb "$OUT/"
+    rm -rf "$ETA_TMP"
+    log "ISO'ya almak için: cp $OUT/eta-touchdrv_*_$ARCH.deb Buildeba/config/packages.chroot/"
 fi
 
 # ---------------------------------------------------------------------------
