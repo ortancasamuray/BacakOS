@@ -55,6 +55,9 @@ struct AppState {
     sort: SortKey,
     selection_mode: bool,
     in_trash_view: bool,
+    /// In the trash view, the trash record behind each row of `entries`
+    /// (same order): rows can share an original path, the record can't.
+    trash_items: Vec<trash::TrashedItem>,
     /// Last (entry index, time) tapped — used to distinguish tap from double-tap.
     last_click: Option<(usize, std::time::Instant)>,
     /// Copy/cut clipboard: the staged paths and whether paste should move them.
@@ -122,6 +125,7 @@ impl AppState {
             sort: SortKey::Name,
             selection_mode: false,
             in_trash_view: false,
+            trash_items: Vec::new(),
             last_click: None,
             clipboard: None,
             transfers: transfer::Manager::new(),
@@ -2474,27 +2478,40 @@ fn transfer_status_str(s: transfer::Status) -> &'static str {
     }
 }
 
-/// Restore the selected trashed items to their original locations.
+/// Restore the selected trashed items to their original locations. Rows are
+/// matched to their own trash record, so two items deleted from the same
+/// place can be told apart.
 fn restore_selected(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
-    let paths: Vec<PathBuf> = {
+    let items: Vec<trash::TrashedItem> = {
         let s = state.borrow();
-        s.selected.iter().filter_map(|i| s.entries.get(*i)).map(|e| e.path.clone()).collect()
+        if !s.in_trash_view {
+            return;
+        }
+        let mut rows: Vec<usize> = s.selected.iter().copied().collect();
+        rows.sort_unstable();
+        rows.iter().filter_map(|i| s.trash_items.get(*i)).cloned().collect()
     };
-    if paths.is_empty() {
+    if items.is_empty() {
         ui.set_status_text(sx(ui, "Select items to restore", "Geri yüklenecek öğeleri seçin", "Seleccione elementos para restaurar"));
         return;
     }
-    let result = trash::restore_many(&state.borrow().sandbox, &paths);
+    let result = trash::restore_items(&state.borrow().sandbox, &items);
+    // Re-list first: load_trash writes its own status line.
+    load_trash(ui, state);
     match result {
-        Ok(n) => {
+        Ok(trash::Restored { restored: n, kept: 0 }) => {
             ui.set_status_text(sx(ui, format!("Restored {n} item(s)"), format!("{n} öğe geri yüklendi"), format!("{n} elemento(s) restaurado(s)")));
-            load_trash(ui, state);
         }
+        Ok(trash::Restored { restored: n, kept }) => ui.set_status_text(sx(
+            ui,
+            format!("Restored {n} item(s); {kept} older copy(ies) of the same file stay in the Trash"),
+            format!("{n} öğe geri yüklendi; aynı yerden silinmiş {kept} eski kopya çöpte kaldı"),
+            format!("{n} elemento(s) restaurado(s); {kept} copia(s) anterior(es) siguen en la papelera"),
+        )),
         Err(e) => ui.set_status_text(sx(ui, format!("Restore failed: {e}"), format!("Geri yükleme başarısız: {e}"), format!("Error al restaurar: {e}"))),
     }
 }
 
-/// Permanently empty the trash.
 /// Ask before emptying the trash — this one cannot be undone.
 fn empty_trash(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
     ask_confirm(
@@ -2557,10 +2574,10 @@ fn confirm_cancelled(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
 fn load_trash(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
     let items = trash::list().unwrap_or_default();
     let entries: Vec<Entry> = items
-        .into_iter()
+        .iter()
         .map(|t| Entry {
             path: t.original_path.clone(),
-            name: t.name,
+            name: t.name.clone(),
             is_dir: false,
             is_symlink: false,
             size: 0,
@@ -2572,6 +2589,7 @@ fn load_trash(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
     {
         let mut s = state.borrow_mut();
         s.entries = entries;
+        s.trash_items = items;
         s.in_trash_view = true;
         s.selected.clear();
         leave_listing(&mut s);
