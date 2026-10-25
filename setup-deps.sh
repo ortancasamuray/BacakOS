@@ -77,6 +77,9 @@ apt-get install -y \
     libfontconfig1-dev \
     libgl1-mesa-dev \
     libgles-dev \
+    libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
+    libfreetype-dev libharfbuzz-dev \
+    libbz2-dev liblzma-dev zlib1g-dev \
     \
     weston dbus
 
