@@ -12,6 +12,7 @@ use crate::filesystem::Entry;
 use crate::security::Sandbox;
 
 mod index;
+pub mod recent;
 
 pub use index::Index;
 
