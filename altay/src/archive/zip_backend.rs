@@ -97,18 +97,19 @@ impl Backend for ZipBackend {
             .compression_method(zip::CompressionMethod::Deflated);
 
         let cancel = opts.cancel.as_deref();
+        let exclude = &opts.exclude;
 
         // Pre-scan the sources so progress has a real denominator. Without a
         // total, the UI percentage is meaningless (stuck at 0%). The scan is
         // metadata-only, so it's cheap next to the compression itself.
         let (files_total, bytes_total) = sources
             .iter()
-            .map(|s| scan_totals(s))
+            .map(|s| scan_totals(s, exclude))
             .fold((0u64, 0u64), |(f, b), (sf, sb)| (f + sf, b + sb));
         let mut state = Progress { bytes_done: 0, bytes_total, files_done: 0, files_total };
         for src in sources {
             let base = src.parent().unwrap_or_else(|| Path::new(""));
-            add_to_zip(&mut zip, archive, src, base, options, &mut state, on_progress, cancel)?;
+            add_to_zip(&mut zip, archive, src, base, options, exclude, &mut state, on_progress, cancel)?;
         }
         zip.finish().map_err(|e| zip_err_at(e, archive))?;
         Ok(())
@@ -141,6 +142,7 @@ fn add_to_zip(
     path: &Path,
     base: &Path,
     options: zip::write::SimpleFileOptions,
+    exclude: &super::Exclude,
     state: &mut Progress,
     on_progress: &mut dyn FnMut(Progress),
     cancel: Option<&std::sync::atomic::AtomicBool>,
@@ -157,7 +159,10 @@ fn add_to_zip(
         }
         for entry in std::fs::read_dir(path).map_err(ArchiveError::at(path))? {
             let entry = entry.map_err(ArchiveError::at(path))?;
-            add_to_zip(zip, archive, &entry.path(), base, options, state, on_progress, cancel)?;
+            if exclude.matches(&entry.file_name()) {
+                continue;
+            }
+            add_to_zip(zip, archive, &entry.path(), base, options, exclude, state, on_progress, cancel)?;
         }
     } else if !meta.is_file() && !meta.file_type().is_symlink() {
         // FIFOs, sockets and device nodes have no content to archive, and
@@ -209,7 +214,7 @@ fn is_cancelled(cancel: Option<&std::sync::atomic::AtomicBool>) -> bool {
 /// mirroring how [`add_to_zip`] traverses (directories recurse, files add
 /// their size). Used to give the progress bar a real total. Unreadable
 /// entries are skipped so a permission error never aborts the estimate.
-fn scan_totals(path: &Path) -> (u64, u64) {
+fn scan_totals(path: &Path, exclude: &super::Exclude) -> (u64, u64) {
     let Ok(meta) = std::fs::symlink_metadata(path) else {
         return (0, 0);
     };
@@ -217,8 +222,8 @@ fn scan_totals(path: &Path) -> (u64, u64) {
         let mut files = 0u64;
         let mut bytes = 0u64;
         if let Ok(rd) = std::fs::read_dir(path) {
-            for entry in rd.flatten() {
-                let (f, b) = scan_totals(&entry.path());
+            for entry in rd.flatten().filter(|e| !exclude.matches(&e.file_name())) {
+                let (f, b) = scan_totals(&entry.path(), exclude);
                 files += f;
                 bytes += b;
             }
