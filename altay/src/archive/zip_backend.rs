@@ -91,7 +91,7 @@ impl Backend for ZipBackend {
     ) -> Result<(), ArchiveError> {
         // Note: encrypted-zip *creation* is deferred — `SimpleFileOptions` requires
         // a 'static key; reading password-protected zips is fully supported.
-        let file = std::fs::File::create(archive)?;
+        let file = std::fs::File::create(archive).map_err(ArchiveError::at(archive))?;
         let mut zip = zip::ZipWriter::new(file);
         let options = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated);
@@ -108,9 +108,9 @@ impl Backend for ZipBackend {
         let mut state = Progress { bytes_done: 0, bytes_total, files_done: 0, files_total };
         for src in sources {
             let base = src.parent().unwrap_or_else(|| Path::new(""));
-            add_to_zip(&mut zip, src, base, options, &mut state, on_progress, cancel)?;
+            add_to_zip(&mut zip, archive, src, base, options, &mut state, on_progress, cancel)?;
         }
-        zip.finish().map_err(zip_err)?;
+        zip.finish().map_err(|e| zip_err_at(e, archive))?;
         Ok(())
     }
 }
@@ -134,8 +134,10 @@ fn open_entry<'a>(
 }
 
 /// Recursively add a path to the zip, storing names relative to `base`.
+#[allow(clippy::too_many_arguments)]
 fn add_to_zip(
     zip: &mut zip::ZipWriter<std::fs::File>,
+    archive: &Path,
     path: &Path,
     base: &Path,
     options: zip::write::SimpleFileOptions,
@@ -148,27 +150,39 @@ fn add_to_zip(
     }
     let rel = path.strip_prefix(base).unwrap_or(path);
     let name = rel.to_string_lossy().replace('\\', "/");
-    let meta = std::fs::symlink_metadata(path)?;
+    let meta = std::fs::symlink_metadata(path).map_err(ArchiveError::at(path))?;
     if meta.is_dir() {
         if !name.is_empty() {
-            zip.add_directory(format!("{name}/"), options).map_err(zip_err)?;
+            zip.add_directory(format!("{name}/"), options).map_err(|e| zip_err_at(e, archive))?;
         }
-        for entry in std::fs::read_dir(path)? {
-            add_to_zip(zip, &entry?.path(), base, options, state, on_progress, cancel)?;
+        for entry in std::fs::read_dir(path).map_err(ArchiveError::at(path))? {
+            let entry = entry.map_err(ArchiveError::at(path))?;
+            add_to_zip(zip, archive, &entry.path(), base, options, state, on_progress, cancel)?;
         }
+    } else if !meta.is_file() && !meta.file_type().is_symlink() {
+        // FIFOs, sockets and device nodes have no content to archive, and
+        // opening a FIFO would block until a writer appears.
+        log::info!("compress: skipping special file {}", path.display());
+        state.files_done += 1;
+        on_progress(*state);
     } else {
-        zip.start_file(name, options).map_err(zip_err)?;
-        let mut f = std::fs::File::open(path)?;
+        // Without ZIP64 the zip writer refuses entries past 4 GiB ("Large
+        // file option has not been set"). Margin for deflate overhead on
+        // incompressible data, which can grow slightly past the input size.
+        let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(meta.len());
+        let options = options.large_file(size >= LARGE_FILE_THRESHOLD);
+        zip.start_file(name, options).map_err(|e| zip_err_at(e, archive))?;
+        let mut f = std::fs::File::open(path).map_err(ArchiveError::at(path))?;
         let mut buf = [0u8; 64 * 1024];
         // Emit intermediate progress every ~8 MiB so a single large file
         // still moves the bar (on_progress otherwise only fires per file).
         let mut since_emit = 0u64;
         loop {
-            let n = f.read(&mut buf)?;
+            let n = f.read(&mut buf).map_err(ArchiveError::at(path))?;
             if n == 0 {
                 break;
             }
-            zip.write_all(&buf[..n])?;
+            zip.write_all(&buf[..n]).map_err(ArchiveError::at(archive))?;
             state.bytes_done = state.bytes_done.saturating_add(n as u64);
             since_emit += n as u64;
             if since_emit >= 8 * 1024 * 1024 {
@@ -215,6 +229,19 @@ fn scan_totals(path: &Path) -> (u64, u64) {
     }
 }
 
+/// Entries at least this large are written with ZIP64 extensions: 4 GiB less
+/// a 1/256 margin, since deflate can make incompressible data slightly larger.
+const LARGE_FILE_THRESHOLD: u64 = u32::MAX as u64 - (u32::MAX as u64 >> 8);
+
 fn zip_err(e: zip::result::ZipError) -> ArchiveError {
     ArchiveError::Backend(e.to_string())
+}
+
+/// Like [`zip_err`] for writer calls, keeping I/O errors (disk full, …) as
+/// I/O errors on the archive file instead of flattening them to text.
+fn zip_err_at(e: zip::result::ZipError, archive: &Path) -> ArchiveError {
+    match e {
+        zip::result::ZipError::Io(source) => ArchiveError::File { path: archive.to_path_buf(), source },
+        other => zip_err(other),
+    }
 }
