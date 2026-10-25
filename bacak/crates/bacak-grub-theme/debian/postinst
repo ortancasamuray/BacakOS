@@ -38,6 +38,18 @@ if [ -f "$GRUB_DEFAULT_FILE" ]; then
         echo 'GRUB_THEME="/boot/grub/themes/bacakos/theme.txt"' >> "$GRUB_DEFAULT_FILE"
     fi
 
+    # Dosya önceden varsa (ör. Debian kurulumu "quiet" ile yazmışsa) splash
+    # eksik kalır ve plymouth teması görünmez — yoksa ekle; splash ya da
+    # bilinçli nosplash varsa dokunma.
+    if grep -q '^GRUB_CMDLINE_LINUX_DEFAULT=' "$GRUB_DEFAULT_FILE"; then
+        if ! grep -Eq '^GRUB_CMDLINE_LINUX_DEFAULT=.*[" ](no)?splash[" ]' "$GRUB_DEFAULT_FILE"; then
+            sed -i -e 's/^GRUB_CMDLINE_LINUX_DEFAULT="\(.*\)"/GRUB_CMDLINE_LINUX_DEFAULT="\1 splash"/' \
+                   -e 's/^GRUB_CMDLINE_LINUX_DEFAULT=" /GRUB_CMDLINE_LINUX_DEFAULT="/' "$GRUB_DEFAULT_FILE"
+        fi
+    else
+        echo 'GRUB_CMDLINE_LINUX_DEFAULT="quiet splash"' >> "$GRUB_DEFAULT_FILE"
+    fi
+
     if command -v update-grub >/dev/null 2>&1 && [ -d /boot/grub ]; then
         update-grub || true
     fi

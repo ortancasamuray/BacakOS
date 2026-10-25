@@ -20,7 +20,7 @@ extended-description = """\
 Önyükleme menüsüne BacakOS masaüstü duvar kağıdını arka plan yapan, menü
 başlığını "Bacak OS" olarak gösteren bir GRUB teması kurar. Kurulum
 sırasında (postinst) /etc/default/grub içine GRUB_DISTRIBUTOR ve
-GRUB_THEME yazılır ve update-grub çalıştırılır."""
+GRUB_THEME yazılır, kernel satırına splash eklenir ve update-grub çalıştırılır."""
 depends = "grub-common"
 maintainer-scripts = "debian"
 assets = [
