@@ -1951,6 +1951,22 @@ fn do_compress(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
 /// read-only medium, …) in plain words plus the file involved, instead of the
 /// raw OS message.
 fn describe_archive_error(ui: &MainWindow, e: &archive::ArchiveError) -> SharedString {
+    match e {
+        archive::ArchiveError::Unsafe(p) => {
+            return SharedString::from(format!(
+                "{} ({})",
+                sx(ui, "unsafe archive entry, extraction stopped", "güvensiz arşiv öğesi, çıkarma durduruldu", "elemento inseguro, extracción detenida"),
+                p.display()
+            ))
+        }
+        archive::ArchiveError::PasswordRequired => {
+            return sx(ui, "the archive is password protected", "arşiv parola korumalı", "el archivo está protegido con contraseña")
+        }
+        archive::ArchiveError::Unsupported => {
+            return sx(ui, "unsupported archive format", "desteklenmeyen arşiv biçimi", "formato de archivo no compatible")
+        }
+        _ => {}
+    }
     let Some((io, path)) = e.io() else {
         return SharedString::from(e.to_string());
     };
@@ -1999,7 +2015,7 @@ fn extract_selected(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
         .name("extract".into())
         .spawn(move || {
             let mut ok = 0usize;
-            let mut last_err = String::new();
+            let mut last_err: Option<(String, archive::ArchiveError)> = None;
             for (idx, arc) in archives.iter().enumerate() {
                 let stem = archive_stem(arc);
                 let dest = unique_path(&dir, &stem, "");
@@ -2031,18 +2047,29 @@ fn extract_selected(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
                 );
                 match result {
                     Ok(()) => ok += 1,
-                    Err(e) => last_err = e.to_string(),
+                    Err(e) => {
+                        log::warn!("extract {} into {} failed: {e}", arc.display(), dest.display());
+                        // `dest` was a fresh, unused name: drop the half-written folder.
+                        let _ = std::fs::remove_dir_all(&dest);
+                        last_err = Some((arc_name, e));
+                    }
                 }
             }
-            let msg = if ok == total {
-                format!("{ok} arşiv çıkarıldı")
-            } else {
-                format!("{ok}/{total} çıkarıldı — {last_err}")
-            };
-            let msg = SharedString::from(msg);
             let _ = weak.upgrade_in_event_loop(move |ui| {
                 ui.set_extract_active(false);
                 ui.set_extract_fraction(0.0);
+                let msg = match &last_err {
+                    None => sx(&ui, format!("{ok} archive(s) extracted"), format!("{ok} arşiv çıkarıldı"), format!("{ok} archivo(s) extraído(s)")),
+                    Some((name, e)) => {
+                        let why = describe_archive_error(&ui, e);
+                        sx(
+                            &ui,
+                            format!("{ok}/{total} extracted — {name}: {why}"),
+                            format!("{ok}/{total} çıkarıldı — {name}: {why}"),
+                            format!("{ok}/{total} extraídos — {name}: {why}"),
+                        )
+                    }
+                };
                 ui.set_status_text(msg);
                 APP.with(|a| {
                     if let Some(state) = a.borrow().as_ref() {
@@ -2077,7 +2104,6 @@ fn archive_stem(path: &std::path::Path) -> String {
         .unwrap_or(name)
 }
 
-/// Build a non-colliding `dir/<base>.<ext>` (or `dir/<base>` if ext empty).
 /// Default archive name for the selection: a single folder keeps its name, a
 /// single file drops its extension, several items take the name of the
 /// folder they are in.
@@ -2102,6 +2128,7 @@ fn archive_file_name(input: &str) -> Option<String> {
     (name.len() > ".zip".len()).then_some(name)
 }
 
+/// Build a non-colliding `dir/<base>.<ext>` (or `dir/<base>` if ext empty).
 fn unique_path(dir: &std::path::Path, base: &str, ext: &str) -> PathBuf {
     let make = |n: u32| {
         let stem = if n == 1 { base.to_string() } else { format!("{base} {n}") };
