@@ -76,6 +76,55 @@ mod tests {
     use crate::security::AllowedRoot;
 
     #[test]
+    fn restore_latest_puts_back_only_the_newest_twin() {
+        let home = std::env::temp_dir().join(format!("altay-trash-twin-{}", std::process::id()));
+        std::fs::create_dir_all(&home).unwrap();
+        let canon = std::fs::canonicalize(&home).unwrap();
+        let file = canon.join("twin.txt");
+        let sb = Sandbox::with_roots(vec![AllowedRoot::home(canon.clone())]);
+
+        std::fs::write(&file, b"older").unwrap();
+        if move_to_trash(&sb, &file).is_err() {
+            eprintln!("skipping: no trash backend available");
+            let _ = std::fs::remove_dir_all(&home);
+            return;
+        }
+        // trashinfo deletion times have one-second resolution.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        std::fs::write(&file, b"newer").unwrap();
+        move_many_to_trash(&sb, &[file.clone()]).unwrap();
+
+        assert_eq!(restore_latest(&sb, &[file.clone()]).unwrap(), 1);
+        assert_eq!(std::fs::read(&file).unwrap(), b"newer");
+
+        // Clean up the older twin left in the trash.
+        use trash::os_limited as t;
+        let leftovers: Vec<_> = t::list().unwrap().into_iter().filter(|i| i.original_path() == file).collect();
+        assert_eq!(leftovers.len(), 1, "the older twin should still be in the trash");
+        t::purge_all(leftovers).unwrap();
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn restore_latest_matches_paths_through_symlinked_dirs() {
+        let home = std::env::temp_dir().join(format!("altay-trash-link-{}", std::process::id()));
+        std::fs::create_dir_all(home.join("real")).unwrap();
+        let canon = std::fs::canonicalize(&home).unwrap();
+        std::os::unix::fs::symlink(canon.join("real"), canon.join("via-link")).unwrap();
+        let shown = canon.join("via-link/f.txt"); // the path the listing showed
+        std::fs::write(&shown, b"x").unwrap();
+        let sb = Sandbox::with_roots(vec![AllowedRoot::home(canon.clone())]);
+        if move_many_to_trash(&sb, &[shown.clone()]).is_err() {
+            eprintln!("skipping: no trash backend available");
+            let _ = std::fs::remove_dir_all(&home);
+            return;
+        }
+        assert_eq!(restore_latest(&sb, &[shown.clone()]).unwrap(), 1);
+        assert!(canon.join("real/f.txt").exists());
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
     fn trash_then_restore_roundtrip() {
         let home = std::env::temp_dir().join(format!("altay-trash-{}", std::process::id()));
         std::fs::create_dir_all(&home).unwrap();
@@ -97,6 +146,51 @@ mod tests {
         assert!(file.exists(), "file should be back at its original path");
         assert_eq!(std::fs::read(&file).unwrap(), b"bring me back");
         let _ = std::fs::remove_dir_all(&home);
+    }
+}
+
+/// Undo a [`move_many_to_trash`]: put back, for each original path, only the
+/// most recently trashed item. An older item trashed from the same path
+/// stays in the trash (restoring both would collide).
+pub fn restore_latest(sandbox: &Sandbox, originals: &[PathBuf]) -> Result<usize, TrashError> {
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        use std::collections::HashMap;
+        use trash::os_limited as t;
+        // Trashing resolved the paths through the sandbox; compare in the
+        // same (canonical-parent) form the trash recorded them in.
+        let wanted: Vec<PathBuf> = originals
+            .iter()
+            .map(|p| sandbox.resolve_for_create(p).map(|s| s.into_path_buf()).unwrap_or_else(|_| p.clone()))
+            .collect();
+        let all = t::list().map_err(|e| TrashError::Backend(e.to_string()))?;
+        let mut newest: HashMap<PathBuf, trash::TrashItem> = HashMap::new();
+        for item in all {
+            let original = item.original_path();
+            if !wanted.contains(&original) {
+                continue;
+            }
+            match newest.get(&original) {
+                Some(seen) if seen.time_deleted >= item.time_deleted => {}
+                _ => {
+                    newest.insert(original, item);
+                }
+            }
+        }
+        for original in newest.keys() {
+            // The restore destination must lie within the sandbox.
+            sandbox.resolve_for_create(original)?;
+        }
+        let n = newest.len();
+        if n > 0 {
+            t::restore_all(newest.into_values()).map_err(|e| TrashError::Backend(e.to_string()))?;
+        }
+        Ok(n)
+    }
+    #[cfg(not(all(unix, not(target_os = "macos"))))]
+    {
+        let _ = (sandbox, originals);
+        Ok(0)
     }
 }
 

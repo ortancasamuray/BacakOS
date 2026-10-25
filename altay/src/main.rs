@@ -88,6 +88,11 @@ struct AppState {
     /// Bumped on every view rebuild, so a background count started for an
     /// older view is dropped instead of being patched into the current one.
     view_gen: Arc<AtomicU64>,
+    /// Paths of the last trash action, while it can still be undone.
+    undo_trash: Option<Vec<PathBuf>>,
+    /// Bumped with each new undoable action so an older expiry timer leaves
+    /// a newer undo alone.
+    undo_gen: u64,
 }
 
 /// A destructive action that runs only after the user confirms it.
@@ -126,6 +131,8 @@ impl AppState {
             pending_confirm: None,
             child_counts: HashMap::new(),
             view_gen: Arc::new(AtomicU64::new(0)),
+            undo_trash: None,
+            undo_gen: 0,
         }
     }
 }
@@ -508,6 +515,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ctx_handler!(on_key_rename, key_rename);
     ctx_handler!(on_confirm_accepted, confirm_accepted);
     ctx_handler!(on_do_compress, do_compress);
+    ctx_handler!(on_undo_action, undo_trash);
     ctx_handler!(on_confirm_cancelled, confirm_cancelled);
     {
         let ui_w = ui.as_weak();
@@ -1779,9 +1787,57 @@ fn do_trash(ui: &MainWindow, state: &Rc<RefCell<AppState>>, paths: Vec<PathBuf>)
     match trashed {
         Ok(()) => {
             ui.set_status_text(sx(ui, format!("Moved {} to Trash", paths.len()), format!("{} öğe çöpe taşındı", paths.len()), format!("{} movido(s) a la papelera", paths.len())));
+            offer_undo(ui, state, paths);
             reload(ui, state);
         }
         Err(e) => ui.set_status_text(sx(ui, format!("Trash failed: {e}"), format!("Çöpe atma başarısız: {e}"), format!("Error al enviar a la papelera: {e}"))),
+    }
+}
+
+/// How long the "Undo" button stays after a trash action.
+const UNDO_FOR: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// Show "Undo" for the trash action that just moved `paths`.
+fn offer_undo(ui: &MainWindow, state: &Rc<RefCell<AppState>>, paths: Vec<PathBuf>) {
+    let gen = {
+        let mut s = state.borrow_mut();
+        s.undo_gen += 1;
+        s.undo_trash = Some(paths);
+        s.undo_gen
+    };
+    ui.set_undo_label(sx(ui, "Undo", "Geri al", "Deshacer"));
+    let weak = ui.as_weak();
+    slint::Timer::single_shot(UNDO_FOR, move || {
+        let Some(ui) = weak.upgrade() else { return };
+        APP.with(|a| {
+            if let Some(state) = a.borrow().as_ref() {
+                if state.borrow().undo_gen == gen {
+                    clear_undo(&ui, state);
+                }
+            }
+        });
+    });
+}
+
+fn clear_undo(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
+    state.borrow_mut().undo_trash = None;
+    ui.set_undo_label(SharedString::new());
+}
+
+/// Put the last trashed items back where they were (button or Ctrl+Z).
+fn undo_trash(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
+    let Some(paths) = state.borrow_mut().undo_trash.take() else { return };
+    clear_undo(ui, state);
+    let restored = trash::restore_latest(&state.borrow().sandbox, &paths);
+    match restored {
+        Ok(n) => ui.set_status_text(sx(ui, format!("Restored {n} item(s)"), format!("{n} öğe geri yüklendi"), format!("{n} elemento(s) restaurado(s)"))),
+        Err(e) => ui.set_status_text(sx(ui, format!("Undo failed: {e}"), format!("Geri alma başarısız: {e}"), format!("Error al deshacer: {e}"))),
+    }
+    let listing = state.borrow().listing;
+    if listing {
+        let status = ui.get_status_text();
+        reload(ui, state);
+        ui.set_status_text(status);
     }
 }
 
@@ -2345,6 +2401,8 @@ fn empty_trash(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
 fn do_empty_trash(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
     match trash::empty() {
         Ok(()) => {
+            // The trashed items are gone for good: nothing left to undo.
+            clear_undo(ui, state);
             ui.set_status_text(sx(ui, "Trash emptied", "Çöp boşaltıldı", "Papelera vaciada"));
             load_trash(ui, state);
         }

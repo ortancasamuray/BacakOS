@@ -860,6 +860,9 @@ export component MainWindow inherits Window {
     property <length> nav-tile-h: 132px * self.grid-scale + 8px;
     in-out property <bool> has-clipboard: false;
     in property <string> status-text;
+    // Shown next to the status line right after a trash action; empty hides it.
+    in property <string> undo-label;
+    callback undo-action();
     in-out property <string> search-text;
     in-out property <bool> search-in-content: false;
     in property <[VolumeModel]> volumes;
@@ -995,6 +998,7 @@ export component MainWindow inherits Window {
     forward-focus: key-scope;
     key-scope := FocusScope {
         key-pressed(e) => {
+            if (e.modifiers.control && (e.text == "z" || e.text == "Z") && root.undo-label != "") { root.undo-action(); return EventResult.accept; }
             if (e.text == Key.Delete && !in-trash) { root.trash-selected(); return EventResult.accept; }
             if (e.text == Key.F11) { root.toggle-fullscreen(); return EventResult.accept; }
             if (e.text == Key.Backspace) { root.go-up(); return EventResult.accept; }
@@ -1766,6 +1770,11 @@ export component MainWindow inherits Window {
                         vertical-alignment: center;
                         horizontal-alignment: center;
                         horizontal-stretch: 1;
+                    }
+
+                    if root.undo-label != "" && !root.extract-active && !root.compress-active : Button {
+                        text: root.undo-label;
+                        clicked => { root.undo-action(); }
                     }
 
                     HorizontalLayout {
