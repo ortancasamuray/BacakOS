@@ -61,6 +61,7 @@ setup_arch() {
     esac
     OUT="$DIST/$arch"
     mkdir -p "$OUT"
+    unset LD
     if [ "$arch" = "$HOST_ARCH" ]; then
         TARGET_ARGS=()
         return
@@ -78,6 +79,11 @@ setup_arch() {
     export "PKG_CONFIG_SYSROOT_DIR_$t=/"
     export "BINDGEN_EXTRA_CLANG_ARGS_$t=--target=$gnu"
     export PKG_CONFIG_ALLOW_CROSS=1
+
+    # mupdf-sys make'e CC/CXX geçirir ama LD'yi geçirmez; gömülü fontları
+    # `$(LD) -r -b binary` ile nesneye çevirirken make'in varsayılanı olan ana
+    # makine ld'si x86_64 nesne üretir ve hedef bağlayıcı bunları reddeder.
+    export LD="$gnu-ld"
 
     # ffmpeg-sys-next sürüm/özellik denetimini ana makine gcc'siyle derleyip
     # çalıştırır; pkg-config'in -I/usr/include/<üçlü>'sü oraya glibc'nin hedef
