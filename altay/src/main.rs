@@ -1431,7 +1431,8 @@ fn fill_preview(ui: &MainWindow, state: &Rc<RefCell<AppState>>, entry: &Entry) {
     };
     ui.set_preview_needs_elevation(false);
     set_preview_meta(ui, entry, None);
-    refresh_preview_perms(ui, state, &entry.path);
+    ui.set_preview_can_chmod(false);
+    ui.set_preview_perms(SharedString::new());
     ui.set_preview_is_image(false);
     ui.set_preview_text(loading_text(ui));
     let entry = entry.clone();
@@ -1440,7 +1441,12 @@ fn fill_preview(ui: &MainWindow, state: &Rc<RefCell<AppState>>, entry: &Entry) {
         .name("preview".into())
         .spawn(move || {
             let count = entry.is_dir.then(|| filesystem::child_count(&entry.path));
+            let perms = permissions::read(&sandbox, &entry.path);
             let content = preview::load(&sandbox, &entry);
+            let pixels = match &content {
+                Ok(preview::Content::Image(path)) => decode_preview_image(path),
+                _ => None,
+            };
             let _ = weak.upgrade_in_event_loop(move |ui| {
                 APP.with(|a| {
                     if let Some(state) = a.borrow().as_ref() {
@@ -1451,7 +1457,8 @@ fn fill_preview(ui: &MainWindow, state: &Rc<RefCell<AppState>>, entry: &Entry) {
                         }
                         drop(s);
                         set_preview_meta(&ui, &entry, count);
-                        show_preview_content(&ui, content);
+                        show_preview_perms(&ui, perms);
+                        show_preview_content(&ui, content, pixels);
                     }
                 });
             });
@@ -1470,9 +1477,33 @@ fn set_preview_meta(ui: &MainWindow, entry: &Entry, count: Option<usize>) {
     ui.set_preview_meta(SharedString::from(format!("{meta_size}\n{meta_date}")));
 }
 
-fn show_preview_content(ui: &MainWindow, content: Result<preview::Content, preview::PreviewError>) {
-    match content {
-        Ok(preview::Content::Image(path)) => {
+/// Longest side the preview pane ever needs; larger images are scaled down
+/// while decoding.
+const PREVIEW_MAX_SIDE: u32 = 1024;
+
+/// Decode an image for the pane, off the UI thread: when no thumbnail could
+/// be made this is the original file, possibly tens of megapixels. `None` for
+/// what the `image` crate can't read (e.g. SVG), which Slint then loads itself.
+fn decode_preview_image(path: &std::path::Path) -> Option<slint::SharedPixelBuffer<slint::Rgba8Pixel>> {
+    let mut img = image::open(path).ok()?;
+    if img.width() > PREVIEW_MAX_SIDE || img.height() > PREVIEW_MAX_SIDE {
+        img = img.thumbnail(PREVIEW_MAX_SIDE, PREVIEW_MAX_SIDE);
+    }
+    let rgba = img.into_rgba8();
+    Some(slint::SharedPixelBuffer::clone_from_slice(rgba.as_raw(), rgba.width(), rgba.height()))
+}
+
+fn show_preview_content(
+    ui: &MainWindow,
+    content: Result<preview::Content, preview::PreviewError>,
+    pixels: Option<slint::SharedPixelBuffer<slint::Rgba8Pixel>>,
+) {
+    match (content, pixels) {
+        (Ok(preview::Content::Image(_)), Some(pixels)) => {
+            ui.set_preview_image(slint::Image::from_rgba8(pixels));
+            ui.set_preview_is_image(true);
+        }
+        (Ok(preview::Content::Image(path)), None) => {
             match slint::Image::load_from_path(&path) {
                 Ok(img) => {
                     ui.set_preview_image(img);
@@ -1484,15 +1515,15 @@ fn show_preview_content(ui: &MainWindow, content: Result<preview::Content, previ
                 }
             }
         }
-        Ok(preview::Content::Text(text)) => {
+        (Ok(preview::Content::Text(text)), _) => {
             ui.set_preview_is_image(false);
             ui.set_preview_text(SharedString::from(text));
         }
-        Ok(preview::Content::Info(info)) => {
+        (Ok(preview::Content::Info(info)), _) => {
             ui.set_preview_is_image(false);
             ui.set_preview_text(SharedString::from(info));
         }
-        Err(e) => {
+        (Err(e), _) => {
             ui.set_preview_is_image(false);
             ui.set_preview_text(SharedString::from(format!("No preview: {e}")));
         }
@@ -1541,7 +1572,12 @@ fn clear_preview(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
 
 /// Refresh the preview pane's permission line for `path`.
 fn refresh_preview_perms(ui: &MainWindow, state: &Rc<RefCell<AppState>>, path: &PathBuf) {
-    match permissions::read(&state.borrow().sandbox, path) {
+    let perms = permissions::read(&state.borrow().sandbox, path);
+    show_preview_perms(ui, perms);
+}
+
+fn show_preview_perms(ui: &MainWindow, perms: Result<permissions::Permissions, permissions::PermError>) {
+    match perms {
         Ok(p) => {
             ui.set_preview_can_chmod(true);
             ui.set_preview_perms(SharedString::from(format!("{} ({:o})", p.symbolic(), p.mode)));
