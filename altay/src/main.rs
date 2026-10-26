@@ -72,6 +72,9 @@ struct AppState {
     /// (mtime, size) of the previewed entry when it was loaded, to notice a
     /// change on disk and reload the pane.
     preview_stamp: Option<(Option<SystemTime>, u64)>,
+    /// Bumped by each preview load; its content is read off the UI thread
+    /// and only shown if no newer load came after it (see [`fill_preview`]).
+    preview_req: u64,
     /// A chmod that was refused for lack of ownership, awaiting elevation.
     pending_chmod: Option<(PathBuf, u32)>,
     /// File currently shown in the "Open With" dialog.
@@ -144,6 +147,7 @@ impl AppState {
             index: None,
             preview_path: None,
             preview_stamp: None,
+            preview_req: 0,
             pending_chmod: None,
             open_with_path: None,
             archive_path: None,
@@ -1319,28 +1323,64 @@ fn update_preview(ui: &MainWindow, state: &Rc<RefCell<AppState>>, idx: usize) {
     ui.set_show_preview(true);
 }
 
-/// Load `entry` into the preview pane (without opening the pane).
+/// Load `entry` into the preview pane (without opening the pane). Name, date
+/// and permissions show at once; a folder's item count and the content
+/// (which may read a whole folder tree, render a PDF page or a video frame)
+/// are read off the UI thread, so a tap never freezes the window — and a
+/// second tap still lands in time to count as a double tap.
 fn fill_preview(ui: &MainWindow, state: &Rc<RefCell<AppState>>, entry: &Entry) {
     ui.set_preview_title(SharedString::from(entry.name.clone()));
     // Remember the previewed path and refresh its permission display.
-    {
+    let (req, sandbox) = {
         let mut s = state.borrow_mut();
         s.preview_path = Some(entry.path.clone());
         s.preview_stamp = Some((entry.modified, entry.size));
         s.pending_chmod = None;
-    }
+        s.preview_req += 1;
+        (s.preview_req, s.sandbox.clone())
+    };
     ui.set_preview_needs_elevation(false);
-    // Meta bilgisi: boyut + değiştirilme tarihi
-    let meta_size = if entry.is_dir {
-        let n = filesystem::child_count(&entry.path);
-        sx(ui, format!("{n} items"), format!("{n} öğe"), format!("{n} elementos")).to_string()
-    } else {
-        humansize::format_size(entry.size, humansize::DECIMAL)
+    set_preview_meta(ui, entry, None);
+    refresh_preview_perms(ui, state, &entry.path);
+    ui.set_preview_is_image(false);
+    ui.set_preview_text(loading_text(ui));
+    let entry = entry.clone();
+    let weak = ui.as_weak();
+    std::thread::Builder::new()
+        .name("preview".into())
+        .spawn(move || {
+            let count = entry.is_dir.then(|| filesystem::child_count(&entry.path));
+            let content = preview::load(&sandbox, &entry);
+            let _ = weak.upgrade_in_event_loop(move |ui| {
+                APP.with(|a| {
+                    if let Some(state) = a.borrow().as_ref() {
+                        let s = state.borrow();
+                        // Superseded by another preview, or the pane was cleared.
+                        if s.preview_req != req || s.preview_path.as_ref() != Some(&entry.path) {
+                            return;
+                        }
+                        drop(s);
+                        set_preview_meta(&ui, &entry, count);
+                        show_preview_content(&ui, content);
+                    }
+                });
+            });
+        })
+        .ok();
+}
+
+/// The pane's size line (a folder's item count once known) and date.
+fn set_preview_meta(ui: &MainWindow, entry: &Entry, count: Option<usize>) {
+    let meta_size = match (entry.is_dir, count) {
+        (true, Some(n)) => sx(ui, format!("{n} items"), format!("{n} öğe"), format!("{n} elementos")).to_string(),
+        (true, None) => "…".to_string(),
+        (false, _) => humansize::format_size(entry.size, humansize::DECIMAL),
     };
     let meta_date = format_time(entry.modified);
     ui.set_preview_meta(SharedString::from(format!("{meta_size}\n{meta_date}")));
-    refresh_preview_perms(ui, state, &entry.path);
-    let content = preview::load(&state.borrow().sandbox, entry);
+}
+
+fn show_preview_content(ui: &MainWindow, content: Result<preview::Content, preview::PreviewError>) {
     match content {
         Ok(preview::Content::Image(path)) => {
             match slint::Image::load_from_path(&path) {
