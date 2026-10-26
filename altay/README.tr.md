@@ -55,23 +55,26 @@ make deb                        # eşdeğeri: build-deb.sh --lint
 ```
 
 Paket, linklenen kütüphaneleri otomatik, dlopen edilen Wayland/GL
-kütüphanelerini ise **Depends** olarak bildirir; isteğe bağlı yardımcı araçlar
-(gvfs, udisks2, polkit, portal, poppler, ffmpeg, anahtarlık, wl-clipboard)
-**Recommends/Suggests** altındadır. Bir man sayfası (`altay(1)`) ve changelog
+kütüphanelerini ise **Depends** olarak bildirir; aygıtlar, ağ paylaşımları ve
+uygulamalar arası kopyalamanın dayandığı hizmetler (udisks2, gvfs,
+gvfs-backends, wl-clipboard) de **Depends** altındadır. İsteğe bağlı yardımcı
+araçlar (polkit, portal, poppler, ffmpeg, anahtarlık) **Recommends/Suggests**
+altındadır. Bir man sayfası (`altay(1)`) ve changelog
 içerir ve **lintian-temizdir**.
 
-## İsteğe bağlı çalışma-zamanı yardımcıları
+## Çalışma-zamanı yardımcıları
 
-Yardımcı yoksa ilgili özellik zarifçe devre dışı kalır:
+Yardımcı yoksa ilgili özellik zarifçe devre dışı kalır (*Depends* olarak
+işaretlenenler paketle birlikte kurulur):
 
 | Özellik | Gerektirir |
 |---|---|
 | PDF önizleme | `poppler-utils` (pdftoppm/pdftocairo) veya `ghostscript` |
 | Video küçük resimleri | `ffmpegthumbnailer` veya `ffmpeg` |
-| Ağ bağlamaları | `gvfs` (`gio`) |
+| Ağ bağlamaları | `gvfs` (`gio`) ve `gvfs-backends` — *Depends* |
 | İzin yükseltme | `pkexec` (PolicyKit) |
-| Uygulamalar arası dosya kopyalama | `wl-clipboard` (veya `xclip`) |
-| Aygıt bağla/ayır, hotplug | `udisks2` |
+| Uygulamalar arası dosya kopyalama | `wl-clipboard` (veya `xclip`) — *Depends* |
+| Aygıt bağla/ayır, hotplug | `udisks2` — *Depends* |
 | Kayıtlı ağ parolaları | bir Secret Service anahtarlığı |
 | İçe aktarma (dosya seçici) | `xdg-desktop-portal` |
 
