@@ -116,6 +116,8 @@ struct AppState {
     /// view came after it (see [`navigate`]).
     nav_req: u64,
     nav_done: u64,
+    /// URIs of network shares being mounted (see [`mount_in_background`]).
+    mounting: HashSet<String>,
 }
 
 /// A destructive action that runs only after the user confirms it.
@@ -165,6 +167,7 @@ impl AppState {
             recent_req: 0,
             nav_req: 0,
             nav_done: 0,
+            mounting: HashSet::new(),
         }
     }
 }
@@ -910,9 +913,8 @@ fn mount_uri(ui: &MainWindow, state: &Rc<RefCell<AppState>>, uri: &str) {
         ui.set_status_text(sx(ui, format!("Invalid network URI: {uri}"), format!("Geçersiz ağ adresi: {uri}"), format!("URI de red no válida: {uri}")));
         return;
     };
-    ui.set_status_text(sx(ui, format!("Connecting to {}…", conn.host), format!("{} sunucusuna bağlanılıyor…", conn.host), format!("Conectando a {}…", conn.host)));
-    let secret = network::load_secret(&conn.uri());
-    match network::mount(&conn, secret.as_deref()) {
+    let key = conn.uri();
+    mount_in_background(ui, state, conn, Secret::Keyring(key), |ui, state, conn, result| match result {
         Ok(local) => {
             persist_connection(&conn);
             reload_roots(ui);
@@ -920,7 +922,61 @@ fn mount_uri(ui: &MainWindow, state: &Rc<RefCell<AppState>>, uri: &str) {
             navigate(ui, state, &local.to_string_lossy());
         }
         Err(_) => open_connect_prefilled(ui, &conn.uri(), conn.username.as_deref()),
+    });
+}
+
+/// Where [`mount_in_background`] gets the password.
+enum Secret {
+    /// The keyring entry under this key, if any.
+    Keyring(String),
+    /// Typed in the connect dialog; stored in the keyring on success if `save`.
+    Typed { password: String, save: bool },
+}
+
+/// Mount `conn` off the UI thread — `gio mount` waits for the server (many
+/// seconds for an unreachable host) and the keyring can block on an unlock
+/// prompt — then call `done` on the UI thread. A second request for a share
+/// already being mounted is ignored: gio would fail it as "already mounted".
+fn mount_in_background(
+    ui: &MainWindow,
+    state: &Rc<RefCell<AppState>>,
+    conn: network::Connection,
+    secret: Secret,
+    done: impl FnOnce(&MainWindow, &Rc<RefCell<AppState>>, network::Connection, Result<PathBuf, network::NetworkError>) + Send + 'static,
+) {
+    let uri = conn.uri();
+    if !state.borrow_mut().mounting.insert(uri.clone()) {
+        return;
     }
+    ui.set_status_text(sx(ui, format!("Connecting to {}…", conn.host), format!("{} sunucusuna bağlanılıyor…", conn.host), format!("Conectando a {}…", conn.host)));
+    let weak = ui.as_weak();
+    std::thread::Builder::new()
+        .name("net-mount".into())
+        .spawn(move || {
+            let result = match &secret {
+                Secret::Keyring(key) => network::mount(&conn, network::load_secret(key).as_deref()),
+                Secret::Typed { password, save } => {
+                    let pw = (!password.is_empty()).then_some(password.as_str());
+                    let result = network::mount(&conn, pw);
+                    if result.is_ok() && *save && !password.is_empty() {
+                        network::store_secret(&conn.uri(), password);
+                    }
+                    result
+                }
+            };
+            let _ = weak.upgrade_in_event_loop(move |ui| {
+                APP.with(|a| {
+                    if let Some(state) = a.borrow().as_ref() {
+                        state.borrow_mut().mounting.remove(&uri);
+                        if result.is_err() {
+                            ui.set_status_text(SharedString::new()); // drop "Connecting…"
+                        }
+                        done(&ui, state, conn, result);
+                    }
+                });
+            });
+        })
+        .ok();
 }
 
 /// Import files chosen through the file-chooser portal into the current folder.
@@ -1230,12 +1286,9 @@ fn do_connect(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
     if !user.is_empty() {
         conn.username = Some(user);
     }
-    let pw = if password.is_empty() { None } else { Some(password.as_str()) };
-    match network::mount(&conn, pw) {
+    ui.set_connect_error(SharedString::new());
+    mount_in_background(ui, state, conn, Secret::Typed { password, save }, |ui, state, conn, result| match result {
         Ok(local) => {
-            if save && !password.is_empty() {
-                network::store_secret(&conn.uri(), &password);
-            }
             persist_connection(&conn);
             ui.set_connect_password(SharedString::from(""));
             ui.set_show_connect(false);
@@ -1244,21 +1297,20 @@ fn do_connect(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
             navigate(ui, state, &local.to_string_lossy());
         }
         Err(e) => ui.set_connect_error(SharedString::from(format!("{e}"))),
-    }
+    });
 }
 
 /// Mount a saved connection, using its keyring password if present.
 fn open_connection(ui: &MainWindow, state: &Rc<RefCell<AppState>>, uri: &str) {
     let Some(conn) = network::Connection::from_uri(uri) else { return };
-    let secret = network::load_secret(uri);
-    ui.set_status_text(sx(ui, format!("Connecting to {}…", conn.host), format!("{} sunucusuna bağlanılıyor…", conn.host), format!("Conectando a {}…", conn.host)));
-    match network::mount(&conn, secret.as_deref()) {
+    let uri = uri.to_string();
+    mount_in_background(ui, state, conn, Secret::Keyring(uri.clone()), move |ui, state, conn, result| match result {
         Ok(local) => {
             reload_roots(ui);
             navigate(ui, state, &local.to_string_lossy());
         }
-        Err(_) => open_connect_prefilled(ui, uri, conn.username.as_deref()),
-    }
+        Err(_) => open_connect_prefilled(ui, &uri, conn.username.as_deref()),
+    });
 }
 
 /// Save a successfully-mounted connection to the config (deduplicated by URI).
