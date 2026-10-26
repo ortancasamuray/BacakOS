@@ -108,6 +108,11 @@ struct AppState {
     /// Bumped each time the Recent view is requested; a background scan
     /// only fills the view if it is still the latest request.
     recent_req: u64,
+    /// Latest folder navigation, and the latest one entered: its path is
+    /// checked off the UI thread and only applied if no other navigation or
+    /// view came after it (see [`navigate`]).
+    nav_req: u64,
+    nav_done: u64,
 }
 
 /// A destructive action that runs only after the user confirms it.
@@ -154,6 +159,8 @@ impl AppState {
             undo_trash: None,
             undo_gen: 0,
             recent_req: 0,
+            nav_req: 0,
+            nav_done: 0,
         }
     }
 }
@@ -817,6 +824,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 // ---- Controller actions -----------------------------------------------------
 
 fn navigate(ui: &MainWindow, state: &Rc<RefCell<AppState>>, target: &str) {
+    let req = {
+        let mut s = state.borrow_mut();
+        s.nav_req += 1;
+        s.nav_req
+    };
     if target == "trash://" {
         load_trash(ui, state);
         return;
@@ -828,8 +840,49 @@ fn navigate(ui: &MainWindow, state: &Rc<RefCell<AppState>>, target: &str) {
             return;
         }
     }
-    let sandbox_result = state.borrow().sandbox.resolve(target);
-    match sandbox_result {
+    // Resolving canonicalises the path, which stats every component: on a
+    // stalled network mount or a sleeping USB disk that alone can hang, so
+    // it runs off the UI thread like the listing itself.
+    let sandbox = state.borrow().sandbox.clone();
+    let target = target.to_string();
+    let weak = ui.as_weak();
+    std::thread::Builder::new()
+        .name("resolve-dir".into())
+        .spawn(move || {
+            let result = sandbox.resolve(&target);
+            let _ = weak.upgrade_in_event_loop(move |ui| {
+                APP.with(|a| {
+                    if let Some(state) = a.borrow().as_ref() {
+                        if state.borrow().nav_req == req {
+                            enter_dir(&ui, state, result);
+                        }
+                    }
+                });
+            });
+        })
+        .ok();
+    let weak = ui.as_weak();
+    slint::Timer::single_shot(std::time::Duration::from_millis(200), move || {
+        let Some(ui) = weak.upgrade() else { return };
+        APP.with(|a| {
+            if let Some(state) = a.borrow().as_ref() {
+                let s = state.borrow();
+                // Still resolving: neither entered nor superseded yet.
+                if s.nav_req == req && s.nav_done != req {
+                    ui.set_status_text(loading_text(&ui));
+                }
+            }
+        });
+    });
+}
+
+/// Show a folder [`navigate`] resolved, or why it can't be opened.
+fn enter_dir(ui: &MainWindow, state: &Rc<RefCell<AppState>>, result: Result<security::SafePath, security::AccessDenied>) {
+    {
+        let mut s = state.borrow_mut();
+        s.nav_done = s.nav_req;
+    }
+    match result {
         Ok(safe) => {
             {
                 let mut s = state.borrow_mut();
@@ -1720,6 +1773,7 @@ fn leave_listing(s: &mut AppState) {
     s.listing = false;
     s.recent_req += 1;
     s.list_req += 1;
+    s.nav_req += 1;
     if let Some(w) = s.dir_watch.as_mut() {
         w.clear();
     }
