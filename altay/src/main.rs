@@ -930,7 +930,7 @@ fn mount_uri(ui: &MainWindow, state: &Rc<RefCell<AppState>>, uri: &str) {
             sync_connections(ui);
             reload_roots_then(ui, move |ui, state| navigate(ui, state, &local.to_string_lossy()));
         }
-        Err(_) => open_connect_prefilled(ui, &conn.uri(), conn.username.as_deref()),
+        Err(e) => open_connect_prefilled(ui, &conn.uri(), conn.username.as_deref(), &e),
     });
 }
 
@@ -1300,15 +1300,40 @@ fn open_connect_dialog(ui: &MainWindow) {
     ui.set_show_connect(true);
 }
 
-/// Open the connect dialog prefilled for a known share (e.g. saved connection
-/// whose stored password failed or is missing).
-fn open_connect_prefilled(ui: &MainWindow, uri: &str, user: Option<&str>) {
+/// Open the connect dialog prefilled for a known share whose mount failed
+/// (stored password wrong or missing, server unreachable, …), saying why.
+fn open_connect_prefilled(ui: &MainWindow, uri: &str, user: Option<&str>, err: &network::NetworkError) {
     ui.set_connect_address(SharedString::from(uri));
     ui.set_connect_user(SharedString::from(user.unwrap_or_default()));
     ui.set_connect_password(SharedString::from(""));
-    ui.set_connect_error(SharedString::from("Password required"));
+    ui.set_connect_error(network_error_text(ui, err));
     ui.set_connect_save(true);
     ui.set_show_connect(true);
+}
+
+/// A failed mount, in the UI language. gio's own message (in the system
+/// language) says what went wrong: bad password, unreachable host, …
+fn network_error_text(ui: &MainWindow, err: &network::NetworkError) -> SharedString {
+    match err {
+        network::NetworkError::BackendUnavailable => sx(
+            ui,
+            "Network shares need gvfs (the gio tool is missing)",
+            "Ağ paylaşımları için gvfs gerekli (gio aracı yok)",
+            "Los recursos de red necesitan gvfs (falta la herramienta gio)",
+        ),
+        network::NetworkError::MountFailed(why) if why.is_empty() => {
+            sx(ui, "Could not connect", "Bağlanılamadı", "No se pudo conectar")
+        }
+        network::NetworkError::MountFailed(why) => {
+            sx(ui, format!("Could not connect: {why}"), format!("Bağlanılamadı: {why}"), format!("No se pudo conectar: {why}"))
+        }
+        network::NetworkError::PathNotFound => sx(
+            ui,
+            "The share was mounted but its folder could not be found",
+            "Paylaşım bağlandı ama klasörü bulunamadı",
+            "El recurso se montó pero no se encontró su carpeta",
+        ),
+    }
 }
 
 /// Attempt to connect using the dialog's fields, saving the password to the
@@ -1320,7 +1345,12 @@ fn do_connect(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
     let save = ui.get_connect_save();
 
     let Some(mut conn) = network::Connection::from_uri(&address) else {
-        ui.set_connect_error(SharedString::from("Invalid address — use smb://host/share"));
+        ui.set_connect_error(sx(
+            ui,
+            "Invalid address — use smb://host/share",
+            "Geçersiz adres — smb://sunucu/paylaşım biçiminde yazın",
+            "Dirección no válida — use smb://servidor/recurso",
+        ));
         return;
     };
     if !user.is_empty() {
@@ -1335,7 +1365,7 @@ fn do_connect(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
             sync_connections(ui);
             reload_roots_then(ui, move |ui, state| navigate(ui, state, &local.to_string_lossy()));
         }
-        Err(e) => ui.set_connect_error(SharedString::from(format!("{e}"))),
+        Err(e) => ui.set_connect_error(network_error_text(ui, &e)),
     });
 }
 
@@ -1347,7 +1377,7 @@ fn open_connection(ui: &MainWindow, state: &Rc<RefCell<AppState>>, uri: &str) {
         Ok(local) => {
             reload_roots_then(ui, move |ui, state| navigate(ui, state, &local.to_string_lossy()));
         }
-        Err(_) => open_connect_prefilled(ui, &uri, conn.username.as_deref()),
+        Err(e) => open_connect_prefilled(ui, &uri, conn.username.as_deref(), &e),
     });
 }
 

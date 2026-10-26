@@ -156,10 +156,20 @@ pub fn mount(conn: &Connection, password: Option<&str>) -> Result<PathBuf, Netwo
     let output = child.wait_with_output().map_err(|e| NetworkError::MountFailed(e.to_string()))?;
     if !output.status.success() {
         let err = String::from_utf8_lossy(&output.stderr);
-        return Err(NetworkError::MountFailed(err.trim().to_string()));
+        return Err(NetworkError::MountFailed(gio_reason(err.trim()).to_string()));
     }
 
     locate_mount(conn).ok_or(NetworkError::PathNotFound)
+}
+
+/// The reason in gio's "gio: <uri>: <reason>" — the dialog already shows the
+/// address, and gio rewrites it (e.g. adds a trailing slash).
+fn gio_reason(stderr: &str) -> &str {
+    stderr
+        .strip_prefix("gio: ")
+        .and_then(|rest| rest.split_once(": "))
+        .filter(|(uri, _)| uri.contains("://"))
+        .map_or(stderr, |(_, reason)| reason)
 }
 
 // ---- System keyring (Secret Service) ---------------------------------------
@@ -208,6 +218,13 @@ fn locate_mount(conn: &Connection) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gio_reason_drops_the_address() {
+        assert_eq!(gio_reason("gio: smb://10.0.0.1/pay/: Failed to mount Windows share: Connection timed out"), "Failed to mount Windows share: Connection timed out");
+        assert_eq!(gio_reason("gio: sftp://127.0.0.1:2/: Connection refused by server"), "Connection refused by server");
+        assert_eq!(gio_reason("something else"), "something else");
+    }
 
     #[test]
     fn parse_sftp_uri() {
