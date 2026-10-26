@@ -1,50 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Anadolu Panteri <bilgi@anadolupanteri.org.tr>
 
-//! Desktop integration: launching files in their default application and
-//! revealing the active D-Bus portal environment.
-//!
-//! Files are opened with `xdg-open`, which routes through
-//! `xdg-desktop-portal` on Wayland — so Altay never needs to know MIME
-//! handlers itself, and sandboxed/Flatpak deployments work unchanged. Every
-//! path is sandbox-validated before launch.
-
-use std::path::Path;
-
-use crate::security::{AccessDenied, Sandbox};
+//! Desktop integration: file exchange with other applications through the
+//! system clipboard, and the portal file chooser. (Opening files in their
+//! application lives in the `exo` module.)
 
 #[derive(Debug, thiserror::Error)]
 pub enum DesktopError {
-    #[error(transparent)]
-    Denied(#[from] AccessDenied),
     #[error("could not launch handler: {0}")]
     Launch(String),
-}
-
-/// Open a path in the user's default application via `xdg-open`. Returns once
-/// the helper has been spawned (it detaches and runs independently).
-pub fn open(sandbox: &Sandbox, path: impl AsRef<Path>) -> Result<(), DesktopError> {
-    let safe = sandbox.resolve(path)?;
-    spawn("xdg-open", safe.as_path())
-}
-
-/// Open the folder containing a path (used for "reveal" actions).
-pub fn open_folder(sandbox: &Sandbox, path: impl AsRef<Path>) -> Result<(), DesktopError> {
-    let safe = sandbox.resolve(path)?;
-    let dir = safe.as_path().parent().unwrap_or(safe.as_path());
-    spawn("xdg-open", dir)
-}
-
-fn spawn(program: &str, arg: &Path) -> Result<(), DesktopError> {
-    use std::process::{Command, Stdio};
-    Command::new(program)
-        .arg(arg)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| DesktopError::Launch(format!("{program}: {e}")))
 }
 
 // ---- Cross-application file exchange via the system clipboard ---------------
@@ -185,7 +149,6 @@ fn read_clipboard(mime: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::security::AllowedRoot;
 
     #[test]
     fn file_uri_roundtrip_with_spaces() {
@@ -209,15 +172,5 @@ mod tests {
         let (paths, cut) = parse_gnome_payload("file:///tmp/x\nfile:///tmp/y");
         assert!(!cut);
         assert_eq!(paths.len(), 2);
-    }
-
-    #[test]
-    fn open_outside_sandbox_is_denied() {
-        // A home-only sandbox must refuse to launch /etc/passwd.
-        let home = std::env::temp_dir().join(format!("altay-desk-{}", std::process::id()));
-        std::fs::create_dir_all(&home).unwrap();
-        let sb = Sandbox::with_roots(vec![AllowedRoot::home(std::fs::canonicalize(&home).unwrap())]);
-        assert!(matches!(open(&sb, "/etc/passwd"), Err(DesktopError::Denied(_))));
-        let _ = std::fs::remove_dir_all(&home);
     }
 }

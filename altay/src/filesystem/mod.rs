@@ -7,12 +7,12 @@
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::security::{AccessDenied, SafePath, Sandbox};
+use crate::security::{AccessDenied, Sandbox};
 
 mod ops;
 pub mod watch;
 
-pub use ops::{OperationError, Progress};
+pub use ops::Progress;
 
 /// One row in a directory listing.
 #[derive(Debug, Clone)]
@@ -171,14 +171,7 @@ pub enum ListError {
 }
 
 // Re-export the validated operations.
-pub use ops::{
-    copy, create_dir, create_file, duplicate, move_to, rename, validate_pair, validate_target,
-};
-
-/// Validate a single path for an operation that mutates it (delete/rename).
-pub fn require(sandbox: &Sandbox, path: impl AsRef<Path>) -> Result<SafePath, AccessDenied> {
-    sandbox.resolve(path)
-}
+pub use ops::{create_dir, rename, validate_pair};
 
 #[cfg(test)]
 mod tests {

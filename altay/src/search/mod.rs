@@ -5,7 +5,7 @@
 //! extension, size and date filters, constrained to a sandbox root. A
 //! persistent inverted index (and optional content search) is a later phase.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::SystemTime;
 
 use crate::filesystem::Entry;
@@ -16,26 +16,17 @@ pub mod recent;
 
 pub use index::Index;
 
-/// Coarse file categories used by the filter chips in the UI.
+/// Coarse file categories for the home-wide category views. Only Archives
+/// needs one: the other sidebar categories are XDG directories.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Category {
-    Documents,
-    Images,
-    Videos,
-    Audio,
     Archives,
-    Applications,
 }
 
 impl Category {
     pub fn matches_ext(self, ext: &str) -> bool {
         let set: &[&str] = match self {
-            Category::Documents => &["pdf", "doc", "docx", "odt", "txt", "md", "rtf", "xls", "xlsx", "ods", "ppt", "pptx", "csv"],
-            Category::Images => &["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "tiff", "heic", "avif", "ico"],
-            Category::Videos => &["mp4", "mkv", "webm", "mov", "avi", "flv", "wmv", "m4v", "mpg", "mpeg"],
-            Category::Audio => &["mp3", "flac", "wav", "ogg", "m4a", "aac", "opus", "wma"],
             Category::Archives => &["zip", "zipx", "7z", "rar", "tar", "gz", "tgz", "bz2", "tbz2", "xz", "txz", "zst", "lzma", "cab", "ar", "cpio", "iso", "wim", "deb", "rpm"],
-            Category::Applications => &["appimage", "desktop", "sh", "run", "bin", "jar"],
         };
         set.contains(&ext)
     }

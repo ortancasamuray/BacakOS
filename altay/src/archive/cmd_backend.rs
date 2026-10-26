@@ -73,33 +73,29 @@ fn parse_7z_list(raw: &str) -> Vec<Member> {
     let mut out = Vec::new();
     let mut path: Option<PathBuf> = None;
     let mut size: u64 = 0;
-    let mut compressed: u64 = 0;
     let mut is_dir = false;
-    let mut encrypted = false;
 
     for line in raw.lines() {
         let line = line.trim();
         if line.is_empty() {
             if let Some(p) = path.take() {
-                out.push(Member { path: p, is_dir, size, compressed_size: compressed, encrypted });
+                out.push(Member { path: p, is_dir, size });
             }
-            size = 0; compressed = 0; is_dir = false; encrypted = false;
+            size = 0; is_dir = false;
             continue;
         }
         if let Some((key, val)) = line.split_once(" = ") {
             match key.trim() {
                 "Path"       => path = Some(PathBuf::from(val.trim())),
                 "Size"       => size = val.trim().parse().unwrap_or(0),
-                "Packed Size"=> compressed = val.trim().parse().unwrap_or(0),
                 "Attributes" => is_dir = val.contains('D'),
-                "Encrypted"  => encrypted = val.trim() == "+",
                 _ => {}
             }
         }
     }
     // flush last block
     if let Some(p) = path {
-        out.push(Member { path: p, is_dir, size, compressed_size: compressed, encrypted });
+        out.push(Member { path: p, is_dir, size });
     }
     out
 }

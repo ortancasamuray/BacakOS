@@ -390,51 +390,6 @@ component CategoryRow inherits Rectangle {
     }
 }
 
-// 2-column category tile used in the sidebar grid
-component CategoryTile inherits Rectangle {
-    in property <string> label;
-    in property <image> icon;
-    in property <color> icon-color;
-    in property <bool> active;
-    callback clicked();
-    horizontal-stretch: 1;
-    height: 72px;
-    border-radius: 12px;
-    background: active ? icon-color.with-alpha(0.18)
-        : (ta.has-hover ? Theme.surface-hi : icon-color.with-alpha(0.08));
-    border-width: active ? 1.5px : 0px;
-    border-color: icon-color.with-alpha(0.5);
-    animate background { duration: 100ms; }
-    ta := TouchArea { clicked => { root.clicked(); } }
-    VerticalLayout {
-        alignment: center;
-        spacing: 6px;
-        Rectangle {
-            width: 34px;
-            height: 34px;
-            border-radius: 9px;
-            background: root.icon-color;
-            x: (parent.width - self.width) / 2;
-            Image {
-                source: root.icon;
-                colorize: white;
-                width: 20px;
-                height: 20px;
-            }
-        }
-        Text {
-            text: root.label;
-            color: root.active ? root.icon-color : Theme.text;
-            font-size: 11px;
-            font-weight: root.active ? 700 : 500;
-            horizontal-alignment: center;
-            overflow: elide;
-            padding-left: 4px;
-            padding-right: 4px;
-        }
-    }
-}
-
 // ---- Grid tile --------------------------------------------------------------
 
 component GridTile inherits Rectangle {
@@ -793,40 +748,6 @@ component BottomActionButton inherits Rectangle {
             horizontal-alignment: center;
             color: !root.enabled ? Theme.text-dim : root.highlighted ? Theme.accent : Theme.text;
             overflow: elide;
-        }
-    }
-}
-
-// ---- Column sort header -----------------------------------------------------
-
-component ColHeader inherits Rectangle {
-    in property <string> label;
-    in property <string> col-key;
-    in property <string> sort-col;
-    in property <bool> sort-asc;
-    callback clicked();
-    height: 34px;
-    background: ta.has-hover ? Theme.surface-hi : transparent;
-    animate background { duration: 80ms; }
-    ta := TouchArea { clicked => { root.clicked(); } }
-    HorizontalLayout {
-        padding-left: 4px;
-        padding-right: 4px;
-        spacing: 3px;
-        alignment: start;
-        Text {
-            text: root.label;
-            color: root.col-key == root.sort-col ? Theme.accent : Theme.text-dim;
-            font-size: 12px;
-            font-weight: root.col-key == root.sort-col ? 700 : 400;
-            vertical-alignment: center;
-        }
-        if root.col-key == root.sort-col : Image {
-            source: root.sort-asc ? Icons.up : Icons.down;
-            colorize: Theme.accent;
-            width: 12px;
-            height: 12px;
-            y: (parent.height - self.height) / 2;
         }
     }
 }

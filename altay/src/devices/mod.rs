@@ -1,18 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Anadolu Panteri <bilgi@anadolupanteri.org.tr>
 
-//! Removable & external device discovery and hotplug.
-//!
-//! Phase 1 enumerates mounted removable/external volumes from the same places
-//! the sandbox trusts (`/media/$USER`, `/run/media/$USER`, `/mnt`). Live
-//! hotplug notifications and mount/unmount actions via udisks2 over D-Bus
-//! (zbus) arrive in a later phase; the [`Device`] model and [`watch`] hook are
-//! defined now so the UI can be wired up.
+//! Removable & external devices through udisks2 over D-Bus (zbus): volume
+//! discovery, mount/unmount and hotplug notifications.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-
-use crate::security::{AllowedRoot, RootKind, Sandbox};
 
 // ---- UDisks2 D-Bus proxies (typed; avoids manual zvariant parsing) ----------
 
@@ -36,8 +29,6 @@ trait Block {
     fn id_label(&self) -> zbus::Result<String>;
     #[zbus(property)]
     fn hint_system(&self) -> zbus::Result<bool>;
-    #[zbus(property)]
-    fn read_only(&self) -> zbus::Result<bool>;
 }
 
 /// A udisks2-managed filesystem volume (mounted or not).
@@ -46,7 +37,6 @@ pub struct Volume {
     pub object_path: String,
     pub label: String,
     pub mount_point: Option<PathBuf>,
-    pub read_only: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -110,7 +100,6 @@ async fn enumerate() -> zbus::Result<Vec<Volume>> {
                 object_path: path.as_str().to_string(),
                 label,
                 mount_point,
-                read_only: block.read_only().await.unwrap_or(false),
             })
         })
     });
@@ -157,55 +146,6 @@ fn bytes_to_path(b: &[u8]) -> PathBuf {
 
 fn object_basename(path: &str) -> String {
     path.rsplit('/').next().unwrap_or(path).to_string()
-}
-
-/// A mounted, user-accessible storage device.
-#[derive(Debug, Clone)]
-pub struct Device {
-    pub label: String,
-    pub mount_point: PathBuf,
-    pub kind: DeviceKind,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DeviceKind {
-    UsbDrive,
-    SdCard,
-    ExternalDisk,
-    Network,
-}
-
-/// Enumerate currently-mounted removable/network roots from the sandbox.
-pub fn list(sandbox: &Sandbox) -> Vec<Device> {
-    sandbox
-        .roots()
-        .iter()
-        .filter(|r| !r.is_home())
-        .map(device_from_root)
-        .collect()
-}
-
-fn device_from_root(root: &AllowedRoot) -> Device {
-    let kind = match root.kind() {
-        RootKind::Network => DeviceKind::Network,
-        _ => guess_kind(root.label()),
-    };
-    Device {
-        label: root.label().to_string(),
-        mount_point: root.path().to_path_buf(),
-        kind,
-    }
-}
-
-fn guess_kind(label: &str) -> DeviceKind {
-    let l = label.to_lowercase();
-    if l.contains("sd") || l.contains("card") {
-        DeviceKind::SdCard
-    } else if l.contains("usb") {
-        DeviceKind::UsbDrive
-    } else {
-        DeviceKind::ExternalDisk
-    }
 }
 
 /// Subscribe to udisks2 hotplug events on the system bus. `on_change` is

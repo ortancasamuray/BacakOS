@@ -58,7 +58,7 @@ impl Protocol {
 }
 
 /// A saved network connection. Passwords are never stored here — they live in
-/// the system keyring, referenced by `keyring_ref`.
+/// the system keyring, keyed by the connection's URI.
 #[derive(Debug, Clone)]
 pub struct Connection {
     pub name: String,
@@ -67,7 +67,6 @@ pub struct Connection {
     pub port: Option<u16>,
     pub share: Option<String>,
     pub username: Option<String>,
-    pub keyring_ref: Option<String>,
 }
 
 impl Connection {
@@ -95,7 +94,6 @@ impl Connection {
             port,
             share,
             username: userinfo,
-            keyring_ref: None,
         })
     }
 
@@ -164,22 +162,6 @@ pub fn mount(conn: &Connection, password: Option<&str>) -> Result<PathBuf, Netwo
     locate_mount(conn).ok_or(NetworkError::PathNotFound)
 }
 
-/// Unmount a previously-mounted gvfs location.
-pub fn unmount(local_path: &std::path::Path) -> Result<(), NetworkError> {
-    use std::process::Command;
-    let status = Command::new("gio")
-        .arg("mount")
-        .arg("-u")
-        .arg(local_path)
-        .status()
-        .map_err(|_| NetworkError::BackendUnavailable)?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(NetworkError::MountFailed("gio mount -u returned non-zero".into()))
-    }
-}
-
 // ---- System keyring (Secret Service) ---------------------------------------
 //
 // Passwords are never written to the config file; they live in the desktop
@@ -200,13 +182,6 @@ pub fn store_secret(key: &str, password: &str) -> bool {
 /// Load a previously-saved password for a connection, if present.
 pub fn load_secret(key: &str) -> Option<String> {
     keyring::Entry::new(KEYRING_SERVICE, key).ok()?.get_password().ok()
-}
-
-/// Forget a saved password.
-pub fn forget_secret(key: &str) {
-    if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, key) {
-        let _ = entry.delete_credential();
-    }
 }
 
 /// Find the local gvfs directory for a freshly-mounted connection by matching
@@ -267,7 +242,6 @@ mod tests {
             port: None,
             share: Some("media".into()),
             username: Some("guest".into()),
-            keyring_ref: None,
         };
         assert_eq!(c.uri(), "smb://guest@192.168.1.10/media");
     }

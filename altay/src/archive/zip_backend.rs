@@ -36,8 +36,6 @@ impl Backend for ZipBackend {
                 path: PathBuf::from(&name),
                 is_dir: entry.is_dir(),
                 size: entry.size(),
-                compressed_size: entry.compressed_size(),
-                encrypted: entry.encrypted(),
             });
             on_progress(i + 1, total);
         }

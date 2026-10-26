@@ -67,12 +67,6 @@ pub fn text_preview(sandbox: &Sandbox, path: impl AsRef<Path>) -> Result<String,
     Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
-/// Resolve an image file to a sandbox-checked path the UI can load directly.
-pub fn image_path(sandbox: &Sandbox, path: impl AsRef<Path>) -> Result<std::path::PathBuf, PreviewError> {
-    let safe = sandbox.resolve(path)?;
-    Ok(safe.into_path_buf())
-}
-
 /// The content the preview pane should display for an entry.
 #[derive(Debug, Clone)]
 pub enum Content {

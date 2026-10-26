@@ -339,7 +339,7 @@ fn is_hidden(path: &Path) -> bool {
 //   [u32 path_len][path bytes][u64 size][i64 mtime_secs][u8 flags]
 // flags: bit0 = is_dir, bit1 = is_symlink. mtime_secs 0 == unknown.
 
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, UNIX_EPOCH};
 
 fn cache_file(root: &Path) -> Option<PathBuf> {
     let dir = dirs::cache_dir()?.join("altay");

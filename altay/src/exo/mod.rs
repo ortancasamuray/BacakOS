@@ -68,6 +68,7 @@ impl From<bacak_sdk::Uygulama> for AppEntry {
 
 /// Parse a desktop-entry file's text into an [`AppEntry`]. Pure; testable.
 /// Only the `[Desktop Entry]` group is read; `Name` is localised.
+#[cfg(test)]
 pub fn parse_entry(id: &str, text: &str) -> Option<AppEntry> {
     bacak_sdk::masaustu::parse(id, text, Path::new(id)).map(AppEntry::from)
 }
@@ -78,17 +79,6 @@ pub fn parse_entry(id: &str, text: &str) -> Option<AppEntry> {
 /// SDK, misses included.
 pub fn icon_path(app: &AppEntry) -> Option<PathBuf> {
     bacak_sdk::simge::bul(&app.icon, 48)
-}
-
-/// Look up a desktop entry by id (or window class) across the application
-/// directories.
-pub fn app_by_id(id: &str) -> Option<AppEntry> {
-    bacak_sdk::masaustu::uygulama(id).map(AppEntry::from)
-}
-
-/// All visible applications, de-duplicated by id (user entries win).
-pub fn all_apps() -> Vec<AppEntry> {
-    bacak_sdk::masaustu::uygulamalar().into_iter().map(AppEntry::from).collect()
 }
 
 // ---- MIME / defaults --------------------------------------------------------
@@ -144,6 +134,7 @@ pub fn open_with(sandbox: &Sandbox, path: impl AsRef<Path>, app_id: &str) -> Res
 /// Expand a desktop `Exec=` line for a single file, returning (program, args).
 /// Quoted arguments stay whole; `%f %F %u %U` become the file, other field
 /// codes are dropped. Pure; testable.
+#[cfg(test)]
 pub fn expand_exec(exec: &str, file: &Path) -> Option<(String, Vec<String>)> {
     let mut argv = bacak_sdk::masaustu::exec_argv(exec, &[file]).into_iter();
     let prog = argv.next()?;
