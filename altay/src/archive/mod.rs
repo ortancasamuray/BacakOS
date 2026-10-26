@@ -553,6 +553,21 @@ mod tests {
     }
 
     #[test]
+    fn sevenz_keeps_symlinks() {
+        let d = workdir("7z-links");
+        let archive = d.join("links.7z");
+        crafted_7z(&archive, &[("src/a.txt", None), ("src/link", Some("a.txt"))]);
+        let out = d.join("out");
+        let mut noop = |_: Progress| {};
+        backend_for(Format::SevenZ).unwrap().extract(&archive, &out, &Options::default(), &mut noop).unwrap();
+        assert_eq!(fs::read_link(out.join("src/link")).unwrap(), Path::new("a.txt"));
+        assert_eq!(fs::read(out.join("src/link")).unwrap(), b"pwned");
+        let mtime = fs::metadata(out.join("src/a.txt")).unwrap().modified().unwrap();
+        assert_eq!(mtime, std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000));
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
     fn zip_keeps_symlinks() {
         let d = workdir("zip-links");
         std::os::unix::fs::symlink("a.txt", d.join("src/link-to-file")).unwrap();
@@ -630,30 +645,91 @@ mod tests {
         b.finish().unwrap();
     }
 
-    /// Writing through, or on top of, a symlink from the same archive must be
-    /// refused, leaving everything outside the destination untouched.
+    /// A 7z archive the way p7zip/7-Zip store unix entries: the mode in the
+    /// high half of the attributes, a link's target as its content.
+    fn crafted_7z(path: &Path, entries: &[(&str, Option<&str>)]) {
+        let mut w = sevenz_rust::SevenZWriter::create(path).unwrap();
+        for (name, link) in entries {
+            let mode: u32 = if link.is_some() { 0o120777 } else { 0o100644 };
+            let mut entry = sevenz_rust::SevenZArchiveEntry::new();
+            entry.name = name.to_string();
+            entry.has_stream = true;
+            entry.has_windows_attributes = true;
+            entry.windows_attributes = 0x8000 | (mode << 16);
+            entry.has_last_modified_date = true;
+            entry.last_modified_date = (std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000)).try_into().unwrap();
+            let content = link.unwrap_or("pwned").as_bytes();
+            w.push_archive_entry(entry, Some(content)).unwrap();
+        }
+        w.finish().unwrap();
+    }
+
+    /// A cpio (newc) archive, extracted through the `7z` command.
+    fn crafted_cpio(path: &Path, entries: &[(&str, Option<&str>)]) {
+        let mut out = Vec::new();
+        let trailer = [("TRAILER!!!", None)];
+        for (ino, (name, link)) in entries.iter().chain(trailer.iter()).enumerate() {
+            let (mode, data): (u32, &[u8]) = match link {
+                Some(t) => (0o120777, t.as_bytes()),
+                None if *name == "TRAILER!!!" => (0, b""),
+                None => (0o100644, b"pwned"),
+            };
+            let fields = [ino as u32 + 1, mode, 0, 0, 1, 0, data.len() as u32, 0, 0, 0, 0, name.len() as u32 + 1, 0];
+            out.extend_from_slice(b"070701");
+            for f in fields {
+                out.extend_from_slice(format!("{f:08X}").as_bytes());
+            }
+            out.extend_from_slice(name.as_bytes());
+            out.push(0);
+            out.resize(out.len().next_multiple_of(4), 0);
+            out.extend_from_slice(data);
+            out.resize(out.len().next_multiple_of(4), 0);
+        }
+        fs::write(path, out).unwrap();
+    }
+
+    fn has_7z_command() -> bool {
+        std::process::Command::new("7z").arg("i").output().is_ok()
+    }
+
+    /// Writing through, or on top of, a symlink from the same archive, or
+    /// outside the destination by name, must be refused, leaving everything
+    /// outside the destination untouched.
     #[test]
     fn extraction_never_writes_through_symlinks() {
-        for fmt in ["zip", "tar"] {
+        for fmt in ["zip", "tar", "7z", "cpio"] {
+            if fmt == "cpio" && !has_7z_command() {
+                eprintln!("skipping cpio: no 7z command");
+                continue;
+            }
             let d = workdir(&format!("evil-{fmt}"));
             let outside = d.join("outside");
             fs::create_dir_all(&outside).unwrap();
             let victim = d.join("victim.txt");
             fs::write(&victim, b"original").unwrap();
-            let cases: [(&str, Vec<(&str, Option<&str>)>); 2] = [
+            let mut cases: Vec<(&str, Vec<(&str, Option<&str>)>)> = vec![
                 ("dir", vec![("d", Some(outside.to_str().unwrap())), ("d/evil", None)]),
                 // The zip writer refuses duplicate names, but "./x" is the
                 // same member once normalised — the same trick a crafted
                 // archive would use.
                 ("file", vec![("x", Some(victim.to_str().unwrap())), (if fmt == "zip" { "./x" } else { "x" }, None)]),
             ];
+            // The tar writer refuses `..` names itself.
+            if fmt != "tar" {
+                cases.push(("name", vec![("../outside/evil", None)]));
+            }
             for (case, entries) in cases {
                 let archive = d.join(format!("{case}.{fmt}"));
-                if fmt == "zip" { crafted_zip(&archive, &entries) } else { crafted_tar(&archive, &entries) }
+                match fmt {
+                    "zip" => crafted_zip(&archive, &entries),
+                    "tar" => crafted_tar(&archive, &entries),
+                    "7z" => crafted_7z(&archive, &entries),
+                    _ => crafted_cpio(&archive, &entries),
+                }
                 let out = d.join(format!("out-{case}"));
                 fs::create_dir_all(&out).unwrap();
                 let mut noop = |_: Progress| {};
-                let format = if fmt == "zip" { Format::Zip } else { Format::Tar };
+                let format = Format::detect(&archive).unwrap();
                 let err = backend_for(format).unwrap().extract(&archive, &out, &Options::default(), &mut noop).unwrap_err();
                 assert!(matches!(err, ArchiveError::Unsafe(_)), "{fmt}/{case}: {err}");
             }
@@ -876,7 +952,7 @@ pub(crate) fn create_member_dir(dest: &Path, out_path: &Path) -> Result<(), Arch
 
 /// Copy a member's content, attributing a failure to the side it came from:
 /// reading the archive (corrupt data) or writing the output (disk full, …).
-pub(crate) fn copy_member(src: &mut impl std::io::Read, dst: &mut std::fs::File, archive: &Path, out: &Path) -> Result<u64, ArchiveError> {
+pub(crate) fn copy_member(src: &mut (impl std::io::Read + ?Sized), dst: &mut std::fs::File, archive: &Path, out: &Path) -> Result<u64, ArchiveError> {
     let mut buf = [0u8; 64 * 1024];
     let mut total = 0u64;
     loop {
@@ -887,6 +963,42 @@ pub(crate) fn copy_member(src: &mut impl std::io::Read, dst: &mut std::fs::File,
         std::io::Write::write_all(dst, &buf[..n]).map_err(ArchiveError::at(out))?;
         total += n as u64;
     }
+}
+
+/// Prepare `out_path` for a backend that writes the member itself (UnRAR):
+/// the same checks as [`create_member_file`] / [`create_member_symlink`].
+pub(crate) fn prepare_member_path(dest: &Path, out_path: &Path, is_symlink: bool) -> Result<(), ArchiveError> {
+    prepare_parent(dest, out_path)?;
+    match std::fs::symlink_metadata(out_path) {
+        Ok(m) if m.file_type().is_symlink() || is_symlink => Err(ArchiveError::Unsafe(out_path.to_path_buf())),
+        _ => Ok(()),
+    }
+}
+
+/// Apply the rules above to an archive's listing up front, for a tool that
+/// writes the members itself (the `7z` command). Each item is a member name
+/// and whether it is a link (symbolic or hard). Refuses a member that escapes
+/// `dest`, lies below a link member, or shares its path with one.
+pub(crate) fn check_listing(dest: &Path, members: &[(PathBuf, bool)]) -> Result<(), ArchiveError> {
+    let mut joined = Vec::with_capacity(members.len());
+    let mut links = std::collections::HashSet::new();
+    for (name, is_link) in members {
+        let out = safe_join(dest, name)?;
+        check_ancestors(dest, &out)?;
+        if *is_link {
+            links.insert(out.clone());
+        }
+        joined.push(out);
+    }
+    let mut seen = std::collections::HashSet::new();
+    for out in joined {
+        let below_link = out.ancestors().skip(1).take_while(|a| *a != dest).any(|a| links.contains(a));
+        let shares_link = !seen.insert(out.clone()) && links.contains(&out);
+        if below_link || shares_link || std::fs::symlink_metadata(&out).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err(ArchiveError::Unsafe(out));
+        }
+    }
+    Ok(())
 }
 
 /// Recreate a symbolic link member pointing at `target` (stored verbatim).

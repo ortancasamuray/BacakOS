@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use crate::filesystem::Progress;
 
-use super::{ArchiveError, Backend, Member, Options};
+use super::{create_member_dir, prepare_member_path, safe_join, ArchiveError, Backend, Member, Options};
 
 pub struct RarBackend;
 
@@ -46,10 +46,15 @@ impl Backend for RarBackend {
             let entry = header.entry();
             let is_dir = entry.is_directory();
             let size = entry.unpacked_size;
+            // UnRAR writes the member itself, so pick its exact path here
+            // (`extract_with_base` would join the stored name as it is).
+            let out_path = safe_join(into, &entry.filename)?;
             open = if is_dir {
+                create_member_dir(into, &out_path)?;
                 header.skip().map_err(rar_err)?
             } else {
-                let next = header.extract_with_base(into).map_err(rar_err)?;
+                prepare_member_path(into, &out_path, is_symlink(entry))?;
+                let next = header.extract_to(&out_path).map_err(rar_err)?;
                 state.bytes_done = state.bytes_done.saturating_add(size);
                 state.files_done += 1;
                 on_progress(state);
@@ -68,6 +73,17 @@ impl Backend for RarBackend {
     ) -> Result<(), ArchiveError> {
         Err(ArchiveError::Unsupported) // RAR creation is proprietary / unsupported
     }
+}
+
+/// Whether a member may be a symbolic link: unix mode bits for archives made
+/// on Unix, the reparse-point attribute for Windows ones. The header doesn't
+/// say which, so this errs towards a link; a false match only refuses a
+/// member whose path is already taken.
+fn is_symlink(entry: &unrar::FileHeader) -> bool {
+    const S_IFMT: u32 = 0o170000;
+    const S_IFLNK: u32 = 0o120000;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    entry.file_attr & S_IFMT == S_IFLNK || entry.file_attr & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
 
 fn rar_err(e: unrar::error::UnrarError) -> ArchiveError {
