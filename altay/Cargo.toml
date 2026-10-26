@@ -98,9 +98,12 @@ device mounting, gvfs network shares, previews, indexed + content search."""
 # `$auto` resolves directly-linked libs (libc, libstdc++ from unrar, bz2, lzma,
 # dbus, fontconfig, freetype). The windowing/GPU libs are dlopen-ed by winit at
 # runtime, so they aren't auto-detected and are listed explicitly.
-depends = "$auto, libwayland-client0, libwayland-cursor0, libwayland-egl1, libxkbcommon0, libegl1, libgl1, p7zip-full"
+# Devices (udisks2), network shares (gvfs, with its smb/sftp/ftp backends) and
+# file exchange with other apps (wl-clipboard) are core features, so their
+# services are hard dependencies too.
+depends = "$auto, libwayland-client0, libwayland-cursor0, libwayland-egl1, libxkbcommon0, libegl1, libgl1, p7zip-full, udisks2, gvfs, gvfs-backends, wl-clipboard"
 # Optional runtime helpers — the app degrades gracefully without them.
-recommends = "gvfs, udisks2, polkitd | policykit-1, xdg-desktop-portal, poppler-utils, wl-clipboard"
+recommends = "polkitd | policykit-1, xdg-desktop-portal, poppler-utils"
 suggests = "ffmpeg | ffmpegthumbnailer, ghostscript, gnome-keyring"
 assets = [
     ["target/release/altay", "usr/bin/", "755"],

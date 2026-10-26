@@ -49,22 +49,25 @@ make deb                        # equivalent to: build-deb.sh --lint
 ```
 
 The package declares its linked libraries automatically plus the dlopen-ed
-Wayland/GL libs as **Depends**, and the optional helper tools (gvfs, udisks2,
-polkit, portal, poppler, ffmpeg, keyring, wl-clipboard) as **Recommends/Suggests**.
+Wayland/GL libs as **Depends**, together with the services behind devices,
+network shares and cross-app copy (udisks2, gvfs, gvfs-backends, wl-clipboard);
+the optional helper tools (polkit, portal, poppler, ffmpeg, keyring) are
+**Recommends/Suggests**.
 It ships a man page (`altay(1)`) and a changelog, and is **lintian-clean**.
 
-## Optional runtime helpers
+## Runtime helpers
 
-Features degrade gracefully when their helper is missing:
+Features degrade gracefully when their helper is missing (those marked
+*Depends* are installed with the package):
 
 | Feature | Needs |
 |---|---|
 | PDF preview | `poppler-utils` (pdftoppm/pdftocairo) or `ghostscript` |
 | Video thumbnails | `ffmpegthumbnailer` or `ffmpeg` |
-| Network mounts | `gvfs` (`gio`) |
+| Network mounts | `gvfs` (`gio`) and `gvfs-backends` — *Depends* |
 | Permission elevation | `pkexec` (PolicyKit) |
-| Cross-app file copy | `wl-clipboard` (or `xclip`) |
-| Device mount/unmount, hotplug | `udisks2` |
+| Cross-app file copy | `wl-clipboard` (or `xclip`) — *Depends* |
+| Device mount/unmount, hotplug | `udisks2` — *Depends* |
 | Saved network passwords | a Secret Service keyring |
 | Import (file chooser) | `xdg-desktop-portal` |
 
