@@ -1921,14 +1921,32 @@ fn live_reload(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
         let keep: HashSet<PathBuf> = s.selected.iter().filter_map(|i| s.entries.get(*i)).map(|e| e.path.clone()).collect();
         (s.current.clone(), keep)
     };
-    if !dir.is_dir() {
-        if let Some(up) = dir.ancestors().skip(1).find(|p| p.is_dir()) {
-            navigate(ui, state, &up.to_string_lossy());
-        }
-        return;
-    }
-    log::debug!("live refresh: {}", dir.display());
-    request_listing(ui, state, keep, false);
+    // Checking the folder (and, if it is gone, its ancestors) stats them,
+    // which can hang on a stalled mount: done off the UI thread, like the
+    // listing itself, and dropped if the user moved on meanwhile.
+    let weak = ui.as_weak();
+    std::thread::Builder::new()
+        .name("live-reload".into())
+        .spawn(move || {
+            let gone = (!dir.is_dir()).then(|| dir.ancestors().skip(1).find(|p| p.is_dir()).map(PathBuf::from));
+            let _ = weak.upgrade_in_event_loop(move |ui| {
+                APP.with(|a| {
+                    let Some(state) = a.borrow().clone() else { return };
+                    if !state.borrow().listing || state.borrow().current != dir {
+                        return;
+                    }
+                    match gone {
+                        None => {
+                            log::debug!("live refresh: {}", dir.display());
+                            request_listing(&ui, &state, keep, false);
+                        }
+                        Some(Some(up)) => navigate(&ui, &state, &up.to_string_lossy()),
+                        Some(None) => {}
+                    }
+                });
+            });
+        })
+        .ok();
 }
 
 fn run_search(ui: &MainWindow, state: &Rc<RefCell<AppState>>, term: &str) {
