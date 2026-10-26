@@ -120,6 +120,11 @@ struct AppState {
     /// mounted or ejected (see [`mount_in_background`],
     /// [`volume_in_background`]).
     mounting: HashSet<String>,
+    /// A roots scan is running; what to call when it is applied, and the
+    /// requests that came in meanwhile (see [`reload_roots_then`]).
+    roots_busy: bool,
+    roots_done: Vec<RootsDone>,
+    roots_next: Option<Vec<RootsDone>>,
 }
 
 /// A destructive action that runs only after the user confirms it.
@@ -170,6 +175,9 @@ impl AppState {
             nav_req: 0,
             nav_done: 0,
             mounting: HashSet::new(),
+            roots_busy: false,
+            roots_done: Vec::new(),
+            roots_next: None,
         }
     }
 }
@@ -218,16 +226,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let lang = if cfg.prefs.lang.is_empty() { detect_locale() } else { cfg.prefs.lang.clone() };
     apply_language(&ui, &lang);
     ui.set_lang(SharedString::from(lang));
-    populate_roots(&ui, &state.borrow());
     sync_connections(&ui);
 
-    // Defer the blocking udisks2 D-Bus call so the window appears immediately.
-    // volumes are populated ~150 ms after startup instead of blocking main thread.
+    // Sidebar storage rows and volumes: scanned off the UI thread (see
+    // `reload_roots`), once the event loop runs.
     {
         let weak = ui.as_weak();
         slint::Timer::single_shot(std::time::Duration::from_millis(150), move || {
             if let Some(ui) = weak.upgrade() {
-                sync_volumes(&ui);
+                reload_roots(&ui);
             }
         });
     }
@@ -641,10 +648,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(ui) = ui_w.upgrade() {
                 let obj = obj.to_string();
                 ui.set_status_text(sx(&ui, "Mounting…", "Bağlanıyor…", "Montando…"));
-                volume_in_background(&ui, &st, obj.clone(), move || devices::mount(&obj), |ui, state, result| match result {
+                volume_in_background(&ui, &st, obj.clone(), move || devices::mount(&obj), |ui, _, result| match result {
                     Ok(mp) => {
-                        reload_roots(ui); // sandbox now trusts the new mount point
-                        navigate(ui, state, &mp.to_string_lossy());
+                        // Navigate once the sandbox trusts the new mount point.
+                        reload_roots_then(ui, move |ui, state| navigate(ui, state, &mp.to_string_lossy()));
                     }
                     Err(e) => ui.set_status_text(sx(ui, format!("Mount failed: {e}"), format!("Bağlama başarısız: {e}"), format!("Error al montar: {e}"))),
                 });
@@ -660,8 +667,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ui.set_status_text(sx(&ui, "Ejecting…", "Çıkarılıyor…", "Expulsando…"));
                 volume_in_background(&ui, &st, obj.clone(), move || devices::unmount(&obj), |ui, _, result| match result {
                     Ok(()) => {
-                        reload_roots(ui);
                         ui.set_status_text(sx(ui, "Ejected", "Çıkarıldı", "Expulsado"));
+                        reload_roots(ui);
                     }
                     Err(e) => ui.set_status_text(sx(ui, format!("Eject failed: {e}"), format!("Çıkarma başarısız: {e}"), format!("Error al expulsar: {e}"))),
                 });
@@ -920,12 +927,11 @@ fn mount_uri(ui: &MainWindow, state: &Rc<RefCell<AppState>>, uri: &str) {
         return;
     };
     let key = conn.uri();
-    mount_in_background(ui, state, conn, Secret::Keyring(key), |ui, state, conn, result| match result {
+    mount_in_background(ui, state, conn, Secret::Keyring(key), |ui, _, conn, result| match result {
         Ok(local) => {
             persist_connection(&conn);
-            reload_roots(ui);
             sync_connections(ui);
-            navigate(ui, state, &local.to_string_lossy());
+            reload_roots_then(ui, move |ui, state| navigate(ui, state, &local.to_string_lossy()));
         }
         Err(_) => open_connect_prefilled(ui, &conn.uri(), conn.username.as_deref()),
     });
@@ -1324,14 +1330,13 @@ fn do_connect(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
         conn.username = Some(user);
     }
     ui.set_connect_error(SharedString::new());
-    mount_in_background(ui, state, conn, Secret::Typed { password, save }, |ui, state, conn, result| match result {
+    mount_in_background(ui, state, conn, Secret::Typed { password, save }, |ui, _, conn, result| match result {
         Ok(local) => {
             persist_connection(&conn);
             ui.set_connect_password(SharedString::from(""));
             ui.set_show_connect(false);
-            reload_roots(ui);
             sync_connections(ui);
-            navigate(ui, state, &local.to_string_lossy());
+            reload_roots_then(ui, move |ui, state| navigate(ui, state, &local.to_string_lossy()));
         }
         Err(e) => ui.set_connect_error(SharedString::from(format!("{e}"))),
     });
@@ -1341,10 +1346,9 @@ fn do_connect(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
 fn open_connection(ui: &MainWindow, state: &Rc<RefCell<AppState>>, uri: &str) {
     let Some(conn) = network::Connection::from_uri(uri) else { return };
     let uri = uri.to_string();
-    mount_in_background(ui, state, conn, Secret::Keyring(uri.clone()), move |ui, state, conn, result| match result {
+    mount_in_background(ui, state, conn, Secret::Keyring(uri.clone()), move |ui, _, conn, result| match result {
         Ok(local) => {
-            reload_roots(ui);
-            navigate(ui, state, &local.to_string_lossy());
+            reload_roots_then(ui, move |ui, state| navigate(ui, state, &local.to_string_lossy()));
         }
         Err(_) => open_connect_prefilled(ui, &uri, conn.username.as_deref()),
     });
@@ -3019,28 +3023,105 @@ fn apply_child_counts(
 
 /// Rebuild the sandbox (re-scanning mount points) and refresh the sidebar.
 /// Runs on the UI thread; reaches state via the `APP` thread-local.
+/// Rescan the sandbox roots (which pick up new mount points) and the
+/// sidebar's storage rows and volumes. See [`reload_roots_then`].
 fn reload_roots(ui: &MainWindow) {
-    APP.with(|a| {
-        if let Some(state) = a.borrow().clone() {
-            {
-                let mut s = state.borrow_mut();
-                s.sandbox = Sandbox::from_env();
-            }
-            populate_roots(ui, &state.borrow());
-            let active = active_root(&state.borrow(), &state.borrow().current.clone());
-            ui.set_active_root_path(SharedString::from(active));
-        }
-    });
-    sync_volumes(ui);
+    reload_roots_then(ui, |_, _| {});
 }
 
-/// Refresh the sidebar's removable/external volume list from udisks2.
-fn sync_volumes(ui: &MainWindow) {
-    let models: Vec<VolumeModel> = devices::list_volumes()
+/// Run on the UI thread once a roots scan that started after the request
+/// has been applied.
+type RootsDone = Box<dyn FnOnce(&MainWindow, &Rc<RefCell<AppState>>)>;
+
+/// What [`scan_roots`] gathered off the UI thread.
+struct RootsScan {
+    sandbox: Sandbox,
+    /// (used, total) bytes per sandbox root, in `sandbox.roots()` order.
+    root_usage: Vec<(u64, u64)>,
+    volumes: Vec<(devices::Volume, (u64, u64))>,
+}
+
+/// Every piece of it can block: finding mount points stats each one, the
+/// usage figures `statvfs` every mount (a dead NFS or gvfs mount hangs
+/// there) and the volume list is a udisks2 D-Bus round trip.
+fn scan_roots() -> RootsScan {
+    let sandbox = Sandbox::from_env();
+    let root_usage = sandbox
+        .roots()
+        .iter()
+        .map(|r| if r.kind() == RootKind::Removable { (0, 0) } else { disk_usage_bytes(r.path()) })
+        .collect();
+    let volumes = devices::list_volumes()
         .into_iter()
         .map(|v| {
-            let mp = v.mount_point.as_deref();
-            let (used, total) = mp.map(disk_usage_bytes).unwrap_or((0, 0));
+            let usage = v.mount_point.as_deref().map(disk_usage_bytes).unwrap_or((0, 0));
+            (v, usage)
+        })
+        .collect();
+    RootsScan { sandbox, root_usage, volumes }
+}
+
+/// Rescan the roots off the UI thread, apply the result, then call `then` —
+/// e.g. navigate into a share that was just mounted, which needs the sandbox
+/// to trust it. One scan runs at a time; requests made meanwhile (hotplug
+/// signals come in bursts) are served by a single follow-up scan, so an older
+/// result never overwrites a newer one.
+fn reload_roots_then(ui: &MainWindow, then: impl FnOnce(&MainWindow, &Rc<RefCell<AppState>>) + 'static) {
+    APP.with(|a| {
+        let Some(state) = a.borrow().clone() else { return };
+        let mut s = state.borrow_mut();
+        if s.roots_busy {
+            s.roots_next.get_or_insert_with(Vec::new).push(Box::new(then));
+            return;
+        }
+        s.roots_busy = true;
+        s.roots_done.push(Box::new(then));
+    });
+    let weak = ui.as_weak();
+    std::thread::Builder::new()
+        .name("roots-scan".into())
+        .spawn(move || {
+            let scan = scan_roots();
+            let _ = weak.upgrade_in_event_loop(move |ui| {
+                APP.with(|a| {
+                    if let Some(state) = a.borrow().clone() {
+                        apply_roots(&ui, &state, scan);
+                    }
+                });
+            });
+        })
+        .ok();
+}
+
+fn apply_roots(ui: &MainWindow, state: &Rc<RefCell<AppState>>, scan: RootsScan) {
+    let RootsScan { sandbox, root_usage, volumes } = scan;
+    state.borrow_mut().sandbox = sandbox;
+    populate_roots(ui, &state.borrow(), &root_usage);
+    let active = active_root(&state.borrow(), &state.borrow().current.clone());
+    ui.set_active_root_path(SharedString::from(active));
+    sync_volumes(ui, volumes);
+    let (done, next) = {
+        let mut s = state.borrow_mut();
+        s.roots_busy = false;
+        (std::mem::take(&mut s.roots_done), s.roots_next.take())
+    };
+    for f in done {
+        f(ui, state);
+    }
+    if let Some(waiting) = next {
+        reload_roots_then(ui, move |ui, state| {
+            for f in waiting {
+                f(ui, state);
+            }
+        });
+    }
+}
+
+/// Fill the sidebar's removable/external volume list from a udisks2 scan.
+fn sync_volumes(ui: &MainWindow, volumes: Vec<(devices::Volume, (u64, u64))>) {
+    let models: Vec<VolumeModel> = volumes
+        .into_iter()
+        .map(|(v, (used, total))| {
             let fraction = if total > 0 { (used as f32 / total as f32).clamp(0.0, 1.0) } else { 0.0 };
             let vol_label = if v.label.trim().is_empty() {
                 sx(ui, "USB Storage", "USB Depolama", "Almacenamiento USB").to_string()
@@ -3212,17 +3293,19 @@ fn apply_language(ui: &MainWindow, lang: &str) {
     t!(set_act_empty_trash, "Empty Trash", "Çöpü Boşalt", "Vaciar papelera");
 }
 
-fn populate_roots(ui: &MainWindow, state: &AppState) {
+/// `usage` holds (used, total) bytes per sandbox root, as [`scan_roots`]
+/// measured them.
+fn populate_roots(ui: &MainWindow, state: &AppState, usage: &[(u64, u64)]) {
     let roots: Vec<RootModel> = state
         .sandbox
         .roots()
         .iter()
-        .filter(|r| match r.kind() {
+        .zip(usage)
+        .filter(|(r, _)| match r.kind() {
             RootKind::Home | RootKind::Network => true,
             RootKind::Removable => false, // volumes section handles removable drives
         })
-        .map(|r| {
-            let (used, total) = disk_usage_bytes(r.path());
+        .map(|(r, &(used, total))| {
             let fraction = if total > 0 { (used as f32 / total as f32).clamp(0.0, 1.0) } else { 0.0 };
             let label = match r.kind() {
                 RootKind::Home      => sx(ui, "Internal Storage", "Dahili Depolama", "Almacenamiento interno"),
