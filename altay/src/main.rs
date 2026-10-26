@@ -666,10 +666,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let obj = obj.to_string();
                 ui.set_status_text(sx(&ui, "Ejecting…", "Çıkarılıyor…", "Expulsando…"));
                 volume_in_background(&ui, &st, obj.clone(), move || devices::unmount(&obj), |ui, _, result| match result {
-                    Ok(()) => {
-                        ui.set_status_text(sx(ui, "Ejected", "Çıkarıldı", "Expulsado"));
-                        reload_roots(ui);
-                    }
+                    Ok(()) => reload_roots_then(ui, |ui, _| ui.set_status_text(sx(ui, "Ejected", "Çıkarıldı", "Expulsado"))),
                     Err(e) => ui.set_status_text(sx(ui, format!("Eject failed: {e}"), format!("Çıkarma başarısız: {e}"), format!("Error al expulsar: {e}"))),
                 });
             }
@@ -3039,12 +3036,16 @@ struct RootsScan {
     /// (used, total) bytes per sandbox root, in `sandbox.roots()` order.
     root_usage: Vec<(u64, u64)>,
     volumes: Vec<(devices::Volume, (u64, u64))>,
+    /// The folder on screen when the scan started, and whether it is gone.
+    current: PathBuf,
+    current_gone: bool,
 }
 
 /// Every piece of it can block: finding mount points stats each one, the
 /// usage figures `statvfs` every mount (a dead NFS or gvfs mount hangs
 /// there) and the volume list is a udisks2 D-Bus round trip.
-fn scan_roots() -> RootsScan {
+fn scan_roots(current: PathBuf) -> RootsScan {
+    let current_gone = !current.is_dir();
     let sandbox = Sandbox::from_env();
     let root_usage = sandbox
         .roots()
@@ -3058,7 +3059,7 @@ fn scan_roots() -> RootsScan {
             (v, usage)
         })
         .collect();
-    RootsScan { sandbox, root_usage, volumes }
+    RootsScan { sandbox, root_usage, volumes, current, current_gone }
 }
 
 /// Rescan the roots off the UI thread, apply the result, then call `then` —
@@ -3067,21 +3068,23 @@ fn scan_roots() -> RootsScan {
 /// signals come in bursts) are served by a single follow-up scan, so an older
 /// result never overwrites a newer one.
 fn reload_roots_then(ui: &MainWindow, then: impl FnOnce(&MainWindow, &Rc<RefCell<AppState>>) + 'static) {
-    APP.with(|a| {
-        let Some(state) = a.borrow().clone() else { return };
+    let current = APP.with(|a| {
+        let state = a.borrow().clone()?;
         let mut s = state.borrow_mut();
         if s.roots_busy {
             s.roots_next.get_or_insert_with(Vec::new).push(Box::new(then));
-            return;
+            return None;
         }
         s.roots_busy = true;
         s.roots_done.push(Box::new(then));
+        Some(s.current.clone())
     });
+    let Some(current) = current else { return };
     let weak = ui.as_weak();
     std::thread::Builder::new()
         .name("roots-scan".into())
         .spawn(move || {
-            let scan = scan_roots();
+            let scan = scan_roots(current);
             let _ = weak.upgrade_in_event_loop(move |ui| {
                 APP.with(|a| {
                     if let Some(state) = a.borrow().clone() {
@@ -3094,8 +3097,11 @@ fn reload_roots_then(ui: &MainWindow, then: impl FnOnce(&MainWindow, &Rc<RefCell
 }
 
 fn apply_roots(ui: &MainWindow, state: &Rc<RefCell<AppState>>, scan: RootsScan) {
-    let RootsScan { sandbox, root_usage, volumes } = scan;
+    let RootsScan { sandbox, root_usage, volumes, current, current_gone } = scan;
     state.borrow_mut().sandbox = sandbox;
+    if current_gone {
+        leave_removed_dir(ui, state, &current);
+    }
     populate_roots(ui, &state.borrow(), &root_usage);
     let active = active_root(&state.borrow(), &state.borrow().current.clone());
     ui.set_active_root_path(SharedString::from(active));
@@ -3115,6 +3121,27 @@ fn apply_roots(ui: &MainWindow, state: &Rc<RefCell<AppState>>, scan: RootsScan) 
             }
         });
     }
+}
+
+/// The folder on screen, `gone`, was on a device or share that went away
+/// (ejected here, by another app, or pulled out): go home instead of showing
+/// a listing of a folder that no longer exists. An eject started here then
+/// replaces the status line with its own result.
+fn leave_removed_dir(ui: &MainWindow, state: &Rc<RefCell<AppState>>, gone: &std::path::Path) {
+    {
+        let mut s = state.borrow_mut();
+        // The user moved on while the scan ran, or is in the trash view.
+        if s.current != gone || s.in_trash_view {
+            return;
+        }
+        log::info!("{} is gone; going home", gone.display());
+        s.nav_req += 1; // a navigation into the gone folder must not land later
+        s.current = s.sandbox.home().into_path_buf();
+        s.archive_path = None;
+        s.selected.clear();
+    }
+    ui.set_status_text(sx(ui, "The folder's device was removed", "Klasörün bulunduğu aygıt kaldırıldı", "Se quitó el dispositivo de la carpeta"));
+    reload(ui, state);
 }
 
 /// Fill the sidebar's removable/external volume list from a udisks2 scan.
