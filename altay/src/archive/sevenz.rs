@@ -4,11 +4,13 @@
 //! 7-Zip backend (read/extract + create) via the pure-Rust `sevenz-rust` crate.
 //! Password-protected archives are supported for extraction.
 
+use std::io::Read;
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use crate::filesystem::Progress;
 
-use super::{ArchiveError, Backend, Member, Options};
+use super::{copy_member, create_member_dir, create_member_file, create_member_symlink, safe_join, ArchiveError, Backend, Member, Options};
 
 pub struct SevenZBackend;
 
@@ -34,15 +36,34 @@ impl Backend for SevenZBackend {
         opts: &Options,
         on_progress: &mut dyn FnMut(Progress),
     ) -> Result<(), ArchiveError> {
-        let result = if opts.password.is_some() {
-            sevenz_rust::decompress_file_with_password(archive, into, password(opts))
-        } else {
-            sevenz_rust::decompress_file(archive, into)
+        // Members go through the same checks as zip/tar (see `safe_join` and
+        // `create_member_*`), not sevenz-rust's default writer, which joins
+        // names onto `into` as they are and follows links.
+        let mut state = Progress { bytes_done: 0, bytes_total: 0, files_done: 0, files_total: 0 };
+        let mut failure = None;
+        let result = {
+            let mut write = |entry: &sevenz_rust::SevenZArchiveEntry, reader: &mut dyn Read, _: &PathBuf| {
+                match write_entry(archive, into, entry, reader) {
+                    Ok(n) => {
+                        state.bytes_done = state.bytes_done.saturating_add(n);
+                        state.files_done += 1;
+                        on_progress(state);
+                        Ok(true)
+                    }
+                    Err(e) => {
+                        failure = Some(e);
+                        Err(sevenz_rust::Error::other("extraction stopped"))
+                    }
+                }
+            };
+            let file = std::fs::File::open(archive).map_err(ArchiveError::at(archive))?;
+            if opts.password.is_some() {
+                sevenz_rust::decompress_with_extract_fn_and_password(file, into, password(opts), &mut write)
+            } else {
+                sevenz_rust::decompress_with_extract_fn(file, into, &mut write)
+            }
         };
-        result.map_err(sz_err)?;
-        // sevenz-rust extracts in one shot; report completion.
-        on_progress(Progress { bytes_done: 0, bytes_total: 0, files_done: 1, files_total: 1 });
-        Ok(())
+        result.map_err(|e| failure.unwrap_or_else(|| sz_err(e)))
     }
 
     fn create(
@@ -60,6 +81,38 @@ impl Backend for SevenZBackend {
         }
         writer.finish().map_err(ArchiveError::Io)?;
         Ok(())
+    }
+}
+
+/// Unix file-type bits, stored by p7zip/7-Zip in the high half of the
+/// attributes when bit 15 is set.
+const UNIX_EXTENSION: u32 = 0x8000;
+const S_IFMT: u32 = 0o170000;
+const S_IFLNK: u32 = 0o120000;
+
+/// Write one member under `into`; returns the bytes written.
+fn write_entry(archive: &Path, into: &Path, entry: &sevenz_rust::SevenZArchiveEntry, reader: &mut dyn Read) -> Result<u64, ArchiveError> {
+    if entry.is_anti_item() {
+        return Ok(0); // a deletion marker from an update, nothing to write
+    }
+    let out_path = safe_join(into, Path::new(entry.name()))?;
+    let attrs = entry.windows_attributes();
+    if entry.is_directory() {
+        create_member_dir(into, &out_path)?;
+        Ok(0)
+    } else if attrs & UNIX_EXTENSION != 0 && (attrs >> 16) & S_IFMT == S_IFLNK {
+        // A link's content is its target.
+        let mut target = Vec::new();
+        reader.read_to_end(&mut target).map_err(ArchiveError::at(archive))?;
+        create_member_symlink(into, &out_path, Path::new(std::ffi::OsStr::from_bytes(&target)))?;
+        Ok(0)
+    } else {
+        let mut out = create_member_file(into, &out_path)?;
+        let n = copy_member(reader, &mut out, archive, &out_path)?;
+        if entry.has_last_modified_date {
+            let _ = out.set_modified(entry.last_modified_date().into());
+        }
+        Ok(n)
     }
 }
 

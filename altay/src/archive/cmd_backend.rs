@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use crate::filesystem::Progress;
 
-use super::{ArchiveError, Backend, Member, Options};
+use super::{check_listing, ArchiveError, Backend, Member, Options};
 
 pub struct CmdBackend;
 
@@ -21,16 +21,7 @@ const MISSING: &str = "7z bulunamadı — `sudo apt install p7zip-full` komutuyl
 
 impl Backend for CmdBackend {
     fn list(&self, archive: &Path, _opts: &Options) -> Result<Vec<Member>, ArchiveError> {
-        let out = std::process::Command::new(TOOL)
-            .args(["l", "-slt", "--"])
-            .arg(archive)
-            .output()
-            .map_err(|_| ArchiveError::Backend(MISSING.into()))?;
-        if !out.status.success() {
-            let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
-            return Err(ArchiveError::Backend(if msg.is_empty() { "7z başarısız".into() } else { msg }));
-        }
-        Ok(parse_7z_list(&String::from_utf8_lossy(&out.stdout)))
+        Ok(list_7z(archive)?.into_iter().map(|l| l.member).collect())
     }
 
     fn extract(
@@ -40,6 +31,10 @@ impl Backend for CmdBackend {
         _opts: &Options,
         on_progress: &mut dyn FnMut(Progress),
     ) -> Result<(), ArchiveError> {
+        // 7z writes the members itself, so its own listing is checked first:
+        // older p7zip releases follow `../` names and links (see `safe_join`).
+        let listed: Vec<(PathBuf, bool)> = list_7z(archive)?.into_iter().map(|l| (l.member.path, l.link)).collect();
+        check_listing(into, &listed)?;
         std::fs::create_dir_all(into)?;
         let status = std::process::Command::new(TOOL)
             .arg("x")
@@ -67,35 +62,61 @@ impl Backend for CmdBackend {
     }
 }
 
-/// Parse the machine-readable `7z l -slt` output into Members.
-/// Each file block starts with a blank line; fields are `Key = Value` lines.
-fn parse_7z_list(raw: &str) -> Vec<Member> {
+/// A member as `7z l -slt` reports it.
+struct Listed {
+    member: Member,
+    /// A symbolic or hard link.
+    link: bool,
+}
+
+fn list_7z(archive: &Path) -> Result<Vec<Listed>, ArchiveError> {
+    let out = std::process::Command::new(TOOL)
+        .args(["l", "-slt", "--"])
+        .arg(archive)
+        .output()
+        .map_err(|_| ArchiveError::Backend(MISSING.into()))?;
+    if !out.status.success() {
+        let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        return Err(ArchiveError::Backend(if msg.is_empty() { "7z başarısız".into() } else { msg }));
+    }
+    Ok(parse_7z_list(&String::from_utf8_lossy(&out.stdout)))
+}
+
+/// Parse the machine-readable `7z l -slt` output. The archive's own block
+/// comes first and ends at the `----------` line; then each member block
+/// starts with a blank line; fields are `Key = Value` lines.
+fn parse_7z_list(raw: &str) -> Vec<Listed> {
+    let raw = raw.split_once("\n----------").map_or(raw, |(_, members)| members);
     let mut out = Vec::new();
     let mut path: Option<PathBuf> = None;
     let mut size: u64 = 0;
     let mut is_dir = false;
+    let mut link = false;
 
     for line in raw.lines() {
         let line = line.trim();
         if line.is_empty() {
             if let Some(p) = path.take() {
-                out.push(Member { path: p, is_dir, size });
+                out.push(Listed { member: Member { path: p, is_dir, size }, link });
             }
-            size = 0; is_dir = false;
+            size = 0; is_dir = false; link = false;
             continue;
         }
-        if let Some((key, val)) = line.split_once(" = ") {
+        if let Some((key, val)) = line.split_once(" =") {
+            let val = val.trim();
             match key.trim() {
-                "Path"       => path = Some(PathBuf::from(val.trim())),
-                "Size"       => size = val.trim().parse().unwrap_or(0),
-                "Attributes" => is_dir = val.contains('D'),
+                "Path"       => path = Some(PathBuf::from(val)),
+                "Size"       => size = val.parse().unwrap_or(0),
+                "Attributes" => is_dir |= val.contains('D'),
+                "Folder"     => is_dir |= val == "+",
+                "Symbolic Link" | "Hard Link" => link |= !val.is_empty(),
                 _ => {}
             }
         }
     }
     // flush last block
     if let Some(p) = path {
-        out.push(Member { path: p, is_dir, size });
+        out.push(Listed { member: Member { path: p, is_dir, size }, link });
     }
     out
 }
