@@ -116,7 +116,9 @@ struct AppState {
     /// view came after it (see [`navigate`]).
     nav_req: u64,
     nav_done: u64,
-    /// URIs of network shares being mounted (see [`mount_in_background`]).
+    /// Network shares (by URI) and udisks2 volumes (by object path) being
+    /// mounted or ejected (see [`mount_in_background`],
+    /// [`volume_in_background`]).
     mounting: HashSet<String>,
 }
 
@@ -637,28 +639,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let st = state.clone();
         ui.on_mount_volume(move |obj| {
             if let Some(ui) = ui_w.upgrade() {
+                let obj = obj.to_string();
                 ui.set_status_text(sx(&ui, "Mounting…", "Bağlanıyor…", "Montando…"));
-                match devices::mount(obj.as_str()) {
+                volume_in_background(&ui, &st, obj.clone(), move || devices::mount(&obj), |ui, state, result| match result {
                     Ok(mp) => {
-                        reload_roots(&ui); // sandbox now trusts the new mount point
-                        navigate(&ui, &st, &mp.to_string_lossy());
+                        reload_roots(ui); // sandbox now trusts the new mount point
+                        navigate(ui, state, &mp.to_string_lossy());
                     }
-                    Err(e) => ui.set_status_text(sx(&ui, format!("Mount failed: {e}"), format!("Bağlama başarısız: {e}"), format!("Error al montar: {e}"))),
-                }
+                    Err(e) => ui.set_status_text(sx(ui, format!("Mount failed: {e}"), format!("Bağlama başarısız: {e}"), format!("Error al montar: {e}"))),
+                });
             }
         });
     }
     {
         let ui_w = ui.as_weak();
+        let st = state.clone();
         ui.on_unmount_volume(move |obj| {
             if let Some(ui) = ui_w.upgrade() {
-                match devices::unmount(obj.as_str()) {
+                let obj = obj.to_string();
+                ui.set_status_text(sx(&ui, "Ejecting…", "Çıkarılıyor…", "Expulsando…"));
+                volume_in_background(&ui, &st, obj.clone(), move || devices::unmount(&obj), |ui, _, result| match result {
                     Ok(()) => {
-                        reload_roots(&ui);
-                        ui.set_status_text(sx(&ui, "Ejected", "Çıkarıldı", "Expulsado"));
+                        reload_roots(ui);
+                        ui.set_status_text(sx(ui, "Ejected", "Çıkarıldı", "Expulsado"));
                     }
-                    Err(e) => ui.set_status_text(sx(&ui, format!("Eject failed: {e}"), format!("Çıkarma başarısız: {e}"), format!("Error al expulsar: {e}"))),
-                }
+                    Err(e) => ui.set_status_text(sx(ui, format!("Eject failed: {e}"), format!("Çıkarma başarısız: {e}"), format!("Error al expulsar: {e}"))),
+                });
             }
         });
     }
@@ -923,6 +929,37 @@ fn mount_uri(ui: &MainWindow, state: &Rc<RefCell<AppState>>, uri: &str) {
         }
         Err(_) => open_connect_prefilled(ui, &conn.uri(), conn.username.as_deref()),
     });
+}
+
+/// Mount or eject the udisks2 volume `obj` off the UI thread — udisks2
+/// answers only once the disk has spun up, the filesystem was checked or
+/// PolicyKit asked for a password — then call `done` on the UI thread. A
+/// second request for a volume already busy is ignored.
+fn volume_in_background<T: Send + 'static>(
+    ui: &MainWindow,
+    state: &Rc<RefCell<AppState>>,
+    obj: String,
+    work: impl FnOnce() -> T + Send + 'static,
+    done: impl FnOnce(&MainWindow, &Rc<RefCell<AppState>>, T) + Send + 'static,
+) {
+    if !state.borrow_mut().mounting.insert(obj.clone()) {
+        return;
+    }
+    let weak = ui.as_weak();
+    std::thread::Builder::new()
+        .name("volume".into())
+        .spawn(move || {
+            let result = work();
+            let _ = weak.upgrade_in_event_loop(move |ui| {
+                APP.with(|a| {
+                    if let Some(state) = a.borrow().as_ref() {
+                        state.borrow_mut().mounting.remove(&obj);
+                        done(&ui, state, result);
+                    }
+                });
+            });
+        })
+        .ok();
 }
 
 /// Where [`mount_in_background`] gets the password.
