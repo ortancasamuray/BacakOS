@@ -2752,6 +2752,15 @@ type PendingCount = (usize, PathBuf, Option<SystemTime>);
 
 fn refresh_view(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
     ui.set_focused_idx(-1);
+    // The preview pane describes an entry of the view on screen: another
+    // folder or view (trash, search, …) closes it.
+    let stale = {
+        let s = state.borrow();
+        s.preview_path.as_ref().is_some_and(|p| !s.entries.iter().any(|e| &e.path == p))
+    };
+    if stale {
+        clear_preview(ui, state);
+    }
     let s = state.borrow();
     let gen = s.view_gen.fetch_add(1, Ordering::SeqCst) + 1;
     // Counting a folder's items reads it: done off the UI thread (see
