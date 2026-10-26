@@ -5,7 +5,7 @@
 //! `trash` crate. User-facing deletes go here rather than to `rm`, so they are
 //! recoverable. All paths are sandbox-validated before being trashed.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::security::{AccessDenied, Sandbox};
 
@@ -22,7 +22,6 @@ pub enum TrashError {
 pub struct TrashedItem {
     pub original_path: PathBuf,
     pub name: String,
-    pub deleted_at: i64,
     /// The backend's record, used to restore this exact item (several items
     /// can share an original path).
     item: trash::TrashItem,
@@ -35,12 +34,6 @@ pub struct Restored {
     /// Older items left in the trash because a newer one was restored to the
     /// same original path in the same call.
     pub kept: usize,
-}
-
-/// Move a path to the trash (recoverable delete).
-pub fn move_to_trash(sandbox: &Sandbox, path: impl AsRef<Path>) -> Result<(), TrashError> {
-    let safe = sandbox.resolve(path)?;
-    trash::delete(safe.as_path()).map_err(|e| TrashError::Backend(e.to_string()))
 }
 
 /// Trash several paths in one call.
@@ -66,7 +59,6 @@ pub fn list() -> Result<Vec<TrashedItem>, TrashError> {
             .map(|i| TrashedItem {
                 name: i.name.to_string_lossy().into_owned(),
                 original_path: i.original_path(),
-                deleted_at: i.time_deleted,
                 item: i,
             })
             .collect())
@@ -81,6 +73,13 @@ pub fn list() -> Result<Vec<TrashedItem>, TrashError> {
 mod tests {
     use super::*;
     use crate::security::AllowedRoot;
+    use std::path::Path;
+
+    /// Move a single path to the trash.
+    fn move_to_trash(sandbox: &Sandbox, path: impl AsRef<Path>) -> Result<(), TrashError> {
+        let safe = sandbox.resolve(path)?;
+        trash::delete(safe.as_path()).map_err(|e| TrashError::Backend(e.to_string()))
+    }
 
     #[test]
     fn restore_latest_puts_back_only_the_newest_twin() {
@@ -142,7 +141,7 @@ mod tests {
         move_to_trash(sb, file).unwrap();
         let mut twins: Vec<TrashedItem> = list().unwrap().into_iter().filter(|i| i.original_path == file).collect();
         assert_eq!(twins.len(), 2);
-        twins.sort_by_key(|i| i.deleted_at);
+        twins.sort_by_key(|i| i.item.time_deleted);
         let newer = twins.pop().unwrap();
         Some((twins.pop().unwrap(), newer))
     }

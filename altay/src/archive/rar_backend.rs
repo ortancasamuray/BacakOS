@@ -25,8 +25,6 @@ impl Backend for RarBackend {
                 path: header.filename.clone(),
                 is_dir: header.is_directory(),
                 size: header.unpacked_size,
-                compressed_size: header.unpacked_size,
-                encrypted: header.is_encrypted(),
             });
         }
         Ok(out)

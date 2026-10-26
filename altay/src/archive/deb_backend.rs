@@ -27,8 +27,6 @@ impl Backend for DebBackend {
                     path,
                     is_dir: header.entry_type().is_dir(),
                     size: header.size().unwrap_or(0),
-                    compressed_size: header.size().unwrap_or(0),
-                    encrypted: false,
                 });
             }
             Ok(out)

@@ -76,6 +76,7 @@ impl Sandbox {
     }
 
     /// Construct an explicit sandbox (used by tests).
+    #[cfg(test)]
     pub fn with_roots(roots: Vec<AllowedRoot>) -> Self {
         Self { roots }
     }

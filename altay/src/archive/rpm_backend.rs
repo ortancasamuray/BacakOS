@@ -26,8 +26,6 @@ impl Backend for RpmBackend {
                 path: PathBuf::from(name.trim_start_matches("./")),
                 is_dir: is_dir(mode),
                 size,
-                compressed_size: size,
-                encrypted: false,
             });
             Ok(())
         })?;

@@ -41,8 +41,6 @@ impl Backend for TarBackend {
                 path,
                 is_dir,
                 size: header.size().unwrap_or(0),
-                compressed_size: header.size().unwrap_or(0),
-                encrypted: false,
             });
             // Encode progress as (bytes_seen * total / file_size, total) so the
             // caller can compute fraction = done as f32 / total as f32.

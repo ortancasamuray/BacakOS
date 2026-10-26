@@ -31,7 +31,7 @@ pub enum Format {
     // 7-zip
     SevenZ,
     // RAR / comic-book variants
-    Rar, Rar5, Cbr,
+    Rar, Cbr,
     // Legacy containers (7z-backed, read-only)
     Ace, Alz, Arj, Lzh, Zoo,
     // Plain tar
@@ -156,8 +156,6 @@ pub struct Member {
     pub path: PathBuf,
     pub is_dir: bool,
     pub size: u64,
-    pub compressed_size: u64,
-    pub encrypted: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -204,8 +202,6 @@ impl ArchiveError {
 #[derive(Debug, Clone, Default)]
 pub struct Options {
     pub password: Option<String>,
-    /// Split output into volumes of this many bytes (0 = single file).
-    pub volume_bytes: u64,
     /// Cooperative cancellation. When present and flipped to `true`, a
     /// long-running create/extract aborts at its next checkpoint and
     /// returns [`ArchiveError::Cancelled`]. Backends that don't support
@@ -314,7 +310,7 @@ impl Format {
 /// Resolve a backend for a format.
 pub fn backend_for(format: Format) -> Result<Box<dyn Backend>, ArchiveError> {
     match format {
-        Format::Rar | Format::Rar5 | Format::Cbr
+        Format::Rar | Format::Cbr
             => return Ok(Box::new(rar_backend::RarBackend)),
         Format::Deb
             => return Ok(Box::new(deb_backend::DebBackend)),
@@ -406,19 +402,8 @@ fn split_parts(first: &Path) -> Option<(Vec<PathBuf>, String)> {
     }
 }
 
-/// Entry point used by the UI: list an archive's members after validating it.
-pub fn list_members(
-    sandbox: &Sandbox,
-    archive: impl AsRef<Path>,
-    opts: &Options,
-) -> Result<Vec<Member>, ArchiveError> {
-    let safe = sandbox.resolve(archive)?;
-    let combined = combine_if_split(safe.as_path())?;
-    let format = Format::detect(combined.path()).ok_or(ArchiveError::Unsupported)?;
-    backend_for(format)?.list(combined.path(), opts)
-}
-
-/// Like `list_members` but calls `on_progress(done, total)` after each entry.
+/// List an archive's members after validating it, calling
+/// `on_progress(done, total)` after each entry.
 /// `total == 0` means total is unknown; `done == total` means complete.
 /// Fraction ≈ `done as f32 / total as f32` (only when total > 0).
 pub fn list_members_tracked(

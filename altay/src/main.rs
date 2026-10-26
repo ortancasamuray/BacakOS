@@ -1116,7 +1116,6 @@ fn saved_to_conn(s: &config::SavedConnection) -> Option<network::Connection> {
         port: s.port,
         share: s.share.clone(),
         username: s.username.clone(),
-        keyring_ref: None,
     })
 }
 
@@ -1550,7 +1549,6 @@ fn extract_from_archive_view(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
     };
     let stem = archive_stem(&arc);
     let dest = unique_path(&dir, &stem, "");
-    let total = 1usize;
     let arc_name = arc.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
 
     ui.set_extract_active(true);
@@ -1582,13 +1580,8 @@ fn extract_from_archive_view(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
             let _ = weak.upgrade_in_event_loop(move |ui| {
                 ui.set_extract_active(false);
                 ui.set_extract_fraction(0.0);
+                // Stay in archive view; the extracted folder appears beside the archive.
                 ui.set_status_text(msg);
-                APP.with(|a| {
-                    if let Some(state) = a.borrow().as_ref() {
-                        // Stay in archive view; the extracted folder appeared beside the archive
-                        let _ = total; // suppress unused warning
-                    }
-                });
             });
         })
         .ok();
@@ -3025,15 +3018,6 @@ fn apply_language(ui: &MainWindow, lang: &str) {
     t!(set_act_new_folder, "New Folder", "Yeni Klasör", "Nueva carpeta");
     t!(set_act_restore, "Restore", "Geri Yükle", "Restaurar");
     t!(set_act_empty_trash, "Empty Trash", "Çöpü Boşalt", "Vaciar papelera");
-}
-
-/// Returns true only if `path` is an actual mount point (different device from parent).
-fn is_mount_point(path: &std::path::Path) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    let Ok(meta) = std::fs::metadata(path) else { return false; };
-    let Some(parent) = path.parent() else { return true; };
-    let Ok(parent_meta) = std::fs::metadata(parent) else { return false; };
-    meta.dev() != parent_meta.dev()
 }
 
 fn populate_roots(ui: &MainWindow, state: &AppState) {

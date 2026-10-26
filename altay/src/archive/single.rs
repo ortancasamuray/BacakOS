@@ -5,7 +5,7 @@
 //! These wrap exactly one file, so the "archive" has a single member whose name
 //! is the original file name with the compression suffix removed.
 
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -27,13 +27,11 @@ pub struct SinglePipedBackend {
 
 impl Backend for SingleBackend {
     fn list(&self, archive: &Path, _opts: &Options) -> Result<Vec<Member>, ArchiveError> {
-        let meta = std::fs::metadata(archive)?;
+        std::fs::metadata(archive)?;
         Ok(vec![Member {
             path: PathBuf::from(inner_name(archive)),
             is_dir: false,
             size: 0, // uncompressed size is unknown without decompressing
-            compressed_size: meta.len(),
-            encrypted: false,
         }])
     }
 
@@ -178,13 +176,11 @@ fn inner_name(archive: &Path) -> String {
 
 impl Backend for SinglePipedBackend {
     fn list(&self, archive: &Path, _opts: &Options) -> Result<Vec<Member>, ArchiveError> {
-        let meta = std::fs::metadata(archive)?;
+        std::fs::metadata(archive)?;
         Ok(vec![Member {
             path: PathBuf::from(inner_name(archive)),
             is_dir: false,
             size: 0,
-            compressed_size: meta.len(),
-            encrypted: false,
         }])
     }
 

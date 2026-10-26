@@ -13,7 +13,7 @@ use super::{ArchiveError, Backend, Member, Options};
 pub struct SevenZBackend;
 
 impl Backend for SevenZBackend {
-    fn list(&self, archive: &Path, opts: &Options) -> Result<Vec<Member>, ArchiveError> {
+    fn list(&self, archive: &Path, _opts: &Options) -> Result<Vec<Member>, ArchiveError> {
         let meta = sevenz_rust::Archive::open(archive).map_err(sz_err)?;
         let members = meta
             .files
@@ -22,8 +22,6 @@ impl Backend for SevenZBackend {
                 path: PathBuf::from(f.name()),
                 is_dir: f.is_directory(),
                 size: f.size(),
-                compressed_size: f.compressed_size,
-                encrypted: opts.password.is_some(),
             })
             .collect();
         Ok(members)
