@@ -77,7 +77,9 @@ impl Index {
                         start_watcher(&root, map.clone(), watcher_slot.clone());
                     // Full walk to refresh the stale cache.
                     let mut local = HashMap::new();
-                    for entry in walkdir::WalkDir::new(&root).follow_links(false).into_iter().flatten() {
+                    let mut walk = walkdir::WalkDir::new(&root).follow_links(false).into_iter();
+                    while let Some(entry) = walk.next() {
+                        let Ok(entry) = entry else { continue };
                         if entry.file_type().is_dir() && should_watch(&root, entry.path()) {
                             if let Some(w) = watcher_slot.lock().unwrap().as_mut() {
                                 w.add_dir(entry.path());
@@ -85,6 +87,10 @@ impl Index {
                         }
                         if let Some(e) = entry_from_path(entry.path()) {
                             local.insert(entry.path().to_path_buf(), e);
+                        }
+                        // Keep the directory itself searchable, skip its contents.
+                        if entry.file_type().is_dir() && skips_contents(&root, entry.path()) {
+                            walk.skip_current_dir();
                         }
                     }
                     if let Some(w) = watcher_slot.lock().unwrap().as_ref() {
@@ -105,9 +111,11 @@ impl Index {
         Some(Index { root, map, ready, _watcher: watcher_slot })
     }
 
-    /// Whether `path` falls within this index's root.
+    /// Whether `path` falls within this index's root and outside the
+    /// directories whose contents it leaves out (see [`skips_contents`]).
     pub fn covers(&self, path: &Path) -> bool {
         path.starts_with(&self.root)
+            && !path.ancestors().take_while(|a| a.starts_with(&self.root)).any(|a| skips_contents(&self.root, a))
     }
 
     pub fn is_ready(&self) -> bool {
@@ -144,9 +152,22 @@ impl Index {
 
 type WatcherSlot = Arc<Mutex<Option<DirWatcher>>>;
 
-/// Directory names never watched live (still indexed by the launch walk):
-/// build output and caches churn constantly and would eat the inotify budget.
+/// Directory names never watched live nor indexed below themselves: build
+/// output and caches churn constantly, would eat the inotify budget, and in a
+/// developer's home make up most of the tree.
 const UNWATCHED_DIRS: &[&str] = &["target", "node_modules", "__pycache__"];
+
+/// Tool caches under the index root (relative paths) whose contents are left
+/// out of the index, like [`UNWATCHED_DIRS`]. Searches inside them fall back
+/// to a live walk.
+const UNINDEXED_CACHES: &[&str] = &[".cache", ".cargo/registry", ".cargo/git", ".rustup", ".npm", ".gradle", ".m2"];
+
+/// Whether the index keeps `dir` itself but not what is below it.
+fn skips_contents(root: &Path, dir: &Path) -> bool {
+    let Ok(rel) = dir.strip_prefix(root) else { return false };
+    dir.file_name().is_some_and(|n| UNWATCHED_DIRS.contains(&n.to_string_lossy().as_ref()))
+        || UNINDEXED_CACHES.iter().any(|c| rel == Path::new(c))
+}
 
 /// A filesystem watcher that tracks directories individually instead of using
 /// `RecursiveMode::Recursive`. notify's recursive inotify mode aborts the whole
@@ -493,6 +514,42 @@ mod tests {
         let ok = wait_for(&idx, &canon, "late.txt");
         let _ = std::fs::remove_dir_all(&base);
         assert!(ok, "file inside a newly created dir was not picked up");
+    }
+
+    #[test]
+    fn build_and_cache_dirs_are_not_indexed_inside() {
+        let base = std::env::temp_dir().join(format!("altay-idxskip-{}", std::process::id()));
+        let home = base.join("home");
+        std::fs::create_dir_all(home.join("kod/target/release")).unwrap();
+        std::fs::create_dir_all(home.join(".cargo/registry/src")).unwrap();
+        std::fs::create_dir_all(home.join(".cargo/bin")).unwrap();
+        std::fs::write(home.join("kod/main.rs"), b"x").unwrap();
+        std::fs::write(home.join("kod/target/release/derleme.o"), b"x").unwrap();
+        std::fs::write(home.join(".cargo/registry/src/kasa.rs"), b"x").unwrap();
+        std::fs::write(home.join(".cargo/bin/arac"), b"x").unwrap();
+        let canon = std::fs::canonicalize(&home).unwrap();
+        let sb = Sandbox::with_roots(vec![AllowedRoot::home(canon.clone())]);
+
+        let idx = Index::build(&sb, &canon).unwrap();
+        for _ in 0..500 {
+            if idx.is_ready() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let all = Query { include_hidden: true, ..Default::default() };
+        let names: Vec<String> = idx.query(&canon, &all).into_iter().map(|e| e.name).collect();
+        let _ = std::fs::remove_dir_all(&base);
+        for want in ["main.rs", "target", "registry", "arac"] {
+            assert!(names.iter().any(|n| n == want), "{want} missing: {names:?}");
+        }
+        for skip in ["release", "derleme.o", "src", "kasa.rs"] {
+            assert!(!names.iter().any(|n| n == skip), "{skip} indexed: {names:?}");
+        }
+        assert!(idx.covers(&canon.join("kod")));
+        assert!(idx.covers(&canon.join(".cargo/bin")));
+        assert!(!idx.covers(&canon.join("kod/target")));
+        assert!(!idx.covers(&canon.join(".cargo/registry/src")));
     }
 
     #[test]
