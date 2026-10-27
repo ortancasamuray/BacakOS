@@ -6,7 +6,8 @@
 //! A non-root user must only ever reach:
 //!   * their own home directory,
 //!   * mounted removable / external devices (`/media/$USER`, `/run/media/$USER`, `/mnt`),
-//!   * accessible network mounts (`/run/user/$UID/gvfs`, `$XDG_RUNTIME_DIR/gvfs`).
+//!   * accessible network mounts (altay's own under `$XDG_RUNTIME_DIR/altay-net`,
+//!     gvfs's under `$XDG_RUNTIME_DIR/gvfs`).
 //!
 //! System directories (`/root /etc /usr /var /boot /proc /sys /dev`) are never
 //! exposed by default. Every path that crosses the UI boundary is funnelled

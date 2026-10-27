@@ -77,6 +77,11 @@ pub fn discover() -> Vec<AllowedRoot> {
         }
     }
 
+    // Shares altay itself serves (see `network::netfs`).
+    for (path, label) in crate::network::netfs::active() {
+        roots.push(AllowedRoot::new(path, label, RootKind::Network));
+    }
+
     // Network mounts exposed by gvfs (SMB/SFTP/FTP/WebDAV via the portal stack).
     if let Some(runtime) = dirs::runtime_dir() {
         let gvfs = runtime.join("gvfs");
