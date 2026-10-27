@@ -189,6 +189,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .init();
 
+    network::netfs::clear_stale();
     let sandbox = Sandbox::from_env();
     // First run after install: localise the XDG user directories to Turkish
     // names (create if missing, rename an English counterpart if present) so
@@ -841,6 +842,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
     ui.run()?;
+    network::netfs::unmount_all();
     Ok(())
 }
 
@@ -1326,6 +1328,39 @@ fn network_error_text(ui: &MainWindow, err: &network::NetworkError) -> SharedStr
             "Network shares need gvfs (the gio tool is missing)",
             "Ağ paylaşımları için gvfs gerekli (gio aracı yok)",
             "Los recursos de red necesitan gvfs (falta la herramienta gio)",
+        ),
+        network::NetworkError::Connect(e) => match e.kind() {
+            std::io::ErrorKind::ConnectionRefused => sx(
+                ui,
+                "The server refused the connection (is the service running?)",
+                "Sunucu bağlantıyı reddetti (hizmet çalışıyor mu?)",
+                "El servidor rechazó la conexión (¿está el servicio en marcha?)",
+            ),
+            std::io::ErrorKind::TimedOut => sx(
+                ui,
+                "The server did not answer in time",
+                "Sunucu zamanında yanıt vermedi",
+                "El servidor no respondió a tiempo",
+            ),
+            _ => sx(
+                ui,
+                format!("Cannot reach the server: {e}"),
+                format!("Sunucuya ulaşılamıyor: {e}"),
+                format!("No se puede llegar al servidor: {e}"),
+            ),
+        },
+        network::NetworkError::AuthFailed => sx(
+            ui,
+            "Wrong user name or password",
+            "Kullanıcı adı ya da parola yanlış",
+            "Usuario o contraseña incorrectos",
+        ),
+        network::NetworkError::PasswordNeeded => sx(ui, "Enter the password", "Parolayı girin", "Introduzca la contraseña"),
+        network::NetworkError::HostKeyChanged => sx(
+            ui,
+            "The server's identity key has changed — not connecting, for safety (see ~/.ssh/known_hosts)",
+            "Sunucunun kimlik anahtarı değişmiş — güvenlik için bağlanılmadı (~/.ssh/known_hosts)",
+            "La clave de identidad del servidor ha cambiado — no se conecta, por seguridad (vea ~/.ssh/known_hosts)",
         ),
         network::NetworkError::MountFailed(why) if why.is_empty() => {
             sx(ui, "Could not connect", "Bağlanılamadı", "No se pudo conectar")

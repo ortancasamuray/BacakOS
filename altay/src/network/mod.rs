@@ -3,12 +3,14 @@
 
 //! Network locations (SMB/CIFS, NFS, SFTP, FTP, WebDAV).
 //!
-//! Altay does not implement these protocols itself. On Wayland desktops the
-//! right primitive is gvfs/GIO mounts surfaced under
-//! `$XDG_RUNTIME_DIR/gvfs`, which the [`security`](crate::security) sandbox
-//! already permits as `Network` roots. This module models saved connections and
-//! turns them into mount requests; the actual mount is delegated to the gvfs
-//! backend (later phase) so credentials flow through the system keyring/portal.
+//! Altay speaks SFTP itself and serves the share as a FUSE mount under
+//! `$XDG_RUNTIME_DIR/altay-net` (see [`netfs`]). The other protocols still go
+//! through gvfs (`gio mount`, under `$XDG_RUNTIME_DIR/gvfs`) when it is
+//! installed. Both are `Network` roots of the [`security`](crate::security)
+//! sandbox. Passwords live in the system keyring, never in the config.
+
+pub mod netfs;
+mod sftp;
 
 use std::path::PathBuf;
 
@@ -97,7 +99,36 @@ impl Connection {
         })
     }
 
-    /// Build the gvfs/GIO URI for this connection.
+    /// The name of its mount folder under [`netfs::base_dir`]: readable, and
+    /// distinct per server, user and share.
+    fn dir_name(&self) -> String {
+        let mut name = format!("{}-", self.protocol.scheme());
+        if let Some(u) = &self.username {
+            name += &format!("{u}@");
+        }
+        name += &self.host;
+        if let Some(p) = self.port.filter(|p| *p != self.protocol.default_port()) {
+            name += &format!("-{p}");
+        }
+        if let Some(s) = &self.share {
+            name += &format!("-{s}");
+        }
+        name.chars().map(|c| if c.is_alphanumeric() || "@.-_".contains(c) { c } else { '_' }).collect()
+    }
+
+    /// How the sidebar names the mounted share, e.g. `user@host / data (SFTP)`.
+    fn label(&self) -> String {
+        let mut detail = match &self.username {
+            Some(u) => format!("{u}@{}", self.host),
+            None => self.host.clone(),
+        };
+        if let Some(s) = &self.share {
+            detail += &format!(" / {}", s.trim_matches('/'));
+        }
+        format!("{detail} ({})", self.protocol.scheme().to_uppercase())
+    }
+
+    /// Build the URI for this connection.
     pub fn uri(&self) -> String {
         let port = self.port.filter(|p| *p != self.protocol.default_port());
         let auth = match (&self.username, port) {
@@ -117,17 +148,43 @@ impl Connection {
 pub enum NetworkError {
     #[error("the `gio` mount helper is not installed")]
     BackendUnavailable,
+    #[error("cannot reach the server: {0}")]
+    Connect(std::io::Error),
+    #[error("the server refused the user name or password")]
+    AuthFailed,
+    #[error("the server asks for a password")]
+    PasswordNeeded,
+    #[error("the server's host key differs from the one in ~/.ssh/known_hosts")]
+    HostKeyChanged,
     #[error("mount failed: {0}")]
     MountFailed(String),
     #[error("the share mounted but its local path could not be located")]
     PathNotFound,
 }
 
-/// Mount a network share via gvfs (`gio mount`). Credentials, if supplied, are
-/// fed to the helper's prompts on stdin. On success returns the local path
-/// under `$XDG_RUNTIME_DIR/gvfs` where the share is now browsable — which the
-/// sandbox already trusts as a network root.
+/// Mount a network share and return the local folder where it is now
+/// browsable — a network root of the sandbox. A share already mounted by
+/// altay is not mounted again.
 pub fn mount(conn: &Connection, password: Option<&str>) -> Result<PathBuf, NetworkError> {
+    match conn.protocol {
+        Protocol::Sftp => mount_own(conn, password),
+        _ => mount_gio(conn, password),
+    }
+}
+
+/// Mount through altay's own client and FUSE server.
+fn mount_own(conn: &Connection, password: Option<&str>) -> Result<PathBuf, NetworkError> {
+    let key = conn.uri();
+    if let Some(path) = netfs::find(&key) {
+        return Ok(path);
+    }
+    let (client, root) = sftp::connect(conn, password)?;
+    netfs::mount(client, &root, &key, &conn.dir_name(), &conn.label()).map_err(|e| NetworkError::MountFailed(e.to_string()))
+}
+
+/// Mount through gvfs (`gio mount`). Credentials, if supplied, are fed to the
+/// helper's prompts on stdin. The share appears under `$XDG_RUNTIME_DIR/gvfs`.
+fn mount_gio(conn: &Connection, password: Option<&str>) -> Result<PathBuf, NetworkError> {
     use std::io::Write;
     use std::process::{Command, Stdio};
 
@@ -248,6 +305,16 @@ mod tests {
     #[test]
     fn rejects_non_network_scheme() {
         assert!(Connection::from_uri("file:///etc/passwd").is_none());
+    }
+
+    #[test]
+    fn mount_folder_name_and_label() {
+        let c = Connection::from_uri("sftp://os2@192.168.1.16:2222/srv/my data").unwrap();
+        assert_eq!(c.dir_name(), "sftp-os2@192.168.1.16-2222-srv_my_data");
+        assert_eq!(c.label(), "os2@192.168.1.16 / srv/my data (SFTP)");
+        let c = Connection::from_uri("sftp://host/").unwrap();
+        assert_eq!(c.dir_name(), "sftp-host");
+        assert_eq!(c.label(), "host (SFTP)");
     }
 
     #[test]
