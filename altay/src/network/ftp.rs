@@ -8,7 +8,9 @@
 //! transfer that blocks its connection until it ends. Reads follow the file
 //! with one `RETR` (restarted with `REST` when a read jumps); writes are one
 //! `STOR` from start to end, so a file can be written anew or appended to,
-//! not changed in the middle.
+//! not changed in the middle. A dropped connection is made again for the
+//! next request, and a download goes on where it stopped; an upload cut off
+//! midway fails (FTP cannot pick it up again).
 
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
@@ -258,6 +260,24 @@ impl Open {
     }
 }
 
+impl Ftp {
+    /// (Re)start the download of the open file at `at`, on its connection
+    /// or a new one.
+    fn start_download(&self, open: &mut Open, at: u64) -> Result<(), FtpError> {
+        open.stop_reading();
+        let mut c = match open.conn.take() {
+            Some(c) => c,
+            None => self.take_connection().map_err(FtpError::ConnectionError)?,
+        };
+        c.resume_transfer(at as usize)?;
+        let t = c.retr_as_stream(open.path.as_str())?;
+        open.conn = Some(c);
+        open.transfer = Some(t);
+        open.pos = at;
+        Ok(())
+    }
+}
+
 impl Remote for Ftp {
     type Handle = Handle;
 
@@ -315,21 +335,22 @@ impl Remote for Ftp {
 
     fn read(&self, handle: &Handle, offset: u64, size: u32) -> io::Result<Vec<u8>> {
         let mut open = handle.0.lock().unwrap();
-        if open.transfer.is_none() || open.pos != offset {
-            open.stop_reading();
-            let mut c = match open.conn.take() {
-                Some(c) => c,
-                None => self.take_connection()?,
-            };
-            c.resume_transfer(offset as usize).map_err(io_error)?;
-            let t = c.retr_as_stream(open.path.as_str()).map_err(io_error)?;
-            open.conn = Some(c);
-            open.transfer = Some(t);
-            open.pos = offset;
-        }
         let mut out = vec![0; size as usize];
         let mut got = 0;
+        // A connection that drops midway is replaced once: the download
+        // starts again where it stopped.
+        let mut retried = false;
         while got < out.len() {
+            let at = offset + got as u64;
+            if open.transfer.is_none() || open.pos != at {
+                if let Err(e) = self.start_download(&mut open, at) {
+                    if lost(&e) && !retried {
+                        retried = true;
+                        continue;
+                    }
+                    return Err(io_error(e));
+                }
+            }
             match open.transfer.as_mut().unwrap().read(&mut out[got..]) {
                 Ok(0) => {
                     // The end of the file: the transfer is complete.
@@ -338,17 +359,23 @@ impl Remote for Ftp {
                     }
                     break;
                 }
-                Ok(n) => got += n,
+                Ok(n) => {
+                    got += n;
+                    open.pos += n as u64;
+                }
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
                 Err(e) => {
                     open.transfer = None;
                     open.conn = None;
-                    return Err(e);
+                    if retried {
+                        return Err(e);
+                    }
+                    log::debug!("ftp read {}: {e}; trying again", open.path);
+                    retried = true;
                 }
             }
         }
         out.truncate(got);
-        open.pos += got as u64;
         Ok(out)
     }
 

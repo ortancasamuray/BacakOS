@@ -221,6 +221,9 @@ pub fn connect(conn: &Connection, password: Option<&str>) -> Result<(WebDav, Str
         .timeout_connect(Some(Duration::from_secs(10)))
         .timeout_recv_response(Some(Duration::from_secs(30)))
         .timeout_recv_body(Some(Duration::from_secs(30)))
+        // Apache drops an idle connection after 5 s: reusing one older than
+        // that would fail (and a streamed PUT cannot be sent twice).
+        .max_idle_age(Duration::from_secs(4))
         .build();
     let auth = conn.username.as_ref().map(|u| {
         let pair = format!("{u}:{}", password.unwrap_or_default());
@@ -252,25 +255,36 @@ impl WebDav {
         format!("{}{}", self.origin, encode_path(path))
     }
 
-    fn send(&self, method: &str, path: &str, headers: &[(&str, &str)], body: impl ureq::AsSendBody) -> io::Result<Response<Body>> {
-        let mut req = Request::builder().method(Method::from_bytes(method.as_bytes()).expect("method")).uri(self.url(path));
-        for (k, v) in headers {
-            req = req.header(*k, *v);
+    /// One request. A connection that dropped before answering (the server
+    /// closed it while it idled in the pool, or the network blinked) is
+    /// given a second try on a new one.
+    fn send(&self, method: &str, path: &str, headers: &[(&str, &str)], body: &[u8]) -> io::Result<Response<Body>> {
+        let request = || {
+            let mut req = Request::builder().method(Method::from_bytes(method.as_bytes()).expect("method")).uri(self.url(path));
+            for (k, v) in headers {
+                req = req.header(*k, *v);
+            }
+            if let Some(a) = &self.auth {
+                req = req.header("Authorization", a.as_str());
+            }
+            req.body(body).map_err(|_| errno(libc::EINVAL))
+        };
+        match self.agent.run(request()?) {
+            Err(ureq::Error::Io(e)) => {
+                log::debug!("webdav {method}: {e}; trying again");
+                self.agent.run(request()?).map_err(http_error)
+            }
+            r => r.map_err(http_error),
         }
-        if let Some(a) = &self.auth {
-            req = req.header("Authorization", a.as_str());
-        }
-        let req = req.body(body).map_err(|_| errno(libc::EINVAL))?;
-        self.agent.run(req).map_err(http_error)
     }
 
     fn propfind_xml(&self, path: &str, depth: u8, body: &str) -> io::Result<String> {
         let depth = depth.to_string();
         let headers = [("Depth", depth.as_str()), ("Content-Type", "application/xml; charset=utf-8")];
-        let mut resp = self.send("PROPFIND", path, &headers, body)?;
+        let mut resp = self.send("PROPFIND", path, &headers, body.as_bytes())?;
         // A folder asked for without its slash may be redirected to it.
         if resp.status().is_redirection() && !path.ends_with('/') {
-            resp = self.send("PROPFIND", &format!("{path}/"), &headers, body)?;
+            resp = self.send("PROPFIND", &format!("{path}/"), &headers, body.as_bytes())?;
         }
         if resp.status() != StatusCode::MULTI_STATUS {
             return Err(status_error(resp.status()));
@@ -294,7 +308,7 @@ impl WebDav {
     /// Fetch the block of the file at `offset`.
     fn fetch(&self, path: &str, offset: u64) -> io::Result<Vec<u8>> {
         let range = format!("bytes={offset}-{}", offset + BLOCK - 1);
-        let mut resp = self.send("GET", path, &[("Range", &range)], ())?;
+        let mut resp = self.send("GET", path, &[("Range", &range)], &[])?;
         match resp.status() {
             // ureq refuses a body as long as its limit: one byte of room.
             StatusCode::PARTIAL_CONTENT => resp.body_mut().with_config().limit(BLOCK + 1).read_to_vec().map_err(http_error),
@@ -435,14 +449,14 @@ impl Remote for WebDav {
     }
 
     fn mkdir(&self, path: &str, _perm: u16) -> io::Result<()> {
-        self.expect(self.send("MKCOL", path, &[], ()))
+        self.expect(self.send("MKCOL", path, &[], &[]))
     }
 
     fn remove_file(&self, path: &str) -> io::Result<()> {
         if self.stat(path)?.kind == Kind::Dir {
             return Err(errno(libc::EISDIR));
         }
-        self.expect(self.send("DELETE", path, &[], ()))
+        self.expect(self.send("DELETE", path, &[], &[]))
     }
 
     fn remove_dir(&self, path: &str) -> io::Result<()> {
@@ -450,18 +464,18 @@ impl Remote for WebDav {
         if !self.list(path)?.is_empty() {
             return Err(errno(libc::ENOTEMPTY));
         }
-        self.expect(self.send("DELETE", &format!("{}/", path.trim_end_matches('/')), &[], ()))
+        self.expect(self.send("DELETE", &format!("{}/", path.trim_end_matches('/')), &[], &[]))
     }
 
     fn rename(&self, from: &str, to: &str, replace: bool) -> io::Result<()> {
         let dest = self.url(to);
         let overwrite = if replace { "T" } else { "F" };
-        self.expect(self.send("MOVE", from, &[("Destination", dest.as_str()), ("Overwrite", overwrite)], ()))
+        self.expect(self.send("MOVE", from, &[("Destination", dest.as_str()), ("Overwrite", overwrite)], &[]))
     }
 
     fn change(&self, path: &str, change: Change) -> io::Result<()> {
         match change.size {
-            Some(0) => self.expect(self.send("PUT", path, &[], ())),
+            Some(0) => self.expect(self.send("PUT", path, &[], &[])),
             Some(n) if self.stat(path)?.size != n => Err(errno(libc::ENOTSUP)),
             _ => Ok(()),
         }
