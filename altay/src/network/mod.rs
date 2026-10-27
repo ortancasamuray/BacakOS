@@ -3,14 +3,16 @@
 
 //! Network locations (SMB/CIFS, NFS, SFTP, FTP, WebDAV).
 //!
-//! Altay speaks SFTP itself and serves the share as a FUSE mount under
-//! `$XDG_RUNTIME_DIR/altay-net` (see [`netfs`]). The other protocols still go
-//! through gvfs (`gio mount`, under `$XDG_RUNTIME_DIR/gvfs`) when it is
+//! Altay speaks SFTP, FTP and WebDAV itself and serves the share as a FUSE
+//! mount under `$XDG_RUNTIME_DIR/altay-net` (see [`netfs`]). SMB and NFS still
+//! go through gvfs (`gio mount`, under `$XDG_RUNTIME_DIR/gvfs`) when it is
 //! installed. Both are `Network` roots of the [`security`](crate::security)
 //! sandbox. Passwords live in the system keyring, never in the config.
 
+mod ftp;
 pub mod netfs;
 mod sftp;
+mod webdav;
 
 use std::path::PathBuf;
 
@@ -21,7 +23,10 @@ pub enum Protocol {
     Nfs,
     Sftp,
     Ftp,
+    /// WebDAV over HTTP (`dav://`).
     WebDav,
+    /// WebDAV over HTTPS (`davs://`).
+    WebDavs,
 }
 
 impl Protocol {
@@ -33,6 +38,7 @@ impl Protocol {
             Protocol::Sftp => "sftp",
             Protocol::Ftp => "ftp",
             Protocol::WebDav => "dav",
+            Protocol::WebDavs => "davs",
         }
     }
 
@@ -42,7 +48,8 @@ impl Protocol {
             Protocol::Nfs => 2049,
             Protocol::Sftp => 22,
             Protocol::Ftp => 21,
-            Protocol::WebDav => 443,
+            Protocol::WebDav => 80,
+            Protocol::WebDavs => 443,
         }
     }
 
@@ -53,7 +60,8 @@ impl Protocol {
             "nfs" => Protocol::Nfs,
             "sftp" | "ssh" => Protocol::Sftp,
             "ftp" => Protocol::Ftp,
-            "dav" | "davs" | "webdav" => Protocol::WebDav,
+            "dav" | "webdav" => Protocol::WebDav,
+            "davs" | "webdavs" => Protocol::WebDavs,
             _ => return None,
         })
     }
@@ -166,20 +174,21 @@ pub enum NetworkError {
 /// browsable — a network root of the sandbox. A share already mounted by
 /// altay is not mounted again.
 pub fn mount(conn: &Connection, password: Option<&str>) -> Result<PathBuf, NetworkError> {
-    match conn.protocol {
-        Protocol::Sftp => mount_own(conn, password),
-        _ => mount_gio(conn, password),
-    }
-}
-
-/// Mount through altay's own client and FUSE server.
-fn mount_own(conn: &Connection, password: Option<&str>) -> Result<PathBuf, NetworkError> {
     let key = conn.uri();
     if let Some(path) = netfs::find(&key) {
         return Ok(path);
     }
-    let (client, root) = sftp::connect(conn, password)?;
-    netfs::mount(client, &root, &key, &conn.dir_name(), &conn.label()).map_err(|e| NetworkError::MountFailed(e.to_string()))
+    match conn.protocol {
+        Protocol::Sftp => serve(conn, sftp::connect(conn, password)?),
+        Protocol::Ftp => serve(conn, ftp::connect(conn, password)?),
+        Protocol::WebDav | Protocol::WebDavs => serve(conn, webdav::connect(conn, password)?),
+        Protocol::Smb | Protocol::Nfs => mount_gio(conn, password),
+    }
+}
+
+/// Serve a connected client's `root` folder through altay's FUSE server.
+fn serve<R: netfs::Remote>(conn: &Connection, (client, root): (R, String)) -> Result<PathBuf, NetworkError> {
+    netfs::mount(client, &root, &conn.uri(), &conn.dir_name(), &conn.label()).map_err(|e| NetworkError::MountFailed(e.to_string()))
 }
 
 /// Mount through gvfs (`gio mount`). Credentials, if supplied, are fed to the
