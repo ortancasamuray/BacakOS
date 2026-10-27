@@ -1541,7 +1541,7 @@ fn show_preview_content(
                 }
                 Err(_) => {
                     ui.set_preview_is_image(false);
-                    ui.set_preview_text(SharedString::from("(could not decode image)"));
+                    ui.set_preview_text(sx(ui, "(could not decode image)", "(görsel çözülemedi)", "(no se pudo decodificar la imagen)"));
                 }
             }
         }
@@ -1551,12 +1551,59 @@ fn show_preview_content(
         }
         (Ok(preview::Content::Info(info)), _) => {
             ui.set_preview_is_image(false);
-            ui.set_preview_text(SharedString::from(info));
+            ui.set_preview_text(preview_info_text(ui, &info));
         }
         (Err(e), _) => {
             ui.set_preview_is_image(false);
-            ui.set_preview_text(SharedString::from(format!("No preview: {e}")));
+            ui.set_preview_text(preview_error_text(ui, &e));
         }
+    }
+}
+
+/// The pane's description of an entry it cannot show, in the UI language.
+fn preview_info_text(ui: &MainWindow, info: &preview::Info) -> SharedString {
+    use preview::{Info, PreviewKind};
+    let size = |n: u64| humansize::format_size(n, humansize::DECIMAL);
+    match *info {
+        Info::Folder { count, total } => sx(
+            ui,
+            format!("Folder\n{count} items\nTotal: {}", size(total)),
+            format!("Klasör\n{count} öğe\nToplam: {}", size(total)),
+            format!("Carpeta\n{count} elementos\nTotal: {}", size(total)),
+        ),
+        Info::NoRenderer { kind: PreviewKind::Pdf, size: n } => sx(
+            ui,
+            format!("PDF document\nSize: {}\n(install poppler-utils or ghostscript for a preview)", size(n)),
+            format!("PDF belgesi\nBoyut: {}\n(önizleme için poppler-utils ya da ghostscript kurun)", size(n)),
+            format!("Documento PDF\nTamaño: {}\n(instale poppler-utils o ghostscript para la vista previa)", size(n)),
+        ),
+        Info::NoRenderer { size: n, .. } => sx(
+            ui,
+            format!("Video\nSize: {}\n(install ffmpegthumbnailer or ffmpeg for a preview)", size(n)),
+            format!("Video\nBoyut: {}\n(önizleme için ffmpegthumbnailer ya da ffmpeg kurun)", size(n)),
+            format!("Vídeo\nTamaño: {}\n(instale ffmpegthumbnailer o ffmpeg para la vista previa)", size(n)),
+        ),
+        Info::File { kind, size: n } => {
+            let (en, tr, es) = match kind {
+                PreviewKind::Audio => ("Audio file", "Ses dosyası", "Archivo de audio"),
+                PreviewKind::Archive => ("Archive", "Arşiv", "Archivo comprimido"),
+                _ => ("File", "Dosya", "Archivo"),
+            };
+            sx(ui, format!("{en}\nSize: {}", size(n)), format!("{tr}\nBoyut: {}", size(n)), format!("{es}\nTamaño: {}", size(n)))
+        }
+    }
+}
+
+fn preview_error_text(ui: &MainWindow, err: &preview::PreviewError) -> SharedString {
+    match err {
+        preview::PreviewError::Denied(_) => sx(ui, "No preview: access denied", "Önizleme yok: erişim reddedildi", "Sin vista previa: acceso denegado"),
+        preview::PreviewError::Unsupported => sx(ui, "No preview for this file type", "Bu dosya türü için önizleme yok", "Sin vista previa para este tipo de archivo"),
+        preview::PreviewError::Io(e) => sx(
+            ui,
+            format!("No preview: cannot read the file ({e})"),
+            format!("Önizleme yok: dosya okunamadı ({e})"),
+            format!("Sin vista previa: no se puede leer el archivo ({e})"),
+        ),
     }
 }
 
