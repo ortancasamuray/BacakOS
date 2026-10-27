@@ -87,6 +87,16 @@ impl Sandbox {
         &self.roots
     }
 
+    /// Whether `path` lies on a network share (the innermost root wins: a
+    /// share may be mounted inside home).
+    pub fn is_network(&self, path: &Path) -> bool {
+        self.roots
+            .iter()
+            .filter(|r| path.starts_with(r.path()))
+            .max_by_key(|r| r.path().as_os_str().len())
+            .is_some_and(|r| r.kind() == RootKind::Network)
+    }
+
     /// Validate an existing path. Resolves symlinks, then checks the *canonical*
     /// path against the allow/deny lists.
     pub fn resolve(&self, path: impl AsRef<Path>) -> Result<SafePath, AccessDenied> {
@@ -231,6 +241,20 @@ mod tests {
         let sb = Sandbox::with_roots(vec![AllowedRoot::home(home.clone())]);
         let new = home.join("a").join("b.txt"); // neither exists yet
         assert!(sb.resolve_for_create(new).is_ok());
+    }
+
+    #[test]
+    fn innermost_root_decides_network() {
+        let home = tmp().join("home7");
+        let share = home.join("share");
+        fs::create_dir_all(&share).unwrap();
+        let sb = Sandbox::with_roots(vec![
+            AllowedRoot::home(home.clone()),
+            AllowedRoot::new(share.clone(), "share", RootKind::Network),
+        ]);
+        assert!(sb.is_network(&share.join("a.txt")));
+        assert!(!sb.is_network(&home.join("a.txt")));
+        assert!(!sb.is_network(Path::new("/elsewhere")));
     }
 
     #[test]

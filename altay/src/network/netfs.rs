@@ -19,8 +19,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use fuser::{
-    Errno, FileAttr, FileHandle, FileType, Filesystem, FopenFlags, Generation, INodeNo, LockOwner, OpenFlags,
-    ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyStatfs, Request,
+    BsdFileFlags, Errno, FileAttr, FileHandle, FileType, Filesystem, FopenFlags, Generation, INodeNo, LockOwner,
+    OpenFlags, RenameFlags, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen,
+    ReplyStatfs, ReplyWrite, Request, TimeOrNow, WriteFlags,
 };
 
 /// What a protocol client tells the FUSE layer about one remote entry.
@@ -42,6 +43,42 @@ pub enum Kind {
     BrokenLink,
 }
 
+/// How to open a remote file.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct OpenMode {
+    pub read: bool,
+    pub write: bool,
+    pub append: bool,
+    pub truncate: bool,
+    /// Create it if missing, with these permission bits.
+    pub create: Option<u16>,
+    /// Fail if it exists (with `create`).
+    pub exclusive: bool,
+}
+
+impl OpenMode {
+    fn from_flags(flags: i32) -> Self {
+        let acc = flags & libc::O_ACCMODE;
+        Self {
+            read: acc != libc::O_WRONLY,
+            write: acc != libc::O_RDONLY,
+            append: flags & libc::O_APPEND != 0,
+            truncate: flags & libc::O_TRUNC != 0,
+            create: None,
+            exclusive: flags & libc::O_EXCL != 0,
+        }
+    }
+}
+
+/// Attributes to change; `None` leaves one as it is.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Change {
+    pub perm: Option<u16>,
+    pub size: Option<u64>,
+    /// Access and modification time, always set together.
+    pub times: Option<(SystemTime, SystemTime)>,
+}
+
 /// Space on the remote filesystem, in bytes.
 #[derive(Debug, Clone, Copy)]
 pub struct Space {
@@ -57,11 +94,19 @@ pub trait Remote: Send + Sync + 'static {
     type Handle: Send + Sync;
     fn stat(&self, path: &str) -> io::Result<Stat>;
     fn list(&self, path: &str) -> io::Result<Vec<(String, Stat)>>;
-    fn open(&self, path: &str) -> io::Result<Self::Handle>;
+    fn open(&self, path: &str, mode: OpenMode) -> io::Result<Self::Handle>;
     /// Up to `size` bytes at `offset`; fewer only at the end of the file.
     fn read(&self, handle: &Self::Handle, offset: u64, size: u32) -> io::Result<Vec<u8>>;
-    fn close(&self, handle: Self::Handle);
+    fn write(&self, handle: &Self::Handle, offset: u64, data: &[u8]) -> io::Result<()>;
+    /// Closing reports what the server failed to store (a full disk).
+    fn close(&self, handle: Self::Handle) -> io::Result<()>;
     fn space(&self, path: &str) -> io::Result<Space>;
+    fn mkdir(&self, path: &str, perm: u16) -> io::Result<()>;
+    fn remove_file(&self, path: &str) -> io::Result<()>;
+    fn remove_dir(&self, path: &str) -> io::Result<()>;
+    /// Move `from` to `to`; an existing `to` is replaced only if `replace`.
+    fn rename(&self, from: &str, to: &str, replace: bool) -> io::Result<()>;
+    fn change(&self, path: &str, change: Change) -> io::Result<()>;
 }
 
 /// How long the kernel (and our own lookup cache) may trust an answer.
@@ -90,6 +135,41 @@ impl Inodes {
         self.nodes.insert(ino, Node { path: path.to_string(), stat: None });
         self.by_path.insert(path.to_string(), ino);
         ino
+    }
+
+    /// `path` and everything below it, as the inode table knows them.
+    fn under(&self, path: &str) -> Vec<(String, u64)> {
+        let prefix = format!("{}/", path.trim_end_matches('/'));
+        self.by_path.iter().filter(|(p, _)| *p == path || p.starts_with(&prefix)).map(|(p, &i)| (p.clone(), i)).collect()
+    }
+
+    /// The entry is gone from the server. Its inode stays valid (a file
+    /// still open keeps working) but no longer answers to the path.
+    fn forget_path(&mut self, path: &str) {
+        for (p, _) in self.under(path) {
+            self.by_path.remove(&p);
+        }
+    }
+
+    /// The entry (and, for a folder, its contents) moved from `from` to `to`.
+    fn moved(&mut self, from: &str, to: &str) {
+        self.forget_path(to);
+        for (p, ino) in self.under(from) {
+            self.by_path.remove(&p);
+            let new = format!("{to}{}", &p[from.len()..]);
+            if let Some(n) = self.nodes.get_mut(&ino) {
+                n.path = new.clone();
+                n.stat = None;
+            }
+            self.by_path.insert(new, ino);
+        }
+    }
+
+    /// Drop the remembered attributes: the entry changed.
+    fn stale(&mut self, ino: u64) {
+        if let Some(n) = self.nodes.get_mut(&ino) {
+            n.stat = None;
+        }
     }
 }
 
@@ -184,6 +264,34 @@ impl<R: Remote> NetFs<R> {
     fn new_fh(&self) -> u64 {
         self.next_fh.fetch_add(1, Ordering::Relaxed)
     }
+
+    /// The remote path of `name` in folder `parent`.
+    fn child(&self, parent: INodeNo, name: &OsStr) -> Option<String> {
+        Some(join(&self.path_of(parent)?, name.to_str()?))
+    }
+
+    /// Note a new or changed `path` (and that its folder changed): its
+    /// inode, with the server's fresh attributes.
+    fn refreshed(&self, parent: INodeNo, path: &str) -> io::Result<FileAttr> {
+        let ino = {
+            let mut inodes = self.inodes.lock().unwrap();
+            inodes.stale(parent.into());
+            let ino = inodes.ino_for(path);
+            inodes.stale(ino);
+            ino
+        };
+        Ok(self.attr(ino, &self.stat_of(ino, path)?))
+    }
+
+    fn keep_file(&self, h: R::Handle) -> u64 {
+        let fh = self.new_fh();
+        self.files.lock().unwrap().insert(fh, Arc::new(h));
+        fh
+    }
+
+    fn file(&self, fh: FileHandle) -> Option<Arc<R::Handle>> {
+        self.files.lock().unwrap().get(&u64::from(fh)).cloned()
+    }
 }
 
 impl<R: Remote> Filesystem for NetFs<R> {
@@ -214,18 +322,175 @@ impl<R: Remote> Filesystem for NetFs<R> {
     }
 
     fn open(&self, _req: &Request, ino: INodeNo, flags: OpenFlags, reply: ReplyOpen) {
-        if flags.0 & libc::O_ACCMODE != libc::O_RDONLY {
-            return reply.error(Errno::EROFS);
+        let Some(path) = self.path_of(ino) else { return reply.error(Errno::ENOENT) };
+        let mode = OpenMode::from_flags(flags.0);
+        if mode.truncate {
+            self.inodes.lock().unwrap().stale(ino.into());
+        }
+        match self.remote.open(&path, mode) {
+            Ok(h) => reply.opened(FileHandle(self.keep_file(h)), FopenFlags::empty()),
+            Err(e) => reply.error(errno(&e)),
+        }
+    }
+
+    fn create(&self, _req: &Request, parent: INodeNo, name: &OsStr, mode: u32, umask: u32, flags: i32, reply: ReplyCreate) {
+        let Some(path) = self.child(parent, name) else { return reply.error(Errno::ENOENT) };
+        let open = OpenMode { create: Some((mode & !umask & 0o7777) as u16), ..OpenMode::from_flags(flags) };
+        let h = match self.remote.open(&path, open) {
+            Ok(h) => h,
+            Err(e) => return reply.error(errno(&e)),
+        };
+        match self.refreshed(parent, &path) {
+            Ok(attr) => reply.created(&TTL, &attr, Generation(0), FileHandle(self.keep_file(h)), FopenFlags::empty()),
+            Err(e) => {
+                let _ = self.remote.close(h);
+                reply.error(errno(&e));
+            }
+        }
+    }
+
+    fn write(
+        &self,
+        _req: &Request,
+        ino: INodeNo,
+        fh: FileHandle,
+        offset: u64,
+        data: &[u8],
+        _write_flags: WriteFlags,
+        _flags: OpenFlags,
+        _lock_owner: Option<LockOwner>,
+        reply: ReplyWrite,
+    ) {
+        let Some(h) = self.file(fh) else { return reply.error(Errno::EBADF) };
+        self.inodes.lock().unwrap().stale(ino.into());
+        match self.remote.write(&h, offset, data) {
+            Ok(()) => reply.written(data.len() as u32),
+            Err(e) => reply.error(errno(&e)),
+        }
+    }
+
+    fn setattr(
+        &self,
+        _req: &Request,
+        ino: INodeNo,
+        mode: Option<u32>,
+        uid: Option<u32>,
+        gid: Option<u32>,
+        size: Option<u64>,
+        atime: Option<TimeOrNow>,
+        mtime: Option<TimeOrNow>,
+        _ctime: Option<SystemTime>,
+        _fh: Option<FileHandle>,
+        _crtime: Option<SystemTime>,
+        _chgtime: Option<SystemTime>,
+        _bkuptime: Option<SystemTime>,
+        _flags: Option<BsdFileFlags>,
+        reply: ReplyAttr,
+    ) {
+        // Every file shows as the user's own (see `attr`): giving it to
+        // them is a no-op, giving it to anyone else is not possible here.
+        if uid.is_some_and(|u| u != self.uid) || gid.is_some_and(|g| g != self.gid) {
+            return reply.error(Errno::EPERM);
         }
         let Some(path) = self.path_of(ino) else { return reply.error(Errno::ENOENT) };
-        match self.remote.open(&path) {
-            Ok(h) => {
-                let fh = self.new_fh();
-                self.files.lock().unwrap().insert(fh, Arc::new(h));
-                reply.opened(FileHandle(fh), FopenFlags::empty());
+        let mut change = Change { perm: mode.map(|m| (m & 0o7777) as u16), size, times: None };
+        if atime.is_some() || mtime.is_some() {
+            // SFTP sets both times at once: keep the one not asked for.
+            let cur = match self.stat_of(ino.into(), &path) {
+                Ok(st) => st,
+                Err(e) => return reply.error(errno(&e)),
+            };
+            let pick = |t: Option<TimeOrNow>, keep: SystemTime| match t {
+                Some(TimeOrNow::SpecificTime(t)) => t,
+                Some(TimeOrNow::Now) => SystemTime::now(),
+                None => keep,
+            };
+            change.times = Some((pick(atime, cur.atime), pick(mtime, cur.mtime)));
+        }
+        self.inodes.lock().unwrap().stale(ino.into());
+        if let Err(e) = self.remote.change(&path, change) {
+            return reply.error(errno(&e));
+        }
+        match self.stat_of(ino.into(), &path) {
+            Ok(st) => reply.attr(&TTL, &self.attr(ino.into(), &st)),
+            Err(e) => reply.error(errno(&e)),
+        }
+    }
+
+    fn mkdir(&self, _req: &Request, parent: INodeNo, name: &OsStr, mode: u32, umask: u32, reply: ReplyEntry) {
+        let Some(path) = self.child(parent, name) else { return reply.error(Errno::ENOENT) };
+        if let Err(e) = self.remote.mkdir(&path, (mode & !umask & 0o7777) as u16) {
+            return reply.error(errno(&e));
+        }
+        match self.refreshed(parent, &path) {
+            Ok(attr) => reply.entry(&TTL, &attr, Generation(0)),
+            Err(e) => reply.error(errno(&e)),
+        }
+    }
+
+    fn unlink(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
+        let Some(path) = self.child(parent, name) else { return reply.error(Errno::ENOENT) };
+        match self.remote.remove_file(&path) {
+            Ok(()) => {
+                let mut inodes = self.inodes.lock().unwrap();
+                inodes.forget_path(&path);
+                inodes.stale(parent.into());
+                reply.ok();
             }
             Err(e) => reply.error(errno(&e)),
         }
+    }
+
+    fn rmdir(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
+        let Some(path) = self.child(parent, name) else { return reply.error(Errno::ENOENT) };
+        match self.remote.remove_dir(&path) {
+            Ok(()) => {
+                let mut inodes = self.inodes.lock().unwrap();
+                inodes.forget_path(&path);
+                inodes.stale(parent.into());
+                reply.ok();
+            }
+            Err(e) => reply.error(errno(&e)),
+        }
+    }
+
+    fn rename(
+        &self,
+        _req: &Request,
+        parent: INodeNo,
+        name: &OsStr,
+        newparent: INodeNo,
+        newname: &OsStr,
+        flags: RenameFlags,
+        reply: ReplyEmpty,
+    ) {
+        // Swapping two entries has no SFTP equivalent.
+        if flags.contains(RenameFlags::RENAME_EXCHANGE) {
+            return reply.error(Errno::EINVAL);
+        }
+        let (Some(from), Some(to)) = (self.child(parent, name), self.child(newparent, newname)) else {
+            return reply.error(Errno::ENOENT);
+        };
+        let replace = !flags.contains(RenameFlags::RENAME_NOREPLACE);
+        match self.remote.rename(&from, &to, replace) {
+            Ok(()) => {
+                let mut inodes = self.inodes.lock().unwrap();
+                inodes.moved(&from, &to);
+                inodes.stale(parent.into());
+                inodes.stale(newparent.into());
+                reply.ok();
+            }
+            Err(e) => reply.error(errno(&e)),
+        }
+    }
+
+    fn flush(&self, _req: &Request, _ino: INodeNo, _fh: FileHandle, _lock_owner: LockOwner, reply: ReplyEmpty) {
+        // Every write already went to the server.
+        reply.ok();
+    }
+
+    fn fsync(&self, _req: &Request, _ino: INodeNo, _fh: FileHandle, _datasync: bool, reply: ReplyEmpty) {
+        reply.ok();
     }
 
     fn read(
@@ -240,9 +505,7 @@ impl<R: Remote> Filesystem for NetFs<R> {
         reply: ReplyData,
     ) {
         // The read itself must not hold the lock: other files wait on it.
-        let Some(h) = self.files.lock().unwrap().get(&u64::from(fh)).cloned() else {
-            return reply.error(Errno::EBADF);
-        };
+        let Some(h) = self.file(fh) else { return reply.error(Errno::EBADF) };
         match self.remote.read(&h, offset, size) {
             Ok(data) => reply.data(&data),
             Err(e) => reply.error(errno(&e)),
@@ -260,8 +523,11 @@ impl<R: Remote> Filesystem for NetFs<R> {
         reply: ReplyEmpty,
     ) {
         // `release` comes after the file's last read, so nothing else holds it.
-        if let Some(h) = self.files.lock().unwrap().remove(&u64::from(fh)).and_then(|h| Arc::into_inner(h)) {
-            self.remote.close(h);
+        // Its error comes too late for `close()` to see; it is logged.
+        if let Some(h) = self.files.lock().unwrap().remove(&u64::from(fh)).and_then(Arc::into_inner) {
+            if let Err(e) = self.remote.close(h) {
+                log::warn!("closing a remote file: {e}");
+            }
         }
         reply.ok();
     }
@@ -356,7 +622,6 @@ pub fn mount<R: Remote>(remote: R, root: &str, key: &str, dir_name: &str, label:
     std::fs::create_dir_all(&path)?;
     let mut config = fuser::Config::default();
     config.mount_options = vec![
-        fuser::MountOption::RO,
         fuser::MountOption::NoDev,
         fuser::MountOption::NoSuid,
         fuser::MountOption::NoExec,

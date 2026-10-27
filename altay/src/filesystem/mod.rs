@@ -171,7 +171,7 @@ pub enum ListError {
 }
 
 // Re-export the validated operations.
-pub use ops::{create_dir, rename, validate_pair};
+pub use ops::{create_dir, delete_permanently, rename, validate_pair};
 
 #[cfg(test)]
 mod tests {
@@ -203,6 +203,23 @@ mod tests {
         assert!(rename(&sb, home.join("f"), "../escape").is_err());
         assert!(rename(&sb, home.join("f"), "a/b").is_err());
         assert!(rename(&sb, home.join("f"), "..").is_err());
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn delete_permanently_removes_a_link_not_its_target() {
+        let (sb, home) = home_sandbox("delete");
+        std::fs::create_dir_all(home.join("dir/sub")).unwrap();
+        std::fs::write(home.join("dir/sub/f"), b"x").unwrap();
+        std::fs::write(home.join("keep.txt"), b"x").unwrap();
+        std::os::unix::fs::symlink(home.join("keep.txt"), home.join("link")).unwrap();
+        delete_permanently(&sb, home.join("link")).unwrap();
+        assert!(home.join("keep.txt").exists());
+        assert!(std::fs::symlink_metadata(home.join("link")).is_err());
+        delete_permanently(&sb, home.join("dir")).unwrap();
+        assert!(!home.join("dir").exists());
+        // Outside the sandbox: refused, nothing touched.
+        assert!(delete_permanently(&sb, "/etc/hostname").is_err());
         let _ = std::fs::remove_dir_all(&home);
     }
 }
