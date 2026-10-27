@@ -358,7 +358,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ui.on_refresh(move || {
             if let Some(ui) = ui_w.upgrade() {
                 reload_roots(&ui); // pick up newly-mounted devices manually too
-                show_listing(&ui, &st);
+                // Like a live refresh, keep the selection (and so the preview
+                // pane, which describes it) on the re-read rows.
+                let keep = {
+                    let s = st.borrow();
+                    s.selected.iter().filter_map(|&i| s.entries.get(i)).map(|e| e.path.clone()).collect()
+                };
+                request_listing(&ui, &st, keep, true);
             }
         });
     }
