@@ -74,8 +74,19 @@ pub enum Content {
     Image(std::path::PathBuf),
     /// Text to show in a monospace viewer.
     Text(String),
-    /// Fallback: a short human description (type, size).
-    Info(String),
+    /// Fallback: a short description, worded in the UI language by the caller.
+    Info(Info),
+}
+
+/// What the pane says about an entry it cannot show.
+#[derive(Debug, Clone)]
+pub enum Info {
+    /// A folder: its direct entries and the total size of everything below.
+    Folder { count: usize, total: u64 },
+    /// A PDF or video with no renderer installed (or rendering failed).
+    NoRenderer { kind: PreviewKind, size: u64 },
+    /// Any other file.
+    File { kind: PreviewKind, size: u64 },
 }
 
 /// The largest dimension (px) of a generated thumbnail.
@@ -96,40 +107,25 @@ pub fn load(sandbox: &Sandbox, entry: &Entry) -> Result<Content, PreviewError> {
             match render_pdf_first_page(safe.as_path()) {
                 Ok(png) => Ok(Content::Image(png)),
                 // No renderer available / failed: fall back to a description.
-                Err(_) => Ok(Content::Info(format!(
-                    "PDF document\nSize: {}\n(install poppler-utils or ghostscript for a preview)",
-                    humansize::format_size(entry.size, humansize::DECIMAL)
-                ))),
+                Err(_) => Ok(Content::Info(Info::NoRenderer { kind: PreviewKind::Pdf, size: entry.size })),
             }
         }
         PreviewKind::Video => {
             let safe = sandbox.resolve(&entry.path)?;
             match render_video_frame(safe.as_path()) {
                 Ok(png) => Ok(Content::Image(png)),
-                Err(_) => Ok(Content::Info(format!(
-                    "Video\nSize: {}\n(install ffmpegthumbnailer or ffmpeg for a preview)",
-                    humansize::format_size(entry.size, humansize::DECIMAL)
-                ))),
+                Err(_) => Ok(Content::Info(Info::NoRenderer { kind: PreviewKind::Video, size: entry.size })),
             }
         }
         PreviewKind::Text => Ok(Content::Text(text_preview(sandbox, &entry.path)?)),
+        // The pane shows permissions on a line of its own.
         kind => {
-            let perms = crate::permissions::read(sandbox, &entry.path)
-                .map(|p| format!("\nPermissions: {} ({:o})", p.symbolic(), p.mode))
-                .unwrap_or_default();
             if entry.is_dir {
                 let total = crate::filesystem::recursive_size(&entry.path);
                 let count = crate::filesystem::child_count(&entry.path);
-                let size = humansize::format_size(total, humansize::DECIMAL);
-                Ok(Content::Info(format!(
-                    "Klasör\n{count} öğe\nToplam: {size}{perms}"
-                )))
+                Ok(Content::Info(Info::Folder { count, total }))
             } else {
-                let size = humansize::format_size(entry.size, humansize::DECIMAL);
-                let kind_label = format!("{:?}", kind);
-                Ok(Content::Info(format!(
-                    "{kind_label}\nBoyut: {size}{perms}"
-                )))
+                Ok(Content::Info(Info::File { kind, size: entry.size }))
             }
         }
     }
