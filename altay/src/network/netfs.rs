@@ -98,6 +98,11 @@ pub trait Remote: Send + Sync + 'static {
     /// Up to `size` bytes at `offset`; fewer only at the end of the file.
     fn read(&self, handle: &Self::Handle, offset: u64, size: u32) -> io::Result<Vec<u8>>;
     fn write(&self, handle: &Self::Handle, offset: u64, data: &[u8]) -> io::Result<()>;
+    /// The file is being closed (`close()` waits for this): a protocol that
+    /// uploads in one stream finishes it here, so its failure is seen.
+    fn flush(&self, _handle: &Self::Handle) -> io::Result<()> {
+        Ok(())
+    }
     /// Closing reports what the server failed to store (a full disk).
     fn close(&self, handle: Self::Handle) -> io::Result<()>;
     fn space(&self, path: &str) -> io::Result<Space>;
@@ -117,6 +122,17 @@ struct Node {
     path: String,
     /// The attributes a recent listing or lookup gave, with when.
     stat: Option<(Stat, Instant)>,
+    /// While the file is open for writing: its attributes as written so far,
+    /// and by how many handles. FTP and WebDAV store a file only when its
+    /// upload ends; until then the server knows nothing (or an old copy).
+    writing: Option<(Stat, u32)>,
+}
+
+/// An open file: whose it is, and whether it writes.
+struct OpenFile<H> {
+    ino: u64,
+    write: bool,
+    handle: Arc<H>,
 }
 
 struct Inodes {
@@ -132,9 +148,36 @@ impl Inodes {
         }
         let ino = self.next;
         self.next += 1;
-        self.nodes.insert(ino, Node { path: path.to_string(), stat: None });
+        self.nodes.insert(ino, Node { path: path.to_string(), stat: None, writing: None });
         self.by_path.insert(path.to_string(), ino);
         ino
+    }
+
+    /// One more handle writes the file, which (so far) looks like `st`.
+    fn start_writing(&mut self, ino: u64, st: Stat) {
+        if let Some(n) = self.nodes.get_mut(&ino) {
+            n.writing = Some(match n.writing {
+                Some((cur, count)) => (cur, count + 1),
+                None => (st, 1),
+            });
+        }
+    }
+
+    fn written(&mut self, ino: u64, f: impl FnOnce(&mut Stat)) {
+        if let Some((st, _)) = self.nodes.get_mut(&ino).and_then(|n| n.writing.as_mut()) {
+            f(st);
+        }
+    }
+
+    /// A writing handle closed; after the last one, ask the server again.
+    fn stop_writing(&mut self, ino: u64) {
+        if let Some(n) = self.nodes.get_mut(&ino) {
+            n.writing = match n.writing {
+                Some((st, count)) if count > 1 => Some((st, count - 1)),
+                _ => None,
+            };
+            n.stat = None;
+        }
     }
 
     /// `path` and everything below it, as the inode table knows them.
@@ -177,7 +220,7 @@ struct NetFs<R: Remote> {
     remote: R,
     inodes: Mutex<Inodes>,
     /// Open files: our handle number → the client's handle.
-    files: Mutex<HashMap<u64, Arc<R::Handle>>>,
+    files: Mutex<HashMap<u64, OpenFile<R::Handle>>>,
     /// Open directories: the listing read at `opendir`, handed out in pages.
     dirs: Mutex<HashMap<u64, Vec<(u64, FileType, String)>>>,
     next_fh: AtomicU64,
@@ -200,7 +243,7 @@ pub(super) fn join(dir: &str, name: &str) -> String {
 impl<R: Remote> NetFs<R> {
     fn new(remote: R, root: &str) -> Self {
         let mut inodes = Inodes { nodes: HashMap::new(), by_path: HashMap::new(), next: 2 };
-        inodes.nodes.insert(1, Node { path: root.to_string(), stat: None });
+        inodes.nodes.insert(1, Node { path: root.to_string(), stat: None, writing: None });
         inodes.by_path.insert(root.to_string(), 1);
         // SAFETY: getuid/getgid cannot fail.
         let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
@@ -222,8 +265,11 @@ impl<R: Remote> NetFs<R> {
     /// The entry's attributes: from a fresh listing if there was one, else
     /// asked from the server (and remembered).
     fn stat_of(&self, ino: u64, path: &str) -> io::Result<Stat> {
-        if let Some((st, at)) = self.inodes.lock().unwrap().nodes.get(&ino).and_then(|n| n.stat) {
-            if at.elapsed() < TTL {
+        if let Some(n) = self.inodes.lock().unwrap().nodes.get(&ino) {
+            if let Some((st, _)) = n.writing {
+                return Ok(st);
+            }
+            if let Some((st, _)) = n.stat.filter(|(_, at)| at.elapsed() < TTL) {
                 return Ok(st);
             }
         }
@@ -283,14 +329,14 @@ impl<R: Remote> NetFs<R> {
         Ok(self.attr(ino, &self.stat_of(ino, path)?))
     }
 
-    fn keep_file(&self, h: R::Handle) -> u64 {
+    fn keep_file(&self, ino: u64, write: bool, h: R::Handle) -> u64 {
         let fh = self.new_fh();
-        self.files.lock().unwrap().insert(fh, Arc::new(h));
+        self.files.lock().unwrap().insert(fh, OpenFile { ino, write, handle: Arc::new(h) });
         fh
     }
 
     fn file(&self, fh: FileHandle) -> Option<Arc<R::Handle>> {
-        self.files.lock().unwrap().get(&u64::from(fh)).cloned()
+        self.files.lock().unwrap().get(&u64::from(fh)).map(|f| f.handle.clone())
     }
 }
 
@@ -324,11 +370,23 @@ impl<R: Remote> Filesystem for NetFs<R> {
     fn open(&self, _req: &Request, ino: INodeNo, flags: OpenFlags, reply: ReplyOpen) {
         let Some(path) = self.path_of(ino) else { return reply.error(Errno::ENOENT) };
         let mode = OpenMode::from_flags(flags.0);
-        if mode.truncate {
-            self.inodes.lock().unwrap().stale(ino.into());
-        }
+        // What the file looks like before this handle writes to it.
+        let before = if mode.write {
+            match self.stat_of(ino.into(), &path) {
+                Ok(st) if mode.truncate => Some(Stat { size: 0, mtime: SystemTime::now(), ..st }),
+                Ok(st) => Some(st),
+                Err(e) => return reply.error(errno(&e)),
+            }
+        } else {
+            None
+        };
         match self.remote.open(&path, mode) {
-            Ok(h) => reply.opened(FileHandle(self.keep_file(h)), FopenFlags::empty()),
+            Ok(h) => {
+                if let Some(st) = before {
+                    self.inodes.lock().unwrap().start_writing(ino.into(), st);
+                }
+                reply.opened(FileHandle(self.keep_file(ino.into(), mode.write, h)), FopenFlags::empty());
+            }
             Err(e) => reply.error(errno(&e)),
         }
     }
@@ -340,13 +398,19 @@ impl<R: Remote> Filesystem for NetFs<R> {
             Ok(h) => h,
             Err(e) => return reply.error(errno(&e)),
         };
-        match self.refreshed(parent, &path) {
-            Ok(attr) => reply.created(&TTL, &attr, Generation(0), FileHandle(self.keep_file(h)), FopenFlags::empty()),
-            Err(e) => {
-                let _ = self.remote.close(h);
-                reply.error(errno(&e));
-            }
-        }
+        // The new file is empty and this handle's: no need to ask the
+        // server, which may not even show it before the upload ends.
+        let now = SystemTime::now();
+        let st = Stat { kind: Kind::File, size: 0, perm: open.create.unwrap_or(0o644), mtime: now, atime: now };
+        let ino = {
+            let mut inodes = self.inodes.lock().unwrap();
+            inodes.stale(parent.into());
+            let ino = inodes.ino_for(&path);
+            inodes.start_writing(ino, st);
+            ino
+        };
+        let fh = self.keep_file(ino, true, h);
+        reply.created(&TTL, &self.attr(ino, &st), Generation(0), FileHandle(fh), FopenFlags::empty());
     }
 
     fn write(
@@ -362,9 +426,15 @@ impl<R: Remote> Filesystem for NetFs<R> {
         reply: ReplyWrite,
     ) {
         let Some(h) = self.file(fh) else { return reply.error(Errno::EBADF) };
-        self.inodes.lock().unwrap().stale(ino.into());
         match self.remote.write(&h, offset, data) {
-            Ok(()) => reply.written(data.len() as u32),
+            Ok(()) => {
+                let end = offset + data.len() as u64;
+                self.inodes.lock().unwrap().written(ino.into(), |st| {
+                    st.size = st.size.max(end);
+                    st.mtime = SystemTime::now();
+                });
+                reply.written(data.len() as u32);
+            }
             Err(e) => reply.error(errno(&e)),
         }
     }
@@ -411,6 +481,13 @@ impl<R: Remote> Filesystem for NetFs<R> {
         if let Err(e) = self.remote.change(&path, change) {
             return reply.error(errno(&e));
         }
+        self.inodes.lock().unwrap().written(ino.into(), |st| {
+            st.perm = change.perm.unwrap_or(st.perm);
+            st.size = change.size.unwrap_or(st.size);
+            if let Some((a, m)) = change.times {
+                (st.atime, st.mtime) = (a, m);
+            }
+        });
         match self.stat_of(ino.into(), &path) {
             Ok(st) => reply.attr(&TTL, &self.attr(ino.into(), &st)),
             Err(e) => reply.error(errno(&e)),
@@ -484,9 +561,12 @@ impl<R: Remote> Filesystem for NetFs<R> {
         }
     }
 
-    fn flush(&self, _req: &Request, _ino: INodeNo, _fh: FileHandle, _lock_owner: LockOwner, reply: ReplyEmpty) {
-        // Every write already went to the server.
-        reply.ok();
+    fn flush(&self, _req: &Request, _ino: INodeNo, fh: FileHandle, _lock_owner: LockOwner, reply: ReplyEmpty) {
+        let Some(h) = self.file(fh) else { return reply.ok() };
+        match self.remote.flush(&h) {
+            Ok(()) => reply.ok(),
+            Err(e) => reply.error(errno(&e)),
+        }
     }
 
     fn fsync(&self, _req: &Request, _ino: INodeNo, _fh: FileHandle, _datasync: bool, reply: ReplyEmpty) {
@@ -524,10 +604,14 @@ impl<R: Remote> Filesystem for NetFs<R> {
     ) {
         // `release` comes after the file's last read, so nothing else holds it.
         // Its error comes too late for `close()` to see; it is logged.
-        if let Some(h) = self.files.lock().unwrap().remove(&u64::from(fh)).and_then(Arc::into_inner) {
+        let Some(file) = self.files.lock().unwrap().remove(&u64::from(fh)) else { return reply.ok() };
+        if let Some(h) = Arc::into_inner(file.handle) {
             if let Err(e) = self.remote.close(h) {
                 log::warn!("closing a remote file: {e}");
             }
+        }
+        if file.write {
+            self.inodes.lock().unwrap().stop_writing(file.ino);
         }
         reply.ok();
     }
@@ -655,13 +739,27 @@ pub fn clear_stale() {
 }
 
 /// Unmount every share (on exit). A share still in use (a terminal open in
-/// it) is detached lazily.
+/// it), or one whose server keeps a request hanging, is detached lazily:
+/// leaving altay must not wait on the network.
 pub fn unmount_all() {
+    const WAIT: Duration = Duration::from_secs(3);
     let mounts = std::mem::take(&mut *MOUNTS.lock().unwrap());
     for m in mounts {
-        if let Err(e) = m.session.umount_and_join() {
-            log::warn!("unmount {}: {e}", m.path.display());
-            let _ = std::process::Command::new("fusermount3").arg("-uz").arg(&m.path).status();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let session = m.session;
+        std::thread::spawn(move || {
+            let _ = tx.send(session.umount_and_join());
+        });
+        match rx.recv_timeout(WAIT) {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                log::warn!("unmount {}: {e}", m.path.display());
+                let _ = std::process::Command::new("fusermount3").arg("-uz").arg(&m.path).status();
+            }
+            Err(_) => {
+                log::warn!("unmount {}: still busy, detached", m.path.display());
+                let _ = std::process::Command::new("fusermount3").arg("-uz").arg(&m.path).status();
+            }
         }
         let _ = std::fs::remove_dir(&m.path);
     }

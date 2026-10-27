@@ -306,7 +306,15 @@ fn copy_tree(state: &TransferState, src: &Path, dst: &Path) -> bool {
             state.set_status(Status::Cancelled);
             return false;
         }
-        match std::fs::copy(src, dst) {
+        // On a network share the server answers only when the upload ends,
+        // and a failure there is lost on close: the copy must also have the
+        // size of what was sent.
+        let copied = std::fs::copy(src, dst).and_then(|bytes| match std::fs::metadata(dst) {
+            Ok(m) if m.len() == bytes => Ok(bytes),
+            Ok(m) => Err(std::io::Error::other(format!("{}: {} of {bytes} bytes stored", dst.display(), m.len()))),
+            Err(e) => Err(e),
+        });
+        match copied {
             Ok(bytes) => {
                 state.bytes_done.fetch_add(bytes, Ordering::SeqCst);
                 state.files_done.fetch_add(1, Ordering::SeqCst);

@@ -85,14 +85,7 @@ impl Default for Prefs {
 impl SavedConnection {
     /// Parse the stored protocol string.
     pub fn protocol(&self) -> Option<Protocol> {
-        Some(match self.protocol.as_str() {
-            "smb" => Protocol::Smb,
-            "sftp" => Protocol::Sftp,
-            "ftp" => Protocol::Ftp,
-            "dav" | "webdav" => Protocol::WebDav,
-            "nfs" => Protocol::Nfs,
-            _ => return None,
-        })
+        Protocol::from_scheme(&self.protocol)
     }
 }
 
