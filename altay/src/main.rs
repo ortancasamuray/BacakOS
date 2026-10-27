@@ -132,6 +132,8 @@ enum Confirm {
     /// Move these paths to the trash (captured when asking, so a live refresh
     /// while the dialog is open cannot change the target).
     Trash(Vec<PathBuf>),
+    /// Delete these paths for good (on a network share: no trash there).
+    Delete(Vec<PathBuf>),
     /// Permanently delete everything in the trash.
     EmptyTrash,
 }
@@ -2325,6 +2327,33 @@ fn trash_selected(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
         ui.set_status_text(sx(ui, "Nothing selected", "Seçim yok", "Nada seleccionado"));
         return;
     }
+    // A network share has no trash (one there would keep the server full and
+    // show other users a .Trash folder): deleting is final, and said so.
+    if paths.iter().any(|p| state.borrow().sandbox.is_network(p)) {
+        let message = match paths.as_slice() {
+            [one] => {
+                let name = one.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                sx(
+                    ui,
+                    format!("Delete \u{201c}{name}\u{201d} permanently? Network shares have no Trash; this cannot be undone."),
+                    format!("\u{201c}{name}\u{201d} kalıcı olarak silinsin mi? Ağ paylaşımlarında çöp yok; geri alınamaz."),
+                    format!("¿Eliminar \u{201c}{name}\u{201d} permanentemente? Los recursos de red no tienen papelera; no se puede deshacer."),
+                )
+            }
+            many => {
+                let n = many.len();
+                sx(
+                    ui,
+                    format!("Delete {n} items permanently? Network shares have no Trash; this cannot be undone."),
+                    format!("{n} öğe kalıcı olarak silinsin mi? Ağ paylaşımlarında çöp yok; geri alınamaz."),
+                    format!("¿Eliminar {n} elementos permanentemente? Los recursos de red no tienen papelera; no se puede deshacer."),
+                )
+            }
+        };
+        let action = sx(ui, "Delete Permanently", "Kalıcı olarak sil", "Eliminar permanentemente");
+        ask_confirm(ui, state, Confirm::Delete(paths), action.clone(), message, action);
+        return;
+    }
     let message = match paths.as_slice() {
         [one] => {
             let name = one.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -2355,6 +2384,34 @@ fn do_trash(ui: &MainWindow, state: &Rc<RefCell<AppState>>, paths: Vec<PathBuf>)
         }
         Err(e) => ui.set_status_text(sx(ui, format!("Trash failed: {e}"), format!("Çöpe atma başarısız: {e}"), format!("Error al enviar a la papelera: {e}"))),
     }
+}
+
+/// Delete `paths` for good, off the UI thread: on a network share every file
+/// of a folder is a round trip to the server.
+fn do_delete(ui: &MainWindow, state: &Rc<RefCell<AppState>>, paths: Vec<PathBuf>) {
+    ui.set_status_text(sx(ui, "Deleting…", "Siliniyor…", "Eliminando…"));
+    let sandbox = state.borrow().sandbox.clone();
+    let weak = ui.as_weak();
+    std::thread::Builder::new()
+        .name("delete".into())
+        .spawn(move || {
+            let n = paths.len();
+            let failed = paths.iter().map(|p| filesystem::delete_permanently(&sandbox, p)).find_map(Result::err);
+            let _ = weak.upgrade_in_event_loop(move |ui| {
+                APP.with(|a| {
+                    if let Some(state) = a.borrow().as_ref() {
+                        match failed {
+                            None => ui.set_status_text(sx(&ui, format!("Deleted {n} item(s)"), format!("{n} öğe silindi"), format!("{n} elemento(s) eliminado(s)"))),
+                            Some(e) => ui.set_status_text(sx(&ui, format!("Delete failed: {e}"), format!("Silme başarısız: {e}"), format!("Error al eliminar: {e}"))),
+                        }
+                        if state.borrow().listing {
+                            reload(&ui, state);
+                        }
+                    }
+                });
+            });
+        })
+        .ok();
 }
 
 /// How long the "Undo" button stays after a trash action.
@@ -3003,6 +3060,7 @@ fn confirm_accepted(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
     let action = state.borrow_mut().pending_confirm.take();
     match action {
         Some(Confirm::Trash(paths)) => do_trash(ui, state, paths),
+        Some(Confirm::Delete(paths)) => do_delete(ui, state, paths),
         Some(Confirm::EmptyTrash) => do_empty_trash(ui, state),
         None => {}
     }

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Anadolu Panteri <bilgi@anadolupanteri.org.tr>
 
-//! Sandbox-checked file operations: rename and create. (Copies and moves run
-//! in the `transfer` module.)
+//! Sandbox-checked file operations: rename, create and permanent delete.
+//! (Copies and moves run in the `transfer` module.)
 //!
 //! Source and destination are both validated. Destinations use
 //! [`Sandbox::resolve_for_create`] because the target usually doesn't exist yet.
@@ -63,6 +63,23 @@ pub fn rename(
     }
     std::fs::rename(src.as_path(), dst.as_path())?;
     Ok(dst)
+}
+
+/// Delete `path` for good (a folder with everything in it) — for network
+/// shares, which have no trash. A symlink is removed itself, never what it
+/// points at: only its folder is resolved through the sandbox.
+pub fn delete_permanently(sandbox: &Sandbox, path: impl AsRef<Path>) -> Result<(), OperationError> {
+    let path = path.as_ref();
+    let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+        return Err(OperationError::Denied(AccessDenied::MissingParent));
+    };
+    let target = sandbox.resolve(parent)?.as_path().join(name);
+    if std::fs::symlink_metadata(&target)?.is_dir() {
+        std::fs::remove_dir_all(&target)?;
+    } else {
+        std::fs::remove_file(&target)?;
+    }
+    Ok(())
 }
 
 /// Create a new directory (and parents within the sandbox).

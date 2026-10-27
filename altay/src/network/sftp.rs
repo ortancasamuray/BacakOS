@@ -18,9 +18,9 @@ use russh::client;
 use russh::keys::{PrivateKeyWithHashAlg, PublicKeyOrCertificate};
 use russh_sftp::client::error::Error as SftpError;
 use russh_sftp::client::RawSftpSession;
-use russh_sftp::protocol::{FileAttributes, OpenFlags, StatusCode};
+use russh_sftp::protocol::{FileAttributes, OpenFlags, Packet, StatusCode};
 
-use super::netfs::{Kind, Remote, Space, Stat};
+use super::netfs::{Change, Kind, OpenMode, Remote, Space, Stat};
 use super::{Connection, NetworkError};
 
 /// Gives up on an unreachable host / a silent server after this long.
@@ -28,6 +28,10 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// A request the server does not answer in time fails (instead of hanging
 /// the folder that asked).
 const REQUEST_TIMEOUT_SECS: u64 = 15;
+/// A write is sent in pieces of this size, all at once (servers take up to
+/// 256 KiB; OpenSSH's own client uses 32 KiB).
+const WRITE_CHUNK: usize = 32 * 1024;
+const POSIX_RENAME: &str = "posix-rename@openssh.com";
 
 /// The runtime the SSH connections live on; FUSE threads block on it.
 fn runtime() -> &'static tokio::runtime::Runtime {
@@ -78,6 +82,8 @@ impl client::Handler for HostCheck {
 
 pub struct Sftp {
     sftp: RawSftpSession,
+    /// The server can rename over an existing file in one step.
+    posix_rename: bool,
     /// Keeps the SSH connection open while the share is mounted.
     _ssh: client::Handle<HostCheck>,
 }
@@ -116,7 +122,8 @@ async fn connect_async(conn: &Connection, password: Option<&str>) -> Result<(Sft
     let sftp = RawSftpSession::new(channel.into_stream());
     sftp.set_timeout(REQUEST_TIMEOUT_SECS);
     let sftp_failed = |e: SftpError| NetworkError::MountFailed(e.to_string());
-    sftp.init().await.map_err(sftp_failed)?;
+    let version = sftp.init().await.map_err(sftp_failed)?;
+    let posix_rename = version.extensions.get(POSIX_RENAME).is_some_and(|v| v == "1");
     let root = match &conn.share {
         Some(share) => format!("/{}", share.trim_matches('/')),
         None => sftp.realpath(".").await.map_err(sftp_failed)?.files.first().map(|f| f.filename.clone()).unwrap_or_else(|| "/".into()),
@@ -125,7 +132,7 @@ async fn connect_async(conn: &Connection, password: Option<&str>) -> Result<(Sft
     if !attrs.is_dir() {
         return Err(NetworkError::MountFailed(format!("{root}: not a folder")));
     }
-    Ok((Sftp { sftp, _ssh: ssh }, root))
+    Ok((Sftp { sftp, posix_rename, _ssh: ssh }, root))
 }
 
 /// Try the ssh-agent's keys, the default key files, then the password.
@@ -191,6 +198,32 @@ fn to_stat(a: &FileAttributes) -> Stat {
 }
 
 impl Sftp {
+    async fn exists(&self, path: &str) -> bool {
+        self.sftp.lstat(path).await.is_ok()
+    }
+
+    /// SFTP v3 has one code for most failures ("Failure"): when the path
+    /// turns out to exist, that was the reason.
+    async fn exists_error(&self, e: SftpError, path: &str) -> io::Error {
+        if matches!(&e, SftpError::Status(s) if s.status_code == StatusCode::Failure) && self.exists(path).await {
+            return io::Error::from_raw_os_error(libc::EEXIST);
+        }
+        io_error(e)
+    }
+
+    async fn posix_rename(&self, from: &str, to: &str) -> Result<(), SftpError> {
+        let mut data = Vec::with_capacity(8 + from.len() + to.len());
+        for s in [from, to] {
+            data.extend_from_slice(&(s.len() as u32).to_be_bytes());
+            data.extend_from_slice(s.as_bytes());
+        }
+        match self.sftp.extended(POSIX_RENAME, data).await? {
+            Packet::Status(s) if s.status_code == StatusCode::Ok => Ok(()),
+            Packet::Status(s) => Err(SftpError::Status(s)),
+            _ => Err(SftpError::UnexpectedPacket),
+        }
+    }
+
     /// `lstat`'s answer, with a link replaced by what it points at.
     async fn follow(&self, path: &str, attrs: FileAttributes) -> Stat {
         if !attrs.is_symlink() {
@@ -239,9 +272,21 @@ impl Remote for Sftp {
         })
     }
 
-    fn open(&self, path: &str) -> io::Result<String> {
+    fn open(&self, path: &str, mode: OpenMode) -> io::Result<String> {
+        let mut flags = OpenFlags::empty();
+        flags.set(OpenFlags::READ, mode.read);
+        flags.set(OpenFlags::WRITE, mode.write);
+        flags.set(OpenFlags::APPEND, mode.append);
+        flags.set(OpenFlags::TRUNCATE, mode.truncate && mode.write);
+        flags.set(OpenFlags::CREATE, mode.create.is_some());
+        flags.set(OpenFlags::EXCLUDE, mode.exclusive && mode.create.is_some());
+        let attrs = FileAttributes { permissions: mode.create.map(u32::from), ..Default::default() };
         runtime().block_on(async {
-            Ok(self.sftp.open(path, OpenFlags::READ, FileAttributes::default()).await.map_err(io_error)?.handle)
+            match self.sftp.open(path, flags, attrs).await {
+                Ok(h) => Ok(h.handle),
+                Err(e) if flags.contains(OpenFlags::EXCLUDE) => Err(self.exists_error(e, path).await),
+                Err(e) => Err(io_error(e)),
+            }
         })
     }
 
@@ -262,10 +307,84 @@ impl Remote for Sftp {
         })
     }
 
-    fn close(&self, handle: String) {
+    fn write(&self, handle: &String, offset: u64, data: &[u8]) -> io::Result<()> {
         runtime().block_on(async {
-            let _ = self.sftp.close(handle).await;
-        });
+            let writes = data.chunks(WRITE_CHUNK).enumerate().map(|(i, chunk)| {
+                self.sftp.write(handle.as_str(), offset + (i * WRITE_CHUNK) as u64, chunk.to_vec())
+            });
+            futures_util::future::try_join_all(writes).await.map_err(io_error)?;
+            Ok(())
+        })
+    }
+
+    fn close(&self, handle: String) -> io::Result<()> {
+        runtime().block_on(async { self.sftp.close(handle).await.map(drop).map_err(io_error) })
+    }
+
+    fn mkdir(&self, path: &str, perm: u16) -> io::Result<()> {
+        let attrs = FileAttributes { permissions: Some(perm.into()), ..Default::default() };
+        runtime().block_on(async {
+            match self.sftp.mkdir(path, attrs).await {
+                Ok(_) => Ok(()),
+                Err(e) => Err(self.exists_error(e, path).await),
+            }
+        })
+    }
+
+    fn remove_file(&self, path: &str) -> io::Result<()> {
+        runtime().block_on(async { self.sftp.remove(path).await.map(drop).map_err(io_error) })
+    }
+
+    fn remove_dir(&self, path: &str) -> io::Result<()> {
+        runtime().block_on(async {
+            match self.sftp.rmdir(path).await {
+                Ok(_) => Ok(()),
+                // "Failure" on a folder that is still there: it is not empty.
+                Err(SftpError::Status(s)) if s.status_code == StatusCode::Failure && self.exists(path).await => {
+                    Err(io::Error::from_raw_os_error(libc::ENOTEMPTY))
+                }
+                Err(e) => Err(io_error(e)),
+            }
+        })
+    }
+
+    fn rename(&self, from: &str, to: &str, replace: bool) -> io::Result<()> {
+        runtime().block_on(async {
+            // A plain SFTP rename never replaces: it fails on an existing target.
+            if !replace {
+                return match self.sftp.rename(from, to).await {
+                    Ok(_) => Ok(()),
+                    Err(e) => Err(self.exists_error(e, to).await),
+                };
+            }
+            if self.posix_rename {
+                return self.posix_rename(from, to).await.map_err(io_error);
+            }
+            match self.sftp.rename(from, to).await {
+                Ok(_) => Ok(()),
+                // Without the extension: remove the file in the way, then
+                // move (not atomic, as close as SFTP v3 gets).
+                Err(e) => {
+                    if !self.exists(to).await {
+                        return Err(io_error(e));
+                    }
+                    self.sftp.remove(to).await.map_err(io_error)?;
+                    self.sftp.rename(from, to).await.map(drop).map_err(io_error)
+                }
+            }
+        })
+    }
+
+    fn change(&self, path: &str, change: Change) -> io::Result<()> {
+        let secs = |t: SystemTime| t.duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_secs() as u32);
+        let attrs = FileAttributes {
+            permissions: change.perm.map(u32::from),
+            size: change.size,
+            atime: change.times.map(|(a, _)| secs(a)),
+            mtime: change.times.map(|(_, m)| secs(m)),
+            ..Default::default()
+        };
+        runtime().block_on(async { self.sftp.setstat(path, attrs).await.map(drop).map_err(io_error) })
     }
 
     fn space(&self, path: &str) -> io::Result<Space> {
