@@ -917,6 +917,15 @@ export component MainWindow inherits Window {
     callback open-with-selected();
 
     forward-focus: key-scope;
+    // A text field keeps the keyboard after it is used (search, path bar)
+    // or after its dialog closes: give it back to the shortcuts, or Ctrl+C,
+    // Delete, … would go on typing into a field nobody looks at.
+    changed editing-path => { if (!self.editing-path) { key-scope.focus(); } }
+    changed show-connect => { if (!self.show-connect) { key-scope.focus(); } }
+    changed show-rename => { if (!self.show-rename) { key-scope.focus(); } }
+    changed show-compress => { if (!self.show-compress) { key-scope.focus(); } }
+    changed show-settings => { if (!self.show-settings) { key-scope.focus(); } }
+    changed show-open-with => { if (!self.show-open-with) { key-scope.focus(); } }
     key-scope := FocusScope {
         key-pressed(e) => {
             if (e.modifiers.control && (e.text == "z" || e.text == "Z") && root.undo-label != "") { root.undo-action(); return EventResult.accept; }
@@ -1292,6 +1301,7 @@ export component MainWindow inherits Window {
                         if editing-path : LineEdit {
                             text <=> current-path;
                             placeholder-text: L.path-ph;
+                            init => { self.focus(); self.select-all(); }
                             accepted(t) => { root.navigate(t); root.editing-path = false; }
                         }
                     }
@@ -1329,6 +1339,7 @@ export component MainWindow inherits Window {
                             width: parent.viewport-width;
                             height: parent.viewport-height;
                             clicked => {
+                                key-scope.focus();
                                 if (root.selection-mode) { root.toggle-selection-mode(); }
                                 else { root.clear-selection(); }
                                 root.focused-idx = -1;
@@ -1353,12 +1364,14 @@ export component MainWindow inherits Window {
                                             type-text: "", kind: "", selected: false };
                                     selection-mode: root.selection-mode;
                                     activate => {
+                                        key-scope.focus();
                                         root.focused-idx = self.idx;
                                         root.open-entry(self.idx);
                                     }
-                                    toggle => { root.toggle-entry(self.idx); }
+                                    toggle => { key-scope.focus(); root.toggle-entry(self.idx); }
                                     dropped => { root.perform-drop(); }
                                     enter-selection => {
+                                        key-scope.focus();
                                         if (!root.selection-mode) { root.toggle-selection-mode(); }
                                     }
                                 }
@@ -1831,9 +1844,18 @@ export component MainWindow inherits Window {
                 padding: 20px; spacing: 12px;
                 Text { text: L.connect-to-server; color: Theme.text; font-size: 18px; font-weight: 700; }
                 Text { text: L.address; color: Theme.text-dim; font-size: 12px; }
-                LineEdit { text <=> root.connect-address; placeholder-text: L.addr-ph; }
+                // Typing starts where it is needed: the address, or (a known
+                // share asking again) the password.
+                addr-edit := LineEdit {
+                    text <=> root.connect-address; placeholder-text: L.addr-ph;
+                    init => { if (root.connect-address == "") { self.focus(); } }
+                }
                 LineEdit { text <=> root.connect-user; placeholder-text: L.username-ph; }
-                LineEdit { text <=> root.connect-password; placeholder-text: L.password; input-type: password; }
+                LineEdit {
+                    text <=> root.connect-password; placeholder-text: L.password; input-type: password;
+                    init => { if (root.connect-address != "") { self.focus(); } }
+                    accepted(_t) => { root.do-connect(); }
+                }
                 CheckBox { text: L.save-pw; checked <=> root.connect-save; }
                 if root.connect-error != "" : Text {
                     text: root.connect-error; color: #e05555; font-size: 12px; wrap: word-wrap;
@@ -1897,6 +1919,7 @@ export component MainWindow inherits Window {
                 Text { text: L.rename-title; color: Theme.text; font-size: 18px; font-weight: 700; }
                 rename-edit := LineEdit {
                     text <=> root.rename-text;
+                    init => { self.focus(); self.select-all(); }
                     accepted(_t) => { root.do-rename(); }
                 }
                 Rectangle { vertical-stretch: 1; }
