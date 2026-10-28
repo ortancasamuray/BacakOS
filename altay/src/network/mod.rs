@@ -174,6 +174,7 @@ impl Connection {
 
 #[derive(Debug, thiserror::Error)]
 pub enum NetworkError {
+    /// NFS goes through gvfs, which is not installed.
     #[error("the `gio` mount helper is not installed")]
     BackendUnavailable,
     #[error("cannot reach the server: {0}")]
