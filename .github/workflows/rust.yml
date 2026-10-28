@@ -1,22 +1,68 @@
 name: Rust
 
+# BacakOS is a monorepo without a Cargo workspace at its root: each project
+# (and each project's workspace) is built and tested on its own, the ones
+# build-debs.sh packages. The uzakel Windows/macOS parts don't build on
+# Linux and are left out.
+
 on:
   push:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
+  # CI builds once from scratch: incremental artefacts only cost cache space.
+  CARGO_INCREMENTAL: 0
 
 jobs:
-  build:
-
+  test:
+    name: ${{ matrix.project.dir }}
     runs-on: ubuntu-latest
-
+    # The distribution BacakOS is built on, so the package names below are
+    # the same as in setup-deps.sh.
+    container: debian:trixie
+    strategy:
+      fail-fast: false
+      matrix:
+        project:
+          - { dir: bacak, args: "--workspace --locked" }
+          - { dir: turan, args: "--workspace --locked" }
+          - { dir: bacakonay/linux, args: "--workspace --locked" }
+          - { dir: uzakyonetim, args: "--workspace --locked" }
+          - { dir: uzakel/uzakel-android/daemon, args: "--locked" }
+          - { dir: altay, args: "--locked" }
+          - { dir: Belgeler, args: "-p bacak-belge --locked" }
+          # tahta keeps its Cargo.lock out of git.
+          - { dir: tahta, args: "" }
+          - { dir: kur, args: "--locked" }
+    defaults:
+      run:
+        working-directory: ${{ matrix.project.dir }}
     steps:
-    - uses: actions/checkout@v4
-    - name: Build
-      run: cargo build --verbose
-    - name: Run tests
-      run: cargo test --verbose
+      - name: System packages
+        working-directory: /
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ca-certificates curl git build-essential pkg-config clang libclang-dev cmake \
+            libdbus-1-dev libpam0g-dev libseat-dev libinput-dev libgbm-dev libudev-dev \
+            libdrm-dev libxkbcommon-dev libwayland-dev libfontconfig1-dev libgl1-mesa-dev \
+            libgles-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
+            libfreetype-dev libharfbuzz-dev libbz2-dev liblzma-dev zlib1g-dev
+
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ matrix.project.dir }}
+
+      - name: Build
+        run: cargo build --verbose ${{ matrix.project.args }}
+
+      - name: Test
+        run: cargo test ${{ matrix.project.args }}
