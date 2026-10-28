@@ -160,9 +160,11 @@ dependencies = [
  "md5 0.7.0",
  "notify",
  "percent-encoding",
+ "ring",
  "roxmltree",
  "russh",
  "russh-sftp",
+ "rustls",
  "serde",
  "sevenz-rust",
  "slint",
@@ -176,6 +178,7 @@ dependencies = [
  "unrar",
  "ureq",
  "walkdir",
+ "webpki-roots",
  "xz2",
  "zbus 4.4.0",
  "zip",
@@ -6441,6 +6444,7 @@ dependencies = [
  "chrono",
  "lazy-regex",
  "log",
+ "rustls",
  "thiserror 2.0.21",
 ]
 

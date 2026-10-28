@@ -12,6 +12,7 @@
 mod ftp;
 pub mod netfs;
 mod sftp;
+pub mod tls;
 mod webdav;
 
 use std::path::PathBuf;
@@ -23,6 +24,8 @@ pub enum Protocol {
     Nfs,
     Sftp,
     Ftp,
+    /// FTP over TLS (`ftps://`): explicit, or implicit on port 990.
+    Ftps,
     /// WebDAV over HTTP (`dav://`).
     WebDav,
     /// WebDAV over HTTPS (`davs://`).
@@ -37,6 +40,7 @@ impl Protocol {
             Protocol::Nfs => "nfs",
             Protocol::Sftp => "sftp",
             Protocol::Ftp => "ftp",
+            Protocol::Ftps => "ftps",
             Protocol::WebDav => "dav",
             Protocol::WebDavs => "davs",
         }
@@ -47,7 +51,7 @@ impl Protocol {
             Protocol::Smb => 445,
             Protocol::Nfs => 2049,
             Protocol::Sftp => 22,
-            Protocol::Ftp => 21,
+            Protocol::Ftp | Protocol::Ftps => 21,
             Protocol::WebDav => 80,
             Protocol::WebDavs => 443,
         }
@@ -60,6 +64,7 @@ impl Protocol {
             "nfs" => Protocol::Nfs,
             "sftp" | "ssh" => Protocol::Sftp,
             "ftp" => Protocol::Ftp,
+            "ftps" => Protocol::Ftps,
             "dav" | "webdav" => Protocol::WebDav,
             "davs" | "webdavs" => Protocol::WebDavs,
             _ => return None,
@@ -164,6 +169,15 @@ pub enum NetworkError {
     PasswordNeeded,
     #[error("the server's host key differs from the one in ~/.ssh/known_hosts")]
     HostKeyChanged,
+    /// The server's certificate is not signed by a known authority and was
+    /// never accepted: the user may compare and accept its fingerprint.
+    #[error("the server's certificate is not trusted (SHA-256 {fingerprint})")]
+    UnknownCertificate { host: String, port: u16, fingerprint: String },
+    #[error("the server's certificate differs from the one accepted before")]
+    CertificateChanged,
+    /// `ftps://` to a server without TLS: refused rather than sent in clear.
+    #[error("the server does not offer TLS")]
+    NoTls,
     #[error("mount failed: {0}")]
     MountFailed(String),
     #[error("the share mounted but its local path could not be located")]
@@ -180,7 +194,7 @@ pub fn mount(conn: &Connection, password: Option<&str>) -> Result<PathBuf, Netwo
     }
     match conn.protocol {
         Protocol::Sftp => serve(conn, sftp::connect(conn, password)?),
-        Protocol::Ftp => serve(conn, ftp::connect(conn, password)?),
+        Protocol::Ftp | Protocol::Ftps => serve(conn, ftp::connect(conn, password)?),
         Protocol::WebDav | Protocol::WebDavs => serve(conn, webdav::connect(conn, password)?),
         Protocol::Smb | Protocol::Nfs => mount_gio(conn, password),
     }

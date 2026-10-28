@@ -68,7 +68,11 @@ toml = "0.8"
 fuser = "0.18"
 russh = { version = "0.65", default-features = false, features = ["ring", "rsa", "flate2"] }
 russh-sftp = "3"
-suppaftp = "12"
+# FTPS: "deprecated" holds implicit TLS (port 990)
+suppaftp = { version = "12", features = ["rustls-ring", "deprecated"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+ring = "0.17"
+webpki-roots = "1"
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 roxmltree = "0.21"
 base64 = "0.22"
