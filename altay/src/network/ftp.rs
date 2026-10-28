@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Anadolu Panteri <bilgi@anadolupanteri.org.tr>
 
-//! FTP client for [`netfs`](super::netfs) (suppaftp, plain FTP).
+//! FTP client for [`netfs`](super::netfs) (suppaftp). `ftps://` encrypts
+//! with TLS — explicitly (`AUTH TLS`), or from the start on port 990 — and
+//! never falls back to plain FTP; certificates are checked as in
+//! [`super::tls`].
 //!
 //! One control connection answers listings and changes; every open file
 //! gets a connection of its own, since FTP moves a file's data over a
@@ -14,15 +17,19 @@
 
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use suppaftp::list::{File, ListParser, PosixPexQuery};
 use suppaftp::types::FileType;
-use suppaftp::{FtpError, FtpStream, ImplFtpStream, Status, TlsStream, TransferStream};
+use suppaftp::{FtpError, ImplFtpStream, RustlsConnector, RustlsFtpStream, Status, TlsStream, TransferStream};
 
 use super::netfs::{Change, Kind, OpenMode, Remote, Space, Stat};
-use super::{Connection, NetworkError};
+use super::tls::{CertProblem, Verdict};
+use super::{Connection, NetworkError, Protocol};
+
+/// One connection type for plain FTP and FTPS: TLS starts only when asked.
+type FtpStream = RustlsFtpStream;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// A server that stops answering fails the request instead of hanging it.
@@ -45,6 +52,16 @@ struct Login {
     addr: SocketAddr,
     user: String,
     password: String,
+    tls: Option<Tls>,
+}
+
+#[derive(Clone)]
+struct Tls {
+    config: Arc<rustls::ClientConfig>,
+    /// The name the certificate must carry (the host as typed).
+    domain: String,
+    /// TLS from the first byte (port 990) instead of after `AUTH TLS`.
+    implicit: bool,
 }
 
 fn timed(stream: TcpStream) -> io::Result<TcpStream> {
@@ -55,10 +72,29 @@ fn timed(stream: TcpStream) -> io::Result<TcpStream> {
 
 fn open_connection(login: &Login) -> Result<FtpStream, FtpError> {
     let stream = TcpStream::connect_timeout(&login.addr, CONNECT_TIMEOUT).and_then(timed).map_err(FtpError::ConnectionError)?;
-    let mut ftp = FtpStream::connect_with_stream(stream)?.passive_stream_builder(|addr| {
-        TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT).and_then(timed).map_err(FtpError::ConnectionError)
-    });
+    let passive = |addr| TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT).and_then(timed).map_err(FtpError::ConnectionError);
+    let mut ftp = match &login.tls {
+        None => FtpStream::connect_with_stream(stream)?.passive_stream_builder(passive),
+        Some(tls) if tls.implicit => {
+            // suppaftp makes its own connection for this, without a time
+            // limit: the one above showed the server answers; give it ours.
+            drop(stream);
+            let connector = RustlsConnector::from(tls.config.clone());
+            let ftp = FtpStream::connect_secure_implicit(login.addr, connector, &tls.domain)?;
+            timed(ftp.get_ref().try_clone().map_err(FtpError::ConnectionError)?).map_err(FtpError::ConnectionError)?;
+            ftp.passive_stream_builder(passive)
+        }
+        Some(tls) => FtpStream::connect_with_stream(stream)?
+            .passive_stream_builder(passive)
+            .into_secure(RustlsConnector::from(tls.config.clone()), &tls.domain)?,
+    };
     ftp.login(login.user.as_str(), login.password.as_str())?;
+    // Implicit TLS covers the commands only: ask for the data too (suppaftp
+    // wraps every transfer in TLS, as `AUTH TLS` does).
+    if login.tls.as_ref().is_some_and(|t| t.implicit) {
+        ftp.custom_command("PBSZ 0", &[Status::CommandOk])?;
+        ftp.custom_command("PROT P", &[Status::CommandOk])?;
+    }
     ftp.transfer_type(FileType::Binary)?;
     // Most servers send UTF-8 names anyway; some need asking.
     let _ = ftp.opts("UTF8", Some("ON"));
@@ -113,12 +149,30 @@ pub fn connect(conn: &Connection, password: Option<&str>) -> Result<(Ftp, String
         .map_err(NetworkError::Connect)?
         .next()
         .ok_or_else(|| NetworkError::Connect(io::ErrorKind::NotFound.into()))?;
+    let mut verdict: Option<Verdict> = None;
+    let tls = (conn.protocol == Protocol::Ftps).then(|| {
+        let (config, v) = super::tls::client_config(&conn.host, port);
+        verdict = Some(v);
+        Tls { config, domain: conn.host.clone(), implicit: port == 990 }
+    });
     let login = Login {
         addr,
         user: conn.username.clone().unwrap_or_else(|| "anonymous".into()),
         password: password.unwrap_or_default().to_string(),
+        tls,
     };
+    let refused = || verdict.as_ref().and_then(|v| v.lock().unwrap().take());
     let mut ftp = open_connection(&login).map_err(|e| match e {
+        _ if matches!(e, FtpError::SecureError(_) | FtpError::ConnectionError(_)) && verdict.as_ref().is_some_and(|v| v.lock().unwrap().is_some()) => {
+            match refused() {
+                Some(CertProblem::Unknown(fingerprint)) => NetworkError::UnknownCertificate { host: conn.host.clone(), port, fingerprint },
+                _ => NetworkError::CertificateChanged,
+            }
+        }
+        // A server without TLS: refused, not used unencrypted.
+        FtpError::UnexpectedResponse(_) if login.tls.is_some() && code(&e).is_some_and(|c| (500..=504).contains(&c)) => {
+            NetworkError::NoTls
+        }
         FtpError::ConnectionError(io) => NetworkError::Connect(io),
         e if code(&e) == Some(530) && password.is_none() => NetworkError::PasswordNeeded,
         e if code(&e) == Some(530) => NetworkError::AuthFailed,

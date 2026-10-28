@@ -9,18 +9,25 @@
 //! not changed in the middle. Permissions and times are the server's: a
 //! request to change them is accepted and has no effect.
 
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime};
 
 use base64::Engine;
 use percent_encoding::{percent_decode_str, utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
+use rustls::pki_types::ServerName;
+use rustls::{ClientConfig, ClientConnection, StreamOwned};
 use ureq::http::{Method, Request, Response, StatusCode};
+use ureq::unversioned::resolver::DefaultResolver;
+use ureq::unversioned::transport::{
+    Buffers, ConnectionDetails, Connector, Either, LazyBuffers, NextTimeout, TcpConnector, Transport, TransportAdapter,
+};
 use ureq::{Agent, Body, SendBody};
 
 use super::netfs::{Change, Kind, OpenMode, Remote, Space, Stat};
+use super::tls::CertProblem;
 use super::{Connection, NetworkError, Protocol};
 
 /// How much one read fetches; later reads inside it need no request.
@@ -149,6 +156,75 @@ fn parse_quota(xml: &str) -> Option<Space> {
     Some(Space { total: avail + used, free: avail, avail })
 }
 
+/// HTTPS with altay's certificate check (see [`super::tls`]) in place of
+/// ureq's own: a server's self-signed certificate the user accepted counts.
+struct PinnedTls(Arc<ClientConfig>);
+
+impl std::fmt::Debug for PinnedTls {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("PinnedTls")
+    }
+}
+
+impl<In: Transport> Connector<In> for PinnedTls {
+    type Out = Either<In, TlsTransport>;
+
+    fn connect(&self, details: &ConnectionDetails, chained: Option<In>) -> Result<Option<Self::Out>, ureq::Error> {
+        let Some(transport) = chained else { return Ok(None) };
+        if !details.needs_tls() || transport.is_tls() {
+            return Ok(Some(Either::A(transport)));
+        }
+        let host = details.uri.host().unwrap_or_default().trim_start_matches('[').trim_end_matches(']');
+        let name = ServerName::try_from(host.to_string()).map_err(|_| ureq::Error::Tls("invalid server name"))?;
+        let mut conn = ClientConnection::new(self.0.clone(), name)?;
+        let mut sock = TransportAdapter::new(transport.boxed(), details.current_time.clone());
+        sock.set_timeout(details.timeout);
+        conn.complete_io(&mut sock)?;
+        let buffers = LazyBuffers::new(details.config.input_buffer_size(), details.config.output_buffer_size());
+        Ok(Some(Either::B(TlsTransport { buffers, stream: StreamOwned { conn, sock } })))
+    }
+}
+
+struct TlsTransport {
+    buffers: LazyBuffers,
+    stream: StreamOwned<ClientConnection, TransportAdapter>,
+}
+
+impl std::fmt::Debug for TlsTransport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("TlsTransport")
+    }
+}
+
+impl Transport for TlsTransport {
+    fn buffers(&mut self) -> &mut dyn Buffers {
+        &mut self.buffers
+    }
+
+    fn transmit_output(&mut self, amount: usize, timeout: NextTimeout) -> Result<(), ureq::Error> {
+        self.stream.get_mut().set_timeout(timeout);
+        let output = &self.buffers.output()[..amount];
+        self.stream.write_all(output)?;
+        Ok(())
+    }
+
+    fn await_input(&mut self, timeout: NextTimeout) -> Result<bool, ureq::Error> {
+        self.stream.get_mut().set_timeout(timeout);
+        let input = self.buffers.input_append_buf();
+        let amount = self.stream.read(input)?;
+        self.buffers.input_appended(amount);
+        Ok(amount > 0)
+    }
+
+    fn is_open(&mut self) -> bool {
+        self.stream.get_mut().get_mut().is_open()
+    }
+
+    fn is_tls(&self) -> bool {
+        true
+    }
+}
+
 /// Turns the chunks a writer sends into the body of a `PUT`.
 struct ChannelReader {
     rx: Receiver<Vec<u8>>,
@@ -229,7 +305,10 @@ pub fn connect(conn: &Connection, password: Option<&str>) -> Result<(WebDav, Str
         let pair = format!("{u}:{}", password.unwrap_or_default());
         format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(pair))
     });
-    let client = WebDav { agent: config.into(), origin, auth };
+    let port = conn.port.unwrap_or(conn.protocol.default_port());
+    let (tls, verdict) = super::tls::client_config(&conn.host, port);
+    let agent = Agent::with_parts(config, TcpConnector::default().chain(PinnedTls(tls)), DefaultResolver::default());
+    let client = WebDav { agent, origin, auth };
     let root = match &conn.share {
         Some(share) => format!("/{}/", share.trim_matches('/')),
         None => "/".to_string(),
@@ -243,6 +322,10 @@ pub fn connect(conn: &Connection, password: Option<&str>) -> Result<(WebDav, Str
             Ok((client, root))
         }
         Ok(_) => Err(NetworkError::MountFailed(format!("{root}: not a folder"))),
+        Err(_) if verdict.lock().unwrap().is_some() => Err(match verdict.lock().unwrap().take() {
+            Some(CertProblem::Unknown(fingerprint)) => NetworkError::UnknownCertificate { host: conn.host.clone(), port, fingerprint },
+            _ => NetworkError::CertificateChanged,
+        }),
         Err(e) if e.raw_os_error() == Some(libc::EACCES) && password.is_none() => Err(NetworkError::PasswordNeeded),
         Err(e) if e.raw_os_error() == Some(libc::EACCES) => Err(NetworkError::AuthFailed),
         Err(e) if e.raw_os_error().is_none() => Err(NetworkError::Connect(e)),

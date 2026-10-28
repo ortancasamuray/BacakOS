@@ -136,7 +136,13 @@ enum Confirm {
     Delete(Vec<PathBuf>),
     /// Permanently delete everything in the trash.
     EmptyTrash,
+    /// Accept a server's certificate no known authority signed, then mount
+    /// the share again (`done` as the first attempt had it).
+    TrustCertificate { conn: network::Connection, secret: Secret, host: String, port: u16, fingerprint: String, done: MountDone },
 }
+
+/// What a mount does on the UI thread when it finished.
+type MountDone = Box<dyn FnOnce(&MainWindow, &Rc<RefCell<AppState>>, network::Connection, Result<PathBuf, network::NetworkError>) + Send>;
 
 impl AppState {
     fn new(sandbox: Sandbox) -> Self {
@@ -1021,7 +1027,12 @@ fn mount_in_background(
                         if result.is_err() {
                             ui.set_status_text(SharedString::new()); // drop "Connecting…"
                         }
-                        done(&ui, state, conn, result);
+                        match result {
+                            Err(network::NetworkError::UnknownCertificate { host, port, fingerprint }) => {
+                                ask_trust_certificate(&ui, state, conn, secret, host, port, fingerprint, Box::new(done));
+                            }
+                            result => done(&ui, state, conn, result),
+                        }
                     }
                 });
             });
@@ -1358,6 +1369,24 @@ fn network_error_text(ui: &MainWindow, err: &network::NetworkError) -> SharedStr
             "Usuario o contraseña incorrectos",
         ),
         network::NetworkError::PasswordNeeded => sx(ui, "Enter the password", "Parolayı girin", "Introduzca la contraseña"),
+        network::NetworkError::UnknownCertificate { .. } => sx(
+            ui,
+            "The server's certificate was not accepted",
+            "Sunucunun sertifikası kabul edilmedi",
+            "No se aceptó el certificado del servidor",
+        ),
+        network::NetworkError::NoTls => sx(
+            ui,
+            "The server does not offer encryption (TLS); use ftp:// to connect without it",
+            "Sunucu şifreleme (TLS) sunmuyor; şifresiz bağlanmak için ftp:// kullanın",
+            "El servidor no ofrece cifrado (TLS); use ftp:// para conectar sin él",
+        ),
+        network::NetworkError::CertificateChanged => sx(
+            ui,
+            "The server's certificate differs from the one accepted before — not connecting, for safety (see ~/.config/altay/known_certs)",
+            "Sunucunun sertifikası daha önce kabul edilenden farklı — güvenlik için bağlanılmadı (~/.config/altay/known_certs)",
+            "El certificado del servidor difiere del aceptado antes — no se conecta, por seguridad (vea ~/.config/altay/known_certs)",
+        ),
         network::NetworkError::HostKeyChanged => sx(
             ui,
             "The server's identity key has changed — not connecting, for safety (see ~/.ssh/known_hosts)",
@@ -3062,13 +3091,55 @@ fn confirm_accepted(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
         Some(Confirm::Trash(paths)) => do_trash(ui, state, paths),
         Some(Confirm::Delete(paths)) => do_delete(ui, state, paths),
         Some(Confirm::EmptyTrash) => do_empty_trash(ui, state),
+        Some(Confirm::TrustCertificate { conn, secret, host, port, fingerprint, done }) => {
+            if let Err(e) = network::tls::trust(&host, port, &fingerprint) {
+                ui.set_status_text(sx(ui, format!("Could not save the certificate: {e}"), format!("Sertifika kaydedilemedi: {e}"), format!("No se pudo guardar el certificado: {e}")));
+                return;
+            }
+            mount_in_background(ui, state, conn, secret, done);
+        }
         None => {}
     }
 }
 
 fn confirm_cancelled(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
     ui.set_show_confirm(false);
-    state.borrow_mut().pending_confirm = None;
+    let action = state.borrow_mut().pending_confirm.take();
+    // A certificate not accepted: the mount failed, and its caller says so.
+    if let Some(Confirm::TrustCertificate { conn, host, port, fingerprint, done, .. }) = action {
+        done(ui, state, conn, Err(network::NetworkError::UnknownCertificate { host, port, fingerprint }));
+    }
+}
+
+/// Show a certificate no known authority signed (a server's self-signed
+/// one) by its fingerprint, for the user to accept or not.
+#[allow(clippy::too_many_arguments)]
+fn ask_trust_certificate(
+    ui: &MainWindow,
+    state: &Rc<RefCell<AppState>>,
+    conn: network::Connection,
+    secret: Secret,
+    host: String,
+    port: u16,
+    fingerprint: String,
+    done: MountDone,
+) {
+    // 95 characters without a space would not wrap: two lines of 16 bytes.
+    let fp = fingerprint.split(':').collect::<Vec<_>>().chunks(16).map(|c| c.join(":")).collect::<Vec<_>>().join("\n");
+    let message = sx(
+        ui,
+        format!("The certificate of {host} is not signed by a known authority (it may be the server's own).\n\nSHA-256:\n{fp}\n\nTrust it only if the server's administrator confirms this fingerprint."),
+        format!("{host} sunucusunun sertifikası tanınmış bir yetkiliyle doğrulanamadı (sunucunun kendi sertifikası olabilir).\n\nSHA-256:\n{fp}\n\nYalnızca sunucunun yöneticisi bu parmak izini doğruluyorsa güvenin."),
+        format!("El certificado de {host} no está firmado por una autoridad conocida (puede ser el propio del servidor).\n\nSHA-256:\n{fp}\n\nConfíe solo si el administrador del servidor confirma esta huella."),
+    );
+    ask_confirm(
+        ui,
+        state,
+        Confirm::TrustCertificate { conn, secret, host, port, fingerprint, done },
+        sx(ui, "Unverified certificate", "Sertifika doğrulanamadı", "Certificado no verificado"),
+        message,
+        sx(ui, "Trust and connect", "Güven ve bağlan", "Confiar y conectar"),
+    );
 }
 
 fn load_trash(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
