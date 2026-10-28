@@ -130,7 +130,7 @@ udev = [
 #     cargo deb --no-build -p bacak-compositor
 # ---------------------------------------------------------------------------
 [package.metadata.deb]
-revision = "22"
+revision = "23"
 maintainer = "Bacak Desktop Project <bilgi@anadolupanteri.org.tr>"
 copyright = "2026, Bacak Desktop Project"
 section = "x11"
