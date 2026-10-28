@@ -1375,6 +1375,12 @@ fn network_error_text(ui: &MainWindow, err: &network::NetworkError) -> SharedStr
             "Sunucunun sertifikası kabul edilmedi",
             "No se aceptó el certificado del servidor",
         ),
+        network::NetworkError::ShareNotFound(name) => sx(
+            ui,
+            format!("The server has no share named \u{201c}{name}\u{201d} (smb://server/ lists them)"),
+            format!("Sunucuda \u{201c}{name}\u{201d} adlı paylaşım yok (smb://sunucu/ paylaşımları listeler)"),
+            format!("El servidor no tiene un recurso llamado \u{201c}{name}\u{201d} (smb://servidor/ los lista)"),
+        ),
         network::NetworkError::NoTls => sx(
             ui,
             "The server does not offer encryption (TLS); use ftp:// to connect without it",

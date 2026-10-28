@@ -3,19 +3,34 @@
 
 //! Network locations (SMB/CIFS, NFS, SFTP, FTP, WebDAV).
 //!
-//! Altay speaks SFTP, FTP and WebDAV itself and serves the share as a FUSE
-//! mount under `$XDG_RUNTIME_DIR/altay-net` (see [`netfs`]). SMB and NFS still
-//! go through gvfs (`gio mount`, under `$XDG_RUNTIME_DIR/gvfs`) when it is
+//! Altay speaks SFTP, FTP, WebDAV and SMB itself and serves the share as a
+//! FUSE mount under `$XDG_RUNTIME_DIR/altay-net` (see [`netfs`]). NFS still
+//! goes through gvfs (`gio mount`, under `$XDG_RUNTIME_DIR/gvfs`) when it is
 //! installed. Both are `Network` roots of the [`security`](crate::security)
 //! sandbox. Passwords live in the system keyring, never in the config.
 
 mod ftp;
 pub mod netfs;
 mod sftp;
+mod smb;
 pub mod tls;
 mod webdav;
 
 use std::path::PathBuf;
+use std::sync::OnceLock;
+
+/// The runtime the async clients (SSH, SMB) live on; FUSE threads block on it.
+fn runtime() -> &'static tokio::runtime::Runtime {
+    static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+    RT.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .thread_name("net-io")
+            .enable_all()
+            .build()
+            .expect("tokio runtime")
+    })
+}
 
 /// Supported network protocols.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -175,6 +190,9 @@ pub enum NetworkError {
     UnknownCertificate { host: String, port: u16, fingerprint: String },
     #[error("the server's certificate differs from the one accepted before")]
     CertificateChanged,
+    /// An SMB server without the share asked for.
+    #[error("the server has no share named {0}")]
+    ShareNotFound(String),
     /// `ftps://` to a server without TLS: refused rather than sent in clear.
     #[error("the server does not offer TLS")]
     NoTls,
@@ -196,7 +214,8 @@ pub fn mount(conn: &Connection, password: Option<&str>) -> Result<PathBuf, Netwo
         Protocol::Sftp => serve(conn, sftp::connect(conn, password)?),
         Protocol::Ftp | Protocol::Ftps => serve(conn, ftp::connect(conn, password)?),
         Protocol::WebDav | Protocol::WebDavs => serve(conn, webdav::connect(conn, password)?),
-        Protocol::Smb | Protocol::Nfs => mount_gio(conn, password),
+        Protocol::Smb => serve(conn, smb::connect(conn, password)?),
+        Protocol::Nfs => mount_gio(conn, password),
     }
 }
 

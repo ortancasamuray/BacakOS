@@ -73,6 +73,8 @@ suppaftp = { version = "12", features = ["rustls-ring", "deprecated"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 ring = "0.17"
 webpki-roots = "1"
+# Pinned: a young crate whose API still changes from release to release.
+smb2 = "=0.36.0"
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 roxmltree = "0.21"
 base64 = "0.22"

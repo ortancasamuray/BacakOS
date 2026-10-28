@@ -15,7 +15,7 @@
 use std::io;
 use std::ops::AsyncFn;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 
 use russh::client;
@@ -25,7 +25,7 @@ use russh_sftp::client::RawSftpSession;
 use russh_sftp::protocol::{FileAttributes, OpenFlags, Packet, StatusCode};
 
 use super::netfs::{Change, Kind, OpenMode, Remote, Space, Stat};
-use super::{Connection, NetworkError};
+use super::{runtime, Connection, NetworkError};
 
 /// Gives up on an unreachable host / a silent server after this long.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -40,18 +40,6 @@ const POSIX_RENAME: &str = "posix-rename@openssh.com";
 /// each waiting for the server again.
 const RETRY_AFTER: Duration = Duration::from_secs(5);
 
-/// The runtime the SSH connections live on; FUSE threads block on it.
-fn runtime() -> &'static tokio::runtime::Runtime {
-    static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
-    RT.get_or_init(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .thread_name("net-ssh")
-            .enable_all()
-            .build()
-            .expect("tokio runtime")
-    })
-}
 
 struct HostCheck {
     host: String,
