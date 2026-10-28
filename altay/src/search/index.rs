@@ -342,7 +342,7 @@ fn is_hidden(path: &Path) -> bool {
 use std::time::{Duration, UNIX_EPOCH};
 
 fn cache_file(root: &Path) -> Option<PathBuf> {
-    let dir = dirs::cache_dir()?.join("altay");
+    let dir = crate::filesystem::cache_dir()?.join("altay");
     let _ = std::fs::create_dir_all(&dir);
     let digest = format!("{:x}", md5::compute(root.to_string_lossy().as_bytes()));
     Some(dir.join(format!("index-{digest}.idx")))

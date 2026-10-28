@@ -57,6 +57,16 @@ impl Entry {
     }
 }
 
+/// The user's cache folder (`$XDG_CACHE_HOME`). Tests get a temporary one
+/// instead: what they cache is about their temporary files, and would pile
+/// up in the real cache (and in the desktop's shared thumbnails).
+pub fn cache_dir() -> Option<PathBuf> {
+    if cfg!(test) {
+        return Some(std::env::temp_dir().join("altay-test-cache"));
+    }
+    dirs::cache_dir()
+}
+
 /// Recursively sum the byte sizes of all files under `path`.
 pub fn recursive_size(path: &Path) -> u64 {
     let Ok(meta) = std::fs::symlink_metadata(path) else { return 0; };
