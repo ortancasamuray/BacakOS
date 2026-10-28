@@ -169,6 +169,7 @@ dependencies = [
  "sevenz-rust",
  "slint",
  "slint-build",
+ "smb2",
  "suppaftp",
  "tar",
  "thiserror 1.0.69",
@@ -979,6 +980,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ccm"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0be9b34d99d395af800e996c5784f810f8400ccd64202f91859dc677825b5378"
+dependencies = [
+ "aead",
+ "cipher 0.5.2",
+ "ctr",
+ "ctutils",
+]
+
+[[package]]
 name = "cexpr"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1094,6 +1107,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "197fd99cb113a8d5d9b6376f3aa817f32c1078f2343b714fff7d2ca44fdf67d5"
 dependencies = [
  "hashbrown 0.16.1",
+]
+
+[[package]]
+name = "cmac"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac78aa94ce13e432b332a4d1bf2eff167d3a2520188ee05b337180a42fd2e62e"
+dependencies = [
+ "cipher 0.5.2",
+ "dbl",
+ "digest 0.11.3",
 ]
 
 [[package]]
@@ -1489,6 +1513,15 @@ name = "data-url"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be1e0bca6c3637f992fc1cc7cbc52a78c1ef6db076dbf1059c4323d6a2048376"
+
+[[package]]
+name = "dbl"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f0d7a944e61df464668c5f51f56cc667396a8821434273112948ea0b66e405d7"
+dependencies = [
+ "hybrid-array",
+]
 
 [[package]]
 name = "dbus"
@@ -3693,6 +3726,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lz4_flex"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ecbdfe44b1bd960b68170b417450a628c43f7cf56bb3c5317e61cb230ee7f226"
+dependencies = [
+ "twox-hash",
+]
+
+[[package]]
 name = "lzma-rust"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3720,6 +3762,25 @@ checksum = "8ea1f30cedd69f0a2954655f7188c6a834246d2bcf1e315e2ac40c4b24dc9519"
 dependencies = [
  "cfg-if",
  "rayon",
+]
+
+[[package]]
+name = "md-5"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69b6441f590336821bb897fb28fc622898ccceb1d6cea3fde5ea86b090c4de98"
+dependencies = [
+ "cfg-if",
+ "digest 0.11.3",
+]
+
+[[package]]
+name = "md4"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bd76fb0fd6b2e4be62a73f8e0858ca97f81babcb1af322dcaca196f735f17f80"
+dependencies = [
+ "digest 0.11.3",
 ]
 
 [[package]]
@@ -6160,6 +6221,34 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 
 [[package]]
+name = "smb2"
+version = "0.36.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8b71a22b45c9d42e0a91395a4c18d813e8768f8998fe8beebf1b1f66a700aaa"
+dependencies = [
+ "aes 0.9.3",
+ "aes-gcm",
+ "async-trait",
+ "ccm",
+ "cmac",
+ "ctutils",
+ "digest 0.11.3",
+ "futures-util",
+ "getrandom 0.4.2",
+ "hmac 0.13.0",
+ "log",
+ "lz4_flex",
+ "md-5",
+ "md4",
+ "num_enum",
+ "pbkdf2 0.13.0",
+ "sha1 0.11.0",
+ "sha2 0.11.1",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
 name = "smithay-client-toolkit"
 version = "0.19.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6932,6 +7021,12 @@ checksum = "d2df906b07856748fa3f6e0ad0cbaa047052d4a7dd609e231c4f72cee8c36f31"
 dependencies = [
  "core_maths",
 ]
+
+[[package]]
+name = "twox-hash"
+version = "2.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "86a801b3cea342a06d468c8710662aa29e5e05e4f5c0d62f00bbb7f2ad7941c2"
 
 [[package]]
 name = "typed-index-collections"
