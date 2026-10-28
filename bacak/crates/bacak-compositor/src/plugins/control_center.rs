@@ -15,7 +15,7 @@ use crate::wm::{OutputId, Rect};
 /// What a Control-Center tile does when clicked. Toggles flip a bool + fire a
 /// system call; sliders map the click's x-position to a level; power buttons
 /// fire and (mostly) end the session.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CcAction {
     WifiToggle,
     BtToggle,
@@ -84,6 +84,12 @@ pub struct ControlCenter {
     pub volume: f32,
     pub muted: bool,
     pub mic_volume: f32,
+    /// A power action tapped once: it runs only if tapped again before the
+    /// deadline (a stray touch must not end a lesson).
+    pub armed: Option<(CcAction, std::time::Instant)>,
+    /// The slider a finger or the pointer is dragging, and when its level was
+    /// last handed to the system (wpctl is a process per call: throttled).
+    pub dragging: Option<(CcAction, std::time::Instant)>,
 }
 
 /// What tapping a row in the Wi-Fi picker does.
@@ -373,7 +379,8 @@ pub struct UzakelPanel {
 
 /// Background-fetched Control-Center state (each field is a blocking subprocess),
 /// handed to the render loop and applied in `tick_animations` so opening the
-/// panel never blocks.
+/// panel never blocks. The last one is kept to open the next panel with.
+#[derive(Clone)]
 pub struct CcSnapshot {
     pub wifi_on: bool,
     pub bt_on: bool,
@@ -410,6 +417,22 @@ impl Plugin for ControlCenterPlugin {
 
     fn on_touch_press(&self, ctx: &mut PluginCtx, tx: f32, ty: f32, _slot: i32) -> bool {
         ctx.state().control_center_left_press(tx, ty)
+    }
+
+    fn on_pointer_motion(&self, ctx: &mut PluginCtx, gx: f64, _gy: f64) -> bool {
+        ctx.state().control_center_drag(gx as f32)
+    }
+
+    fn on_touch_motion(&self, ctx: &mut PluginCtx, tx: f32, _ty: f32, _slot: i32) -> bool {
+        ctx.state().control_center_drag(tx)
+    }
+
+    fn on_pointer_release(&self, ctx: &mut PluginCtx, _gx: f64, _gy: f64) -> bool {
+        ctx.state().control_center_release()
+    }
+
+    fn on_touch_up(&self, ctx: &mut PluginCtx, _slot: i32) -> bool {
+        ctx.state().control_center_release()
     }
 
     fn render(

@@ -2033,8 +2033,11 @@ pub(crate) fn render_control_center(
                     off_x,
                     off_y,
                 );
-                // Label sits above the track, top-left.
+                // Label sits above the track, top-left; the value top-right.
                 cc_blit_label(out, renderer, &tile.label, tx, r.y + 7.0 * z, output_scale, off_x, off_y);
+                if let Some((_, w, _)) = &tile.sub {
+                    cc_blit_label(out, renderer, &tile.sub, tx + tw - *w as f32, r.y + 7.0 * z, output_scale, off_x, off_y);
+                }
             }
             crate::state::CcKind::Button { .. } => {
                 let label_h = tile.label.as_ref().map(|(_, _, h)| *h as f32).unwrap_or(0.0);
@@ -2097,7 +2100,9 @@ pub(crate) fn render_control_center(
                 cc_card_shadow(out, renderer, Rect::new(tx, ty, tw, th), track_col, th / 2.0, tile_shadow, output_scale, off_x, off_y);
             }
             crate::state::CcKind::Button { danger } => {
-                let col = if danger { danger_col } else { off_card };
+                // A power button waiting for its confirming tap turns red.
+                let armed = cc.armed.is_some_and(|(a, _)| a == tile.action);
+                let col = if danger || armed { danger_col } else { off_card };
                 cc_card_shadow(out, renderer, r, col, 12.0 * z, tile_shadow, output_scale, off_x, off_y);
             }
             crate::state::CcKind::Toggle => {

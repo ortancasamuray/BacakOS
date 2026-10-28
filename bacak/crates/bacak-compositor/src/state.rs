@@ -372,6 +372,11 @@ fn urlencode(s: &str) -> String {
 /// Control Center label colour in dark mode (also the text on its red
 /// "Kapat" button in both themes).
 const CC_LABEL_DARK: [u8; 3] = [232, 236, 244];
+/// How long a once-tapped power button waits for the confirming tap.
+const CC_CONFIRM_FOR: Duration = Duration::from_secs(4);
+/// While a slider is dragged, its level reaches the system at most this often
+/// (each `wpctl` call is a process).
+const CC_SLIDER_APPLY_EVERY: Duration = Duration::from_millis(60);
 
 /// Control Center `(label, secondary)` text colours for the theme: the dark
 /// panel's pale text, or its lightness-inverted counterpart on the light panel.
@@ -1051,6 +1056,9 @@ pub struct BacakState {
     /// Receiver for the Control Center's background state fetch. `Some` until the
     /// snapshot lands (drained in [`Self::tick_animations`]).
     pub cc_rx: Option<std::sync::mpsc::Receiver<CcSnapshot>>,
+    /// The last Control Center state fetched: the next panel opens with it
+    /// instead of "off / 50 %" placeholders while the fresh one loads.
+    pub cc_last: Option<CcSnapshot>,
     /// Native Wi-Fi picker, if open (tapping the Control Center's Wi-Fi tile).
     pub wifi_panel: Option<WifiPanel>,
     /// Native Bluetooth picker, if open (tapping the Control Center's BT tile).
@@ -1597,6 +1605,7 @@ impl BacakState {
             apps_menu: None,
             control_center: None,
             cc_rx: None,
+            cc_last: None,
             wifi_panel: None,
             bt_panel: None,
             audio_panel: None,
@@ -4864,7 +4873,6 @@ impl BacakState {
         }
 
         // --- Core: desktop settings + screenshot + power ---
-        let ds_on = std::path::Path::new("/usr/share/bacak/plugins/desktop-settings.plugin").exists();
         if ds_on {
             tiles.push(CcTile {
                 rect: Rect::new(cx, y, inner, sh),
@@ -4939,7 +4947,16 @@ impl BacakState {
             volume,
             muted,
             mic_volume: 0.75,
+            armed: None,
+            dragging: None,
         });
+        // The state as last seen, until the fresh one lands (the clock alone
+        // would be stale: it waits for the fetch).
+        if let Some(mut last) = self.cc_last.clone() {
+            last.clock = String::new();
+            self.cc_apply_snapshot(last);
+        }
+        self.cc_refresh_slider_values();
 
         // Fetch the real tile state off-thread; applied in `tick_animations`.
         let (tx, rx) = std::sync::mpsc::channel();
@@ -4964,6 +4981,9 @@ impl BacakState {
     /// Apply a background-fetched Control-Center snapshot: update the live state
     /// and re-rasterise the labels that depend on it (clock, Wi-Fi/Bluetooth sub).
     fn cc_apply_snapshot(&mut self, snap: CcSnapshot) {
+        if !snap.clock.is_empty() {
+            self.cc_last = Some(snap.clone());
+        }
         #[allow(non_snake_case)]
         let (LABEL, SUB) = cc_text_colors(self.dark_mode);
         let wifi_sub_text = if snap.wifi_on {
@@ -4996,6 +5016,140 @@ impl BacakState {
                 }
             }
         }
+        self.cc_refresh_slider_values();
+    }
+
+    /// The level (0..1) a slider shows.
+    fn cc_slider_level(&self, action: CcAction) -> f32 {
+        let Some(cc) = self.control_center.as_ref() else { return 0.0 };
+        match action {
+            CcAction::Brightness => (self.brightness - MIN_BRIGHTNESS) / (1.0 - MIN_BRIGHTNESS),
+            CcAction::MicVolume => cc.mic_volume,
+            _ => cc.volume,
+        }
+        .clamp(0.0, 1.0)
+    }
+
+    /// Re-rasterise each slider's value ("%40", right of its label).
+    fn cc_refresh_slider_values(&mut self) {
+        let Some(cc) = self.control_center.as_ref() else { return };
+        let z = cc.zoom;
+        let (_, sub) = cc_text_colors(self.dark_mode);
+        let values: Vec<(usize, Label)> = cc
+            .tiles
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| t.kind == CcKind::Slider)
+            .map(|(i, t)| {
+                let pct = (self.cc_slider_level(t.action) * 100.0).round() as u32;
+                (i, cc_rasterize(self.text.as_ref(), &format!("%{pct}"), 13.0 * z, sub, (60.0 * z) as usize))
+            })
+            .collect();
+        if let Some(cc) = self.control_center.as_mut() {
+            for (i, label) in values {
+                cc.tiles[i].sub = label;
+            }
+        }
+    }
+
+    /// Arm a power button (or, `None`, disarm all): the armed one turns red
+    /// and asks "Emin misiniz?" until tapped again or the time runs out.
+    fn cc_set_armed(&mut self, armed: Option<CcAction>) {
+        let Some(cc) = self.control_center.as_ref() else { return };
+        if cc.armed.map(|(a, _)| a) == armed {
+            // The same button again (its time may have run out): a fresh wait.
+            if let Some(cc) = self.control_center.as_mut() {
+                cc.armed = armed.map(|a| (a, Instant::now() + CC_CONFIRM_FOR));
+            }
+            return;
+        }
+        let z = cc.zoom;
+        let (label_col, _) = cc_text_colors(self.dark_mode);
+        let text = self.text.as_ref();
+        let labels: Vec<(usize, Label, Label)> = cc
+            .tiles
+            .iter()
+            .enumerate()
+            .filter_map(|(i, t)| {
+                let name = match t.action {
+                    CcAction::PowerOff => "Kapat",
+                    CcAction::Reboot => "Yeniden",
+                    CcAction::Logout => "Çıkış",
+                    _ => return None,
+                };
+                let on = armed == Some(t.action);
+                let w = (t.rect.w - 8.0 * z).max(1.0) as usize;
+                // Light text on red: the armed one, and "Kapat" always.
+                let col = if on || t.action == CcAction::PowerOff { CC_LABEL_DARK } else { label_col };
+                let sub = if on { cc_rasterize(text, "Emin misiniz?", 11.0 * z, CC_LABEL_DARK, w) } else { None };
+                Some((i, cc_rasterize(text, name, 13.0 * z, col, w), sub))
+            })
+            .collect();
+        if let Some(cc) = self.control_center.as_mut() {
+            cc.armed = armed.map(|a| (a, Instant::now() + CC_CONFIRM_FOR));
+            for (i, label, sub) in labels {
+                cc.tiles[i].label = label;
+                cc.tiles[i].sub = sub;
+            }
+        }
+    }
+
+    /// Set a slider to `level`: the panel at once, the system now or (while
+    /// dragging) at most every [`CC_SLIDER_APPLY_EVERY`].
+    fn cc_set_level(&mut self, action: CcAction, level: f32, to_system: bool) {
+        match action {
+            CcAction::Brightness => self.brightness = MIN_BRIGHTNESS + (1.0 - MIN_BRIGHTNESS) * level,
+            CcAction::Volume => {
+                if let Some(cc) = self.control_center.as_mut() {
+                    cc.volume = level;
+                    cc.muted = level <= 0.001;
+                }
+                if to_system {
+                    crate::controls::set_volume(level);
+                }
+            }
+            CcAction::MicVolume => {
+                if let Some(cc) = self.control_center.as_mut() {
+                    cc.mic_volume = level;
+                }
+                if to_system {
+                    crate::controls::set_mic_volume(level);
+                }
+            }
+            _ => {}
+        }
+        self.cc_refresh_slider_values();
+    }
+
+    /// The level a slider's track gives `px` (the track is inset from the tile).
+    fn cc_level_at(&self, action: CcAction, px: f32) -> Option<f32> {
+        let cc = self.control_center.as_ref()?;
+        let r = cc.tiles.iter().find(|t| t.action == action)?.rect;
+        let inset = CC_SLIDER_INSET * cc.zoom;
+        let track = (r.w - 2.0 * inset).max(1.0);
+        Some(((px - r.x - inset) / track).clamp(0.0, 1.0))
+    }
+
+    /// A finger / the pointer moved while a slider is held: follow it.
+    pub fn control_center_drag(&mut self, px: f32) -> bool {
+        let Some((action, last)) = self.control_center.as_ref().and_then(|cc| cc.dragging) else { return false };
+        let Some(level) = self.cc_level_at(action, px) else { return false };
+        let due = last.elapsed() >= CC_SLIDER_APPLY_EVERY;
+        if due {
+            if let Some(cc) = self.control_center.as_mut() {
+                cc.dragging = Some((action, Instant::now()));
+            }
+        }
+        self.cc_set_level(action, level, due);
+        true
+    }
+
+    /// The slider is let go: its final level reaches the system.
+    pub fn control_center_release(&mut self) -> bool {
+        let Some((action, _)) = self.control_center.as_mut().and_then(|cc| cc.dragging.take()) else { return false };
+        let level = self.cc_slider_level(action);
+        self.cc_set_level(action, level, true);
+        true
     }
 
     /// Open the Android-style Wi-Fi panel: a header on/off switch and (when on)
@@ -7265,24 +7419,23 @@ impl BacakState {
             self.control_center = None;
             return true;
         }
-        let Some((action, rect)) = cc
+        let Some(action) = cc
             .tiles
             .iter()
             .find(|t| {
                 let r = t.rect;
                 px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h
             })
-            .map(|t| (t.action, t.rect))
+            .map(|t| t.action)
         else {
+            self.cc_set_armed(None);
             return true; // clicked panel padding → stay open, consume
         };
-
-        // Slider level from the click's x within the inset track.
-        let inset = CC_SLIDER_INSET * cc.zoom;
-        let slider_level = || {
-            let track = (rect.w - 2.0 * inset).max(1.0);
-            ((px - rect.x - inset) / track).clamp(0.0, 1.0)
-        };
+        let power = matches!(action, CcAction::PowerOff | CcAction::Reboot | CcAction::Logout);
+        let confirmed = cc.armed.is_some_and(|(a, until)| a == action && Instant::now() < until);
+        if !power {
+            self.cc_set_armed(None);
+        }
 
         match action {
             CcAction::WifiToggle => {
@@ -7311,24 +7464,14 @@ impl BacakState {
             CcAction::DarkToggle => {
                 self.set_dark_mode(!self.dark_mode);
             }
-            CcAction::Volume => {
-                let level = slider_level();
-                if let Some(cc) = self.control_center.as_mut() {
-                    cc.volume = level;
-                    cc.muted = level <= 0.001;
+            CcAction::Volume | CcAction::MicVolume | CcAction::Brightness => {
+                // Set where touched; moving on drags it (control_center_drag).
+                if let Some(level) = self.cc_level_at(action, px) {
+                    self.cc_set_level(action, level, true);
                 }
-                crate::controls::set_volume(level);
-            }
-            CcAction::MicVolume => {
-                let level = slider_level();
                 if let Some(cc) = self.control_center.as_mut() {
-                    cc.mic_volume = level;
+                    cc.dragging = Some((action, Instant::now()));
                 }
-                crate::controls::set_mic_volume(level);
-            }
-            CcAction::Brightness => {
-                let level = slider_level();
-                self.brightness = MIN_BRIGHTNESS + (1.0 - MIN_BRIGHTNESS) * level;
             }
             CcAction::AudioSettings => {
                 if let Some(out) = self.control_center.as_ref().map(|c| c.output) {
@@ -7369,6 +7512,8 @@ impl BacakState {
                     self.open_remote_desktop_panel(out);
                 }
             }
+            // A power button acts on the second tap only.
+            _ if power && !confirmed => self.cc_set_armed(Some(action)),
             CcAction::PowerOff => crate::controls::power_off(),
             CcAction::Reboot => crate::controls::reboot(),
             CcAction::Logout => crate::controls::logout(),
@@ -8956,6 +9101,7 @@ impl BacakState {
             .map(|w| w.connecting.is_some() || w.scanning)
             .unwrap_or(false);
         let cc_pending = self.cc_rx.is_some();
+        let cc_armed = self.control_center.as_ref().is_some_and(|cc| cc.armed.is_some());
         let bt_open = self.bt_panel.is_some();
         // Desktop settings background auth/action worker.
         let ds_pending = self.ds_rx.is_some();
@@ -8981,6 +9127,7 @@ impl BacakState {
             && self.toast.is_none()
             && !wifi_busy
             && !cc_pending
+            && !cc_armed
             && !bt_open
             && !ds_pending
             && !wp_pending
@@ -9006,6 +9153,14 @@ impl BacakState {
         if wp_pending {
             still_running |= self.wallpaper_tick();
             still_running |= self.wallpaper_pending();
+        }
+
+        // --- Control Center: an unconfirmed power button times out ---------
+        if cc_armed {
+            if self.control_center.as_ref().and_then(|cc| cc.armed).is_some_and(|(_, until)| now >= until) {
+                self.cc_set_armed(None);
+            }
+            still_running = true;
         }
 
         // --- Control Center background state ----------------------------
@@ -12069,5 +12224,82 @@ mod cc_layout_tests {
             }
             state.control_center = None;
         }
+    }
+
+    fn tile(state: &BacakState, action: CcAction) -> Rect {
+        state.control_center.as_ref().unwrap().tiles.iter().find(|t| t.action == action).unwrap().rect
+    }
+
+    /// A panel opens with the state last seen, not "off / 50 %".
+    #[test]
+    fn control_center_opens_with_last_state() {
+        let display: Display<BacakState> = Display::new().unwrap();
+        let mut state = BacakState::new(&display, "cc-last-test-seat");
+        let out = state.wm.primary_output().unwrap();
+        state.cc_last = Some(CcSnapshot {
+            wifi_on: true,
+            bt_on: true,
+            eth_connected: false,
+            volume: 0.3,
+            muted: false,
+            mic_volume: 0.6,
+            ssid: Some("Okul".into()),
+            clock: "10:00".into(),
+        });
+        state.open_control_center(out);
+        let cc = state.control_center.as_ref().unwrap();
+        assert!(cc.wifi_on && cc.bt_on);
+        assert!((cc.volume - 0.3).abs() < 1e-6 && (cc.mic_volume - 0.6).abs() < 1e-6);
+        // The stale clock waits for the fresh fetch.
+        assert!(cc.clock.is_none());
+    }
+
+    /// A power button acts only on a second tap in time: the first one (or one
+    /// after the time ran out) just asks. Tested with "Çıkış": were it to run,
+    /// it would end this test process, not the machine.
+    #[test]
+    fn power_buttons_ask_first() {
+        let display: Display<BacakState> = Display::new().unwrap();
+        let mut state = BacakState::new(&display, "cc-power-test-seat");
+        let out = state.wm.primary_output().unwrap();
+        state.open_control_center(out);
+        let r = tile(&state, CcAction::Logout);
+        let (x, y) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
+        state.control_center_left_press(x, y);
+        let armed = |s: &BacakState| s.control_center.as_ref().unwrap().armed.map(|(a, _)| a);
+        assert_eq!(armed(&state), Some(CcAction::Logout));
+        // Tapping elsewhere in the panel disarms.
+        let b = tile(&state, CcAction::Brightness);
+        state.control_center_left_press(b.x + b.w / 2.0, b.y + b.h / 2.0);
+        state.control_center_release();
+        assert_eq!(armed(&state), None);
+        // Armed, but the time ran out: the next tap asks again.
+        state.control_center_left_press(x, y);
+        state.control_center.as_mut().unwrap().armed = Some((CcAction::Logout, Instant::now() - Duration::from_secs(1)));
+        state.control_center_left_press(x, y);
+        let until = state.control_center.as_ref().unwrap().armed.unwrap().1;
+        assert!(until > Instant::now(), "re-armed, not run");
+    }
+
+    /// A slider follows the finger while held, and lets go on release.
+    #[test]
+    fn slider_follows_drag() {
+        let display: Display<BacakState> = Display::new().unwrap();
+        let mut state = BacakState::new(&display, "cc-slider-test-seat");
+        let out = state.wm.primary_output().unwrap();
+        state.open_control_center(out);
+        let r = tile(&state, CcAction::Brightness);
+        let y = r.y + r.h / 2.0;
+        state.control_center_left_press(r.x, y);
+        assert!(state.brightness <= MIN_BRIGHTNESS + 1e-6);
+        assert!(state.control_center_drag(r.x + r.w / 2.0));
+        let mid = state.brightness;
+        assert!(mid > MIN_BRIGHTNESS + 0.1 && mid < 0.95, "{mid}");
+        assert!(state.control_center_drag(r.x + r.w));
+        assert!((state.brightness - 1.0).abs() < 1e-6);
+        assert!(state.control_center_release());
+        // Let go: moving no longer changes it.
+        assert!(!state.control_center_drag(r.x));
+        assert!((state.brightness - 1.0).abs() < 1e-6);
     }
 }
