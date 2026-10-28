@@ -264,7 +264,7 @@ mod tests {
 pub fn thumbnail(image_path: &Path) -> Result<std::path::PathBuf, PreviewError> {
     let uri = format!("file://{}", image_path.display());
     let digest = format!("{:x}", md5::compute(uri.as_bytes()));
-    let cache_dir = dirs::cache_dir()
+    let cache_dir = crate::filesystem::cache_dir()
         .map(|c| c.join("thumbnails/normal"))
         .ok_or(PreviewError::Unsupported)?;
     let _ = std::fs::create_dir_all(&cache_dir);
@@ -311,7 +311,7 @@ where
 {
     let uri = format!("{scheme}://{}", source.display());
     let digest = format!("{:x}", md5::compute(uri.as_bytes()));
-    let cache_dir = dirs::cache_dir()
+    let cache_dir = crate::filesystem::cache_dir()
         .map(|c| c.join("thumbnails/normal"))
         .ok_or(PreviewError::Unsupported)?;
     let _ = std::fs::create_dir_all(&cache_dir);
