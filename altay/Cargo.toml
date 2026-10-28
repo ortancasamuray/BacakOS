@@ -117,10 +117,11 @@ device mounting, gvfs network shares, previews, indexed + content search."""
 # Devices (udisks2), network shares (gvfs, with its smb/sftp/ftp backends) and
 # file exchange with other apps (wl-clipboard) are core features, so their
 # services are hard dependencies too.
-depends = "$auto, libwayland-client0, libwayland-cursor0, libwayland-egl1, libxkbcommon0, libegl1, libgl1, p7zip-full, udisks2, fuse3, gvfs, gvfs-backends, wl-clipboard"
+depends = "$auto, libwayland-client0, libwayland-cursor0, libwayland-egl1, libxkbcommon0, libegl1, libgl1, p7zip-full, udisks2, fuse3, wl-clipboard"
 # Optional runtime helpers — the app degrades gracefully without them.
 recommends = "polkitd | policykit-1, xdg-desktop-portal, poppler-utils"
-suggests = "ffmpeg | ffmpegthumbnailer, ghostscript, gnome-keyring"
+# gvfs-backends: only NFS shares still go through gvfs (`gio mount`).
+suggests = "ffmpeg | ffmpegthumbnailer, ghostscript, gnome-keyring, gvfs-backends"
 assets = [
     ["target/release/altay", "usr/bin/", "755"],
     ["altay.desktop", "usr/share/applications/", "644"],

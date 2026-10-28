@@ -1338,9 +1338,9 @@ fn network_error_text(ui: &MainWindow, err: &network::NetworkError) -> SharedStr
     match err {
         network::NetworkError::BackendUnavailable => sx(
             ui,
-            "Network shares need gvfs (the gio tool is missing)",
-            "Ağ paylaşımları için gvfs gerekli (gio aracı yok)",
-            "Los recursos de red necesitan gvfs (falta la herramienta gio)",
+            "NFS shares need the gvfs-backends package",
+            "NFS paylaşımları için gvfs-backends paketi gerekli",
+            "Los recursos NFS necesitan el paquete gvfs-backends",
         ),
         network::NetworkError::Connect(e) => match e.kind() {
             std::io::ErrorKind::ConnectionRefused => sx(
