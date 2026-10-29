@@ -2438,6 +2438,18 @@ impl BacakState {
         self.dock_panel_rect_for(self.wm.primary_output()?)
     }
 
+    /// The part of `bounds` (output `out`) a corner panel opened from the
+    /// dock may use: without the dock bar when the dock is on the bottom or
+    /// right edge, so a bottom-right panel sits beside it, not under it.
+    fn dock_corner_area(&self, out: OutputId, bounds: Rect) -> Rect {
+        let Some(d) = self.dock_panel_rect_for(out) else { return bounds };
+        match self.config.dock_edge {
+            DockEdge::Bottom => Rect::new(bounds.x, bounds.y, bounds.w, (d.y - bounds.y).max(0.0)),
+            DockEdge::Right => Rect::new(bounds.x, bounds.y, (d.x - bounds.x).max(0.0), bounds.h),
+            DockEdge::Top | DockEdge::Left => bounds,
+        }
+    }
+
     /// Per-output panel rect — same idea, computed from that output's
     /// tile row.
     pub fn dock_panel_rect_for(&self, out: OutputId) -> Option<Rect> {
@@ -4796,12 +4808,14 @@ impl BacakState {
         // The layout above is designed for a 1080-px-tall logical output.
         // Scale it with the output height (so a 4K panel at 1× doesn't get a
         // postage stamp), but never past what fits on screen (so the power
-        // row stays reachable on small screens).
+        // row stays reachable on small screens). It sits in the bottom-right
+        // corner, above (or beside) the dock it opens from.
         let m = 14.0;
+        let area = self.dock_corner_area(out, bounds);
         let zoom = (bounds.h / 1080.0)
             .clamp(1.0, 2.5)
-            .min((bounds.h - 2.0 * m) / panel_h)
-            .min((bounds.w - 2.0 * m) / W)
+            .min((area.h - 2.0 * m) / panel_h)
+            .min((area.w - 2.0 * m) / W)
             .max(0.5);
         let z = |v: f32| v * zoom;
         let (pad, gap, w, ch, tl, sl, dev, sc, pr) = (z(PAD), z(GAP), z(W), z(CH), z(TL), z(SL), z(DEV), z(SC), z(PR));
@@ -4809,8 +4823,8 @@ impl BacakState {
         let inner = w - 2.0 * pad;
         let col_w = (inner - gap) / 2.0;
         let btn_w = (inner - 2.0 * gap) / 3.0;
-        let bx = (bounds.x + bounds.w - w - m).max(bounds.x + m);
-        let by = (bounds.y + m).max(bounds.y);
+        let bx = (area.x + area.w - w - m).max(area.x + m);
+        let by = (area.y + area.h - panel_h - m).max(area.y + m);
         let panel = Rect::new(bx, by, w, panel_h);
 
         let cx = bx + pad;
@@ -5297,8 +5311,10 @@ impl BacakState {
         let n_rows: f32 = if read_only { 4.0 } else { 7.0 };
         let panel_h = PAD + CH + GAP + STH + GAP + n_rows * ROW_H + (n_rows - 1.0) * GAP + PAD;
         let m = 14.0;
-        let bx = (bounds.x + bounds.w - W - m).max(bounds.x + m);
-        let by = (bounds.y + m).max(bounds.y);
+        // Bottom-right, beside the dock, where the Control Center opened.
+        let area = self.dock_corner_area(out, bounds);
+        let bx = (area.x + area.w - W - m).max(area.x + m);
+        let by = (area.y + area.h - panel_h - m).max(area.y + m);
         let panel = Rect::new(bx, by, W, panel_h);
         let cx = bx + PAD;
 
@@ -5442,8 +5458,10 @@ impl BacakState {
         let panel_h = PAD + CH + GAP + STH + GAP + list_h + PAD;
 
         let m = 14.0;
-        let bx = (bounds.x + bounds.w - W - m).max(bounds.x + m);
-        let by = (bounds.y + m).max(bounds.y);
+        // Bottom-right, beside the dock, where the Control Center opened.
+        let area = self.dock_corner_area(out, bounds);
+        let bx = (area.x + area.w - W - m).max(area.x + m);
+        let by = (area.y + area.h - panel_h - m).max(area.y + m);
         let panel = Rect::new(bx, by, W, panel_h);
         let cx = bx + PAD;
 
@@ -5555,6 +5573,8 @@ impl BacakState {
 
         let panel_h = PAD + CH + GAP + STH + GAP + ROW_H + GAP + 2.0 * ROW_H + GAP + PAD;
         let m = 14.0;
+        // Top-right: the on-screen keyboard that types into it takes the
+        // bottom of the screen.
         let bx = (bounds.x + bounds.w - W - m).max(bounds.x + m);
         let by = (bounds.y + m).max(bounds.y);
         let panel = Rect::new(bx, by, W, panel_h);
@@ -5789,6 +5809,8 @@ impl BacakState {
 
         let panel_h = PAD + CH + GAP + STH + GAP + ROW_H + GAP + 2.0 * ROW_H + GAP + PAD;
         let m = 14.0;
+        // Top-right: the on-screen keyboard that types into it takes the
+        // bottom of the screen.
         let bx = (bounds.x + bounds.w - W - m).max(bounds.x + m);
         let by = (bounds.y + m).max(bounds.y);
         let panel = Rect::new(bx, by, W, panel_h);
@@ -6099,8 +6121,10 @@ impl BacakState {
         let panel_h = PAD + CH + GAP + STH + GAP + rows_h + PAD;
 
         let m = 14.0;
-        let bx = (bounds.x + bounds.w - W - m).max(bounds.x + m);
-        let by = (bounds.y + m).max(bounds.y);
+        // Bottom-right, beside the dock, where the Control Center opened.
+        let area = self.dock_corner_area(out, bounds);
+        let bx = (area.x + area.w - W - m).max(area.x + m);
+        let by = (area.y + area.h - panel_h - m).max(area.y + m);
         let panel = Rect::new(bx, by, W, panel_h);
         let cx = bx + PAD;
 
@@ -6432,8 +6456,10 @@ impl BacakState {
         let panel_h = PAD + TITLE_H + GAP + sink_block + GAP + CLOSE_H + PAD;
 
         let m = 14.0;
-        let bx = (bounds.x + bounds.w - W - m).max(bounds.x + m);
-        let by = (bounds.y + m).max(bounds.y);
+        // Bottom-right, beside the dock, where the Control Center opened.
+        let area = self.dock_corner_area(out, bounds);
+        let bx = (area.x + area.w - W - m).max(area.x + m);
+        let by = (area.y + area.h - panel_h - m).max(area.y + m);
         let panel = Rect::new(bx, by, W, panel_h);
 
         let cx = bx + PAD;
@@ -6551,8 +6577,10 @@ impl BacakState {
         let panel_h = PAD + TITLE_H + GAP + sink_block + GAP + CLOSE_H + PAD;
 
         let m = 14.0;
-        let bx = (bounds.x + bounds.w - W - m).max(bounds.x + m);
-        let by = (bounds.y + m).max(bounds.y);
+        // Bottom-right, beside the dock, where the Control Center opened.
+        let area = self.dock_corner_area(out, bounds);
+        let bx = (area.x + area.w - W - m).max(area.x + m);
+        let by = (area.y + area.h - panel_h - m).max(area.y + m);
         let panel = Rect::new(bx, by, W, panel_h);
 
         let cx = bx + PAD;
@@ -6711,8 +6739,10 @@ impl BacakState {
         let panel_h = PAD + TITLE_H + GAP + qr_h + STATUS_H + GAP + CLOSE_H + PAD;
 
         let m = 14.0;
-        let bx = (bounds.x + bounds.w - W - m).max(bounds.x + m);
-        let by = (bounds.y + m).max(bounds.y);
+        // Bottom-right, beside the dock, where the Control Center opened.
+        let area = self.dock_corner_area(out, bounds);
+        let bx = (area.x + area.w - W - m).max(area.x + m);
+        let by = (area.y + area.h - panel_h - m).max(area.y + m);
         let panel = Rect::new(bx, by, W, panel_h);
         let cx = bx + PAD;
         let close_y = by + panel_h - PAD - CLOSE_H;
@@ -12254,6 +12284,36 @@ mod cc_layout_tests {
                 assert!(r.y + r.h <= p.y + p.h + 0.5, "{w}x{h}: tile {r:?} below panel {p:?}");
             }
             state.control_center = None;
+        }
+    }
+
+    /// The panel opens in the bottom-right corner, beside the dock, never
+    /// under it.
+    #[test]
+    fn control_center_sits_in_the_bottom_corner_by_the_dock() {
+        let display: Display<BacakState> = Display::new().unwrap();
+        let mut state = BacakState::new(&display, "cc-corner-test-seat");
+        let out = state.wm.primary_output().unwrap();
+        state.wm.set_output_bounds(out, Rect::new(0.0, 0.0, 1920.0, 1080.0)).unwrap();
+        state.config.dock = true;
+        for edge in [DockEdge::Bottom, DockEdge::Right, DockEdge::Top] {
+            state.config.dock_edge = edge;
+            let d = state.dock_panel_rect_for(out).unwrap();
+            state.open_control_center(out);
+            let p = state.control_center.as_ref().unwrap().panel;
+            let (right, bottom) = match edge {
+                DockEdge::Bottom => (1920.0, d.y),
+                DockEdge::Right => (d.x, 1080.0),
+                _ => (1920.0, 1080.0),
+            };
+            assert!(p.x + p.w <= right && right - (p.x + p.w) < 20.0, "{edge:?}: {p:?} dock {d:?}");
+            assert!(p.y + p.h <= bottom && bottom - (p.y + p.h) < 20.0, "{edge:?}: {p:?} dock {d:?}");
+            state.control_center = None;
+            // A panel opened from it (here Bluetooth) stays in that corner.
+            state.build_bt_panel(out, Vec::new(), false, false);
+            let b = state.bt_panel.take().unwrap().panel;
+            assert!((b.x + b.w - (p.x + p.w)).abs() < 0.5, "{edge:?}: {b:?} vs {p:?}");
+            assert!((b.y + b.h - (p.y + p.h)).abs() < 0.5, "{edge:?}: {b:?} vs {p:?}");
         }
     }
 
