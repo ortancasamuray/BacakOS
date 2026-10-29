@@ -31,7 +31,7 @@ jpeg-encoder.workspace = true
 
 [package.metadata.deb]
 name = "uzakyonetim-ajan"
-revision = "4"
+revision = "5"
 maintainer = "Anadolu Panteri <bilgi@anadolupanteri.org.tr>"
 copyright = "2026, Anadolu Panteri <bilgi@anadolupanteri.org.tr>"
 section = "admin"
