@@ -1862,74 +1862,6 @@ fn cc_blit_label(
     }
 }
 
-/// Logical size of the Control Center's monitor glyph (bezel + stand) and its
-/// gap to the label.
-const CC_MONITOR_W: f32 = 20.0;
-const CC_MONITOR_H: f32 = 17.0;
-const CC_MONITOR_GAP: f32 = 9.0;
-
-/// Draw a monochrome monitor (bezel, tinted screen, neck, base) with its
-/// top-left at `(x, y)`, `CC_MONITOR_W`×`CC_MONITOR_H` logical px. Pushed
-/// front-to-back like the rest of the Control Center foreground.
-#[allow(clippy::too_many_arguments)]
-fn push_cc_monitor_glyph(
-    out: &mut Vec<BacakElements>,
-    renderer: &mut GlesRenderer,
-    x: f32,
-    y: f32,
-    z: f32,
-    dark: bool,
-    output_scale: i32,
-    off_x: i32,
-    off_y: i32,
-) {
-    let frame = themed(Color32F::new(0.92, 0.94, 0.97, 0.95), dark);
-    // A drop shadow under this small glyph reads as a smudge on the light panel.
-    let shadow = if dark { CARD_SHADOW_COL } else { [0.0; 4] };
-    let screen = Color32F::new(0.30, 0.50, 0.78, 1.0);
-    let mw = CC_MONITOR_W * z;
-    let bezel_h = 13.0 * z;
-    let inset = 1.8 * z;
-    // Screen in front of the bezel it sits in.
-    cc_card_shadow(
-        out,
-        renderer,
-        Rect::new(x + inset, y + inset, mw - 2.0 * inset, bezel_h - 2.0 * inset),
-        screen,
-        1.2 * z,
-        shadow,
-        output_scale,
-        off_x,
-        off_y,
-    );
-    cc_card_shadow(out, renderer, Rect::new(x, y, mw, bezel_h), frame, 2.5 * z, shadow, output_scale, off_x, off_y);
-    // Neck and base.
-    let neck_w = 3.0 * z;
-    cc_card_shadow(
-        out,
-        renderer,
-        Rect::new(x + (mw - neck_w) / 2.0, y + bezel_h, neck_w, 2.4 * z),
-        frame,
-        0.0,
-        shadow,
-        output_scale,
-        off_x,
-        off_y,
-    );
-    let base_w = 10.0 * z;
-    cc_card_shadow(
-        out,
-        renderer,
-        Rect::new(x + (mw - base_w) / 2.0, y + (CC_MONITOR_H - 1.8) * z, base_w, 1.8 * z),
-        frame,
-        0.9 * z,
-        shadow,
-        output_scale,
-        off_x,
-        off_y,
-    );
-}
-
 /// A slider tile's track geometry: `(x, y, width, height)` of the groove
 /// inside the tile. Shared by the fill (pass 1) and the track (pass 2) so
 /// they line up exactly, and matched to the hit-test in `state.rs`.
@@ -1973,6 +1905,10 @@ pub(crate) fn render_control_center(
         ([0.0; 4], [0.0, 0.0, 0.0, 0.25], [0.0, 0.0, 0.0, 0.18])
     };
     let accent = SWITCHER_RING_COLOR;
+    // A lit state tile: deeper blue under the light text of dark mode (the
+    // sky-blue accent left its small status line hard to read); light mode
+    // writes dark text, which reads fine on the accent itself.
+    let lit = if dark { Color32F::new(0.15, 0.42, 0.80, 0.95) } else { accent };
     let warm = Color32F::new(1.0, 0.78, 0.30, 0.95);
     let off_card = t(Color32F::new(1.0, 1.0, 1.0, 0.10));
     let track_col = t(Color32F::new(1.0, 1.0, 1.0, 0.13));
@@ -2038,19 +1974,8 @@ pub(crate) fn render_control_center(
                 let gap = if sub_h > 0.0 { 2.0 * z } else { 0.0 };
                 let block_h = label_h + gap + sub_h;
                 let mut ly = r.y + (r.h - block_h) / 2.0;
-                // The UI font (DejaVu) has no monitor glyph, so the Remote
-                // Desktop button draws one as vector shapes left of its label.
-                let icon_w = if tile.action == crate::plugins::control_center::CcAction::RemoteDesktopConnect {
-                    (CC_MONITOR_W + CC_MONITOR_GAP) * z
-                } else {
-                    0.0
-                };
                 if let Some((_, w, _)) = &tile.label {
-                    let lx = r.x + (r.w - *w as f32 - icon_w) / 2.0 + icon_w;
-                    if icon_w > 0.0 {
-                        let iy = r.y + (r.h - CC_MONITOR_H * z) / 2.0;
-                        push_cc_monitor_glyph(out, renderer, lx - icon_w, iy, z, dark, output_scale, off_x, off_y);
-                    }
+                    let lx = r.x + (r.w - *w as f32) / 2.0;
                     cc_blit_label(out, renderer, &tile.label, lx, ly, output_scale, off_x, off_y);
                 }
                 ly += label_h + gap;
@@ -2087,7 +2012,7 @@ pub(crate) fn render_control_center(
                 cc_card_shadow(out, renderer, r, col, 12.0 * z, tile_shadow, output_scale, off_x, off_y);
             }
             crate::state::CcKind::Toggle => {
-                let col = if on_for(tile.action) { accent } else { off_card };
+                let col = if on_for(tile.action) { lit } else { off_card };
                 cc_card_shadow(out, renderer, r, col, 16.0 * z, tile_shadow, output_scale, off_x, off_y);
             }
         }
