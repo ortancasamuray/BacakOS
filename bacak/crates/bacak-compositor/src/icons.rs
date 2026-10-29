@@ -819,8 +819,9 @@ mod tests {
             CAT_DEVELOPMENT | CAT_MEDIA
         );
         assert_eq!(categorize("Network;WebBrowser;"), CAT_INTERNET);
+        assert_eq!(categorize("Utility;Office;"), CAT_UTILITY | CAT_OFFICE);
         // Unknown-only categories yield no mask (app shows only under "Tümü").
-        assert_eq!(categorize("Utility;Office;"), 0);
+        assert_eq!(categorize("GTK;Qt;"), 0);
         assert_eq!(categorize(""), 0);
     }
 
