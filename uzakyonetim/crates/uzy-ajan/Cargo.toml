@@ -47,9 +47,10 @@ shell: only a fixed set of operations, each switchable off locally in
 screen monitoring is active."""
 assets = [
     ["target/release/uzakyonetim-ajan", "usr/bin/", "755"],
-    ["../../paket/uzakyonetim-ajan.service", "lib/systemd/system/", "644"],
     ["../../paket/politika.toml", "etc/uzakyonetim/politika.toml", "644"],
 ]
 conf-files = ["/etc/uzakyonetim/politika.toml"]
 maintainer-scripts = "../../paket/ajan-debian/"
-systemd-units = { unit-name = "uzakyonetim-ajan", enable = false, start = false }
+# The unit comes from `unit-scripts` so the generated maintainer scripts
+# reload systemd and restart a running agent on upgrade.
+systemd-units = { unit-scripts = "../../paket", unit-name = "uzakyonetim-ajan", enable = false, start = false }
