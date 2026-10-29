@@ -760,8 +760,8 @@ pub fn build_output_frame(
         }
     }
 
-    // Software display brightness. There's no hardware backlight here, so
-    // dim the whole output with a translucent black overlay scaled by how
+    // Software display brightness. Without a backlight (whiteboards,
+    // desktop monitors) dim the whole output with a translucent black overlay scaled by how
     // far below full brightness we are. Pushed right after the cursor so
     // the pointer stays readable while everything else (including the
     // Control Center) dims, like a real backlight. Skipped on the blur

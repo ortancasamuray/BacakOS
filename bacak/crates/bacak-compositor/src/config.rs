@@ -184,6 +184,11 @@ pub struct CompositorConfig {
     /// a whiteboard isn't the primary screen.
     #[serde(default)]
     pub touch_output: String,
+    /// Brightness slider level (0–1) on a screen without a backlight, where
+    /// it dims the picture; kept so a dimmed board stays dimmed after a
+    /// restart. A backlight keeps its own level. Set from the Control
+    /// Center, not via `bacak-cli set`.
+    pub brightness: f32,
 }
 
 fn default_xkb_layout() -> String {
@@ -219,6 +224,7 @@ impl Default for CompositorConfig {
             xkb_variant: default_xkb_variant(),
             touch_gestures: TouchGestures::Auto,
             touch_output: String::new(),
+            brightness: 1.0,
         }
     }
 }
@@ -465,6 +471,7 @@ impl CompositorConfig {
         self.dock_pinned = Self::parse_list(&self.dock_pinned.join(","));
         self.font = self.font.trim().to_string();
         self.icon_theme = self.icon_theme.trim().to_string();
+        self.brightness = if self.brightness.is_finite() { self.brightness.clamp(0.0, 1.0) } else { d.brightness };
     }
 
     /// Effective blur setting: the `BACAK_BLUR` env var force-enables

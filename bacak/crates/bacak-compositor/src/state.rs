@@ -1141,10 +1141,12 @@ pub struct BacakState {
     /// native `wl_touch` so in-app multitouch / pinch still works.
     pub touch_pointer_slot: Option<i32>,
 
-    /// Software display brightness in `[MIN_BRIGHTNESS, 1.0]`. There's no
-    /// hardware backlight on this machine, so the renderer dims the whole
-    /// output with a translucent black overlay scaled by `1.0 - brightness`.
+    /// Software display brightness in `[MIN_BRIGHTNESS, 1.0]`: without a
+    /// backlight the renderer dims the whole output with a translucent black
+    /// overlay scaled by `1.0 - brightness`. Stays 1.0 with a backlight.
     pub brightness: f32,
+    /// Where the brightness slider goes; see [`BrightnessOut`].
+    pub brightness_out: BrightnessOut,
 
     /// Desktop-wide dark mode. Tints the compositor's own chrome
     /// (panels/cards); applications follow it through `gorunum.json` and the
@@ -1289,6 +1291,19 @@ pub const APPS_MENU_CAT_ROW_H: f32 = 38.0;
 /// Software-brightness floor: the dim overlay never goes fully black, so
 /// the user can always see the slider to bring it back up.
 pub const MIN_BRIGHTNESS: f32 = 0.15;
+
+/// Where the brightness slider goes.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BrightnessOut {
+    /// Dim the picture, remember nothing (nested sessions and tests must not
+    /// touch the host's backlight or the user's config).
+    Preview,
+    /// Dim the picture and keep the level in `compositor.json` (a whiteboard
+    /// or desktop monitor: no backlight to drive).
+    Dim,
+    /// Drive the backlight; `level` is the slider's 0..1.
+    Backlight { dev: crate::controls::Backlight, level: f32 },
+}
 
 /// Duration of the post-screenshot "camera flash" white overlay.
 pub const FLASH_MS: u64 = 170;
@@ -1632,6 +1647,7 @@ impl BacakState {
             apps_menu_touch_slot: None,
             touch_pointer_slot: None,
             brightness: 1.0,
+            brightness_out: BrightnessOut::Preview,
             dark_mode: {
                 let koyu = bacak_ipc::Gorunum::load().koyu;
                 DS_DARK.store(koyu, std::sync::atomic::Ordering::Relaxed);
@@ -4704,6 +4720,12 @@ impl BacakState {
         self.uzakel_panel = None;
         self.remote_desktop_panel = None;
         self.close_overview();
+        // The brightness keys may have moved the backlight since.
+        if let BrightnessOut::Backlight { dev, level } = &mut self.brightness_out {
+            if let Some(l) = crate::controls::backlight_level(dev) {
+                *level = l;
+            }
+        }
         let bounds = self
             .wm
             .output(out)
@@ -4997,7 +5019,10 @@ impl BacakState {
     fn cc_slider_level(&self, action: CcAction) -> f32 {
         let Some(cc) = self.control_center.as_ref() else { return 0.0 };
         match action {
-            CcAction::Brightness => (self.brightness - MIN_BRIGHTNESS) / (1.0 - MIN_BRIGHTNESS),
+            CcAction::Brightness => match &self.brightness_out {
+                BrightnessOut::Backlight { level, .. } => *level,
+                _ => (self.brightness - MIN_BRIGHTNESS) / (1.0 - MIN_BRIGHTNESS),
+            },
             CcAction::MicVolume => cc.mic_volume,
             _ => cc.volume,
         }
@@ -5072,7 +5097,15 @@ impl BacakState {
     /// dragging) at most every [`CC_SLIDER_APPLY_EVERY`].
     fn cc_set_level(&mut self, action: CcAction, level: f32, to_system: bool) {
         match action {
-            CcAction::Brightness => self.brightness = MIN_BRIGHTNESS + (1.0 - MIN_BRIGHTNESS) * level,
+            CcAction::Brightness => match &mut self.brightness_out {
+                BrightnessOut::Backlight { dev, level: l } => {
+                    *l = level;
+                    if to_system {
+                        crate::controls::set_backlight(dev, level);
+                    }
+                }
+                _ => self.brightness = MIN_BRIGHTNESS + (1.0 - MIN_BRIGHTNESS) * level,
+            },
             CcAction::Volume => {
                 if let Some(cc) = self.control_center.as_mut() {
                     cc.volume = level;
@@ -5123,7 +5156,29 @@ impl BacakState {
         let Some((action, _)) = self.control_center.as_mut().and_then(|cc| cc.dragging.take()) else { return false };
         let level = self.cc_slider_level(action);
         self.cc_set_level(action, level, true);
+        if action == CcAction::Brightness && self.brightness_out == BrightnessOut::Dim {
+            self.config.brightness = level;
+            if let Err(e) = self.config.save() {
+                tracing::warn!(error = %e, "compositor.json yazılamadı");
+            }
+        }
         true
+    }
+
+    /// Pick where brightness goes on a real seat: the backlight at its
+    /// current level, or (none) the dimming saved last time.
+    pub fn init_brightness(&mut self) {
+        self.brightness_out = match crate::controls::backlight() {
+            Some(dev) => {
+                let level = crate::controls::backlight_level(&dev).unwrap_or(1.0);
+                tracing::info!(dev = %dev.dir.display(), level, "brightness drives the backlight");
+                BrightnessOut::Backlight { dev, level }
+            }
+            None => {
+                self.brightness = MIN_BRIGHTNESS + (1.0 - MIN_BRIGHTNESS) * self.config.brightness;
+                BrightnessOut::Dim
+            }
+        };
     }
 
     /// Open the Android-style Wi-Fi panel: a header on/off switch and (when on)
@@ -12277,5 +12332,26 @@ mod cc_layout_tests {
         // Let go: moving no longer changes it.
         assert!(!state.control_center_drag(r.x));
         assert!((state.brightness - 1.0).abs() < 1e-6);
+    }
+
+    /// With a backlight the slider drives it and the picture isn't dimmed.
+    #[test]
+    fn slider_drives_the_backlight() {
+        let dir = std::env::temp_dir().join(format!("bacak-cc-backlight-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("brightness"), "600\n").unwrap();
+        let display: Display<BacakState> = Display::new().unwrap();
+        let mut state = BacakState::new(&display, "cc-backlight-test-seat");
+        let dev = crate::controls::Backlight { dir: dir.clone(), max: 600 };
+        state.brightness_out = BrightnessOut::Backlight { dev, level: 1.0 };
+        let out = state.wm.primary_output().unwrap();
+        state.open_control_center(out);
+        let r = tile(&state, CcAction::Brightness);
+        state.control_center_left_press(r.x, r.y + r.h / 2.0);
+        assert!(state.control_center_release());
+        let raw = std::fs::read_to_string(dir.join("brightness")).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(raw, "30", "lowest step, still on");
+        assert!((state.brightness - 1.0).abs() < 1e-6, "no dimming on top");
     }
 }
