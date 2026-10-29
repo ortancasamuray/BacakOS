@@ -876,6 +876,91 @@ pub fn set_default_sink(id: &str) {
     }
 }
 
+// ----- Backlight -------------------------------------------------------
+
+/// A display backlight under `/sys/class/backlight`. Whiteboards and
+/// desktop monitors have none: brightness then dims the picture instead.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Backlight {
+    pub dir: std::path::PathBuf,
+    pub max: u32,
+}
+
+/// The lowest backlight fraction the slider reaches: never fully off.
+pub const MIN_BACKLIGHT: f32 = 0.05;
+
+/// The backlight that drives the panel, like systemd-backlight picks it:
+/// `firmware` before `platform` before `raw`, and a `raw` one only if it
+/// hangs off a connected panel (a hybrid laptop's idle GPU has one too).
+pub fn backlight() -> Option<Backlight> {
+    backlight_in(std::path::Path::new("/sys/class/backlight"))
+}
+
+fn backlight_in(root: &std::path::Path) -> Option<Backlight> {
+    let read = |p: std::path::PathBuf| std::fs::read_to_string(p).ok().map(|s| s.trim().to_string());
+    let mut found: Vec<(u8, Backlight)> = std::fs::read_dir(root)
+        .ok()?
+        .flatten()
+        .filter_map(|e| {
+            let dir = e.path();
+            let rank = match read(dir.join("type"))?.as_str() {
+                "firmware" => 0,
+                "platform" => 1,
+                "raw" if read(dir.join("device/status")).as_deref() == Some("connected") => 2,
+                _ => return None,
+            };
+            let max = read(dir.join("max_brightness"))?.parse().ok().filter(|&m| m > 0)?;
+            Some((rank, Backlight { dir, max }))
+        })
+        .collect();
+    found.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.dir.cmp(&b.1.dir)));
+    found.into_iter().next().map(|(_, b)| b)
+}
+
+/// Raw backlight value for a slider level (0..1).
+pub fn backlight_raw(b: &Backlight, level: f32) -> u32 {
+    let frac = MIN_BACKLIGHT + (1.0 - MIN_BACKLIGHT) * level.clamp(0.0, 1.0);
+    ((b.max as f32 * frac).round() as u32).clamp(1, b.max)
+}
+
+/// The slider level a raw backlight value shows.
+pub fn backlight_level_of(b: &Backlight, raw: u32) -> f32 {
+    let frac = raw as f32 / b.max as f32;
+    ((frac - MIN_BACKLIGHT) / (1.0 - MIN_BACKLIGHT)).clamp(0.0, 1.0)
+}
+
+/// The backlight's current slider level (it may have changed through the
+/// brightness keys).
+pub fn backlight_level(b: &Backlight) -> Option<f32> {
+    let raw = std::fs::read_to_string(b.dir.join("brightness")).ok()?.trim().parse().ok()?;
+    Some(backlight_level_of(b, raw))
+}
+
+/// Set the backlight: straight into sysfs where a udev rule lets the
+/// `video` group write it, else through logind (allowed for the session
+/// on the seat, no polkit prompt).
+pub fn set_backlight(b: &Backlight, level: f32) {
+    let raw = backlight_raw(b, level);
+    if std::fs::write(b.dir.join("brightness"), raw.to_string()).is_ok() {
+        return;
+    }
+    let name = b.dir.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+    run_logged(
+        "busctl",
+        &[
+            "call",
+            "org.freedesktop.login1",
+            "/org/freedesktop/login1/session/auto",
+            "org.freedesktop.login1.Session",
+            "SetBrightness",
+            "ssu",
+            "backlight",
+            name,
+            &raw.to_string(),
+        ],
+    );
+}
+
 // ----- Power -----------------------------------------------------------
 
 pub fn power_off() {
@@ -938,5 +1023,35 @@ mod tests {
     fn static_address_defaults_to_a_slash_24() {
         assert_eq!(with_prefix("192.168.1.50"), "192.168.1.50/24");
         assert_eq!(with_prefix("10.0.0.5/8"), "10.0.0.5/8");
+    }
+
+    /// The panel's backlight wins over a hybrid laptop's idle GPU one, and
+    /// the slider's ends map to a dim-but-on and a full backlight.
+    #[test]
+    fn backlight_picks_the_panel_and_never_goes_off() {
+        let root = std::env::temp_dir().join(format!("bacak-backlight-{}", std::process::id()));
+        let dev = |name: &str, kind: &str, max: u32, status: Option<&str>| {
+            let d = root.join(name);
+            std::fs::create_dir_all(d.join("device")).unwrap();
+            std::fs::write(d.join("type"), format!("{kind}\n")).unwrap();
+            std::fs::write(d.join("max_brightness"), format!("{max}\n")).unwrap();
+            if let Some(s) = status {
+                std::fs::write(d.join("device/status"), format!("{s}\n")).unwrap();
+            }
+        };
+        dev("nvidia_0", "raw", 100, None);
+        dev("intel_backlight", "raw", 600, Some("connected"));
+        let b = backlight_in(&root).unwrap();
+        assert!(b.dir.ends_with("intel_backlight"));
+        dev("acpi_video0", "firmware", 15, None);
+        let fw = backlight_in(&root).unwrap();
+        assert!(fw.dir.ends_with("acpi_video0"));
+        std::fs::remove_dir_all(&root).unwrap();
+
+        assert_eq!(backlight_raw(&b, 1.0), 600);
+        assert_eq!(backlight_raw(&b, 0.0), 30);
+        assert_eq!(backlight_raw(&fw, 0.0), 1, "a step above off");
+        let level = backlight_level_of(&b, backlight_raw(&b, 0.4));
+        assert!((level - 0.4).abs() < 0.01, "{level}");
     }
 }

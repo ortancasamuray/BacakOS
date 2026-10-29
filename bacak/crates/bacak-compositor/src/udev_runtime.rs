@@ -393,6 +393,8 @@ pub fn run() -> Result<()> {
     // FocusFollowsPointer is the better default for a touch-first session
     // host. Click-to-focus is still available via the runtime API.
     state.focus_policy = FocusPolicy::FocusFollowsPointer;
+    // A real seat: brightness drives the backlight or is remembered.
+    state.init_brightness();
 
     // Program the physical seat keyboard with the configured xkb layout
     // (default `tr(f)` — Bacak OS is Turkish-first) from the start.
