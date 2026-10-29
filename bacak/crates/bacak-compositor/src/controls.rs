@@ -32,11 +32,21 @@ const NMCLI:          &str = "/usr/bin/nmcli";
 // fire-and-forget, and reads drain the child's stdout to EOF (which already
 // proves the child finished) instead of waiting on it.
 
+/// A child for `cmd` in the UTF-8 C locale. The compositor runs without LANG,
+/// and then nmcli prints non-ASCII (a Turkish connection name, an SSID) as
+/// `?` — garbled on screen, and no longer the name of the profile to change.
+/// C keeps the output English for the parsers here.
+fn command(cmd: &str) -> Command {
+    let mut c = Command::new(cmd);
+    c.env("LC_ALL", "C.UTF-8");
+    c
+}
+
 /// Run a command fire-and-forget. The child still execs and takes effect; we
 /// can't read its exit status under `SIG_IGN`, so the bool only reports whether
 /// the spawn itself succeeded. Stdout/stderr discarded. Never panics.
 fn run_ok(cmd: &str, args: &[&str]) -> bool {
-    Command::new(cmd)
+    command(cmd)
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -54,7 +64,7 @@ fn run_ok(cmd: &str, args: &[&str]) -> bool {
 /// "Kapat" tile looking unresponsive with nothing in the logs to explain why.
 fn run_logged(cmd: &'static str, args: &[&str]) -> bool {
     let args_owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
-    match Command::new(cmd)
+    match command(cmd)
         .args(&args_owned)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -85,7 +95,7 @@ fn run_logged(cmd: &'static str, args: &[&str]) -> bool {
 /// spawned. Reads stdout to EOF (blocks until the child exits) rather than
 /// `wait()`-ing, so it works despite the global `SIGCHLD = SIG_IGN`.
 fn capture(cmd: &str, args: &[&str]) -> Option<String> {
-    let mut child = Command::new(cmd)
+    let mut child = command(cmd)
         .args(args)
         .stdin(Stdio::null())
         .stderr(Stdio::null())
@@ -100,7 +110,7 @@ fn capture(cmd: &str, args: &[&str]) -> Option<String> {
 /// Like [`capture`], but also returns the trimmed stderr (read on a helper
 /// thread so neither pipe can fill up and stall the child).
 fn capture_both(cmd: &str, args: &[&str]) -> Option<(String, String)> {
-    let mut child = Command::new(cmd)
+    let mut child = command(cmd)
         .args(args)
         .stdin(Stdio::null())
         .stderr(Stdio::piped())
@@ -430,9 +440,15 @@ pub fn ethernet_link_up() -> bool {
     false
 }
 
-/// Bring the Ethernet link up or down via `ip link set`.
+/// Bring the Ethernet link up or down (nmcli, else `ip link set`).
 pub fn ethernet_set_link(on: bool) {
     if let Some(dev) = eth_device_sysfs() {
+        // Through NetworkManager when it manages the card: `ip link` needs root
+        // (refused from the session), nmcli is allowed for the local session.
+        if nm_manages(&dev) {
+            let _ = capture_both(NMCLI, &["--wait", "30", "device", if on { "connect" } else { "disconnect" }, &dev]);
+            return;
+        }
         run_ok(IP, &["link", "set", &dev, if on { "up" } else { "down" }]);
     }
 }
@@ -475,27 +491,9 @@ pub fn wifi_details() -> Option<WifiDetails> {
         }
     }
 
-    // NetworkManager: the real profile name + its settings, so the details
-    // screen's switches show (and change) what NM will actually do.
-    let (mut conn, mut autoconnect, mut dhcp, mut dns) = (ssid, true, true, String::new());
-    if nm_manages(&dev) {
-        if let Some(name) = capture(NMCLI, &["-t", "-g", "GENERAL.CONNECTION", "device", "show", &dev])
-            .filter(|n| !n.is_empty())
-        {
-            if let Some(out) = capture(
-                NMCLI,
-                &["-t", "-g", "connection.autoconnect,ipv4.method", "connection", "show", &name],
-            ) {
-                let mut l = out.lines();
-                autoconnect = l.next() != Some("no");
-                dhcp = l.next() != Some("manual");
-            }
-            conn = name;
-        }
-        dns = capture(NMCLI, &["-t", "-g", "IP4.DNS", "device", "show", &dev])
-            .and_then(|s| s.split('|').next().map(|d| d.trim().to_string()))
-            .unwrap_or_default();
-    }
+    let p = nm_device_profile(&dev);
+    let conn = if p.conn.is_empty() { ssid } else { p.conn };
+    let NmProfile { autoconnect, dhcp, dns, .. } = p;
 
     Some(WifiDetails {
         device: dev,
@@ -510,6 +508,42 @@ pub fn wifi_details() -> Option<WifiDetails> {
         connected,
         managed: true,
     })
+}
+
+/// What NetworkManager will do with `dev`: its active profile's name and
+/// settings, so the details screen's switches show (and change) the real
+/// thing. Defaults (no profile, DHCP, autoconnect) when NM doesn't manage it.
+struct NmProfile {
+    managed: bool,
+    conn: String,
+    autoconnect: bool,
+    dhcp: bool,
+    dns: String,
+}
+
+fn nm_device_profile(dev: &str) -> NmProfile {
+    let mut p = NmProfile { managed: false, conn: String::new(), autoconnect: true, dhcp: true, dns: String::new() };
+    if !nm_manages(dev) {
+        return p;
+    }
+    p.managed = true;
+    if let Some(name) = capture(NMCLI, &["-t", "-g", "GENERAL.CONNECTION", "device", "show", dev])
+        .filter(|n| !n.is_empty())
+    {
+        if let Some(out) = capture(
+            NMCLI,
+            &["-t", "-g", "connection.autoconnect,ipv4.method", "connection", "show", &name],
+        ) {
+            let mut l = out.lines();
+            p.autoconnect = l.next() != Some("no");
+            p.dhcp = l.next() != Some("manual");
+        }
+        p.conn = name;
+    }
+    p.dns = capture(NMCLI, &["-t", "-g", "IP4.DNS", "device", "show", dev])
+        .and_then(|s| s.split('|').next().map(|d| d.trim().to_string()))
+        .unwrap_or_default();
+    p
 }
 
 /// Details of the ethernet interface using sysfs + `ip addr show`.
@@ -558,14 +592,19 @@ pub fn ethernet_details() -> Option<WifiDetails> {
         }
     }
 
-    let mut dns = String::new();
-    if let Ok(resolv) = std::fs::read_to_string("/etc/resolv.conf") {
-        for line in resolv.lines() {
-            if let Some(rest) = line.trim().strip_prefix("nameserver") {
-                let ns = rest.trim();
-                if !ns.is_empty() && !ns.starts_with('#') {
-                    dns = ns.to_string();
-                    break;
+    // NetworkManager's profile when it manages the card (DHCP/static can be
+    // switched then); otherwise the system resolver for the DNS line.
+    let p = nm_device_profile(&dev);
+    let mut dns = p.dns;
+    if dns.is_empty() {
+        if let Ok(resolv) = std::fs::read_to_string("/etc/resolv.conf") {
+            for line in resolv.lines() {
+                if let Some(rest) = line.trim().strip_prefix("nameserver") {
+                    let ns = rest.trim();
+                    if !ns.is_empty() && !ns.starts_with('#') {
+                        dns = ns.to_string();
+                        break;
+                    }
                 }
             }
         }
@@ -574,15 +613,15 @@ pub fn ethernet_details() -> Option<WifiDetails> {
     Some(WifiDetails {
         device: dev,
         mac,
-        conn: String::new(),
-        autoconnect: false,
-        dhcp: true,
+        conn: p.conn,
+        autoconnect: p.autoconnect,
+        dhcp: p.dhcp,
         ipv4,
         ipv6,
         gateway,
         dns,
         connected,
-        managed: false,
+        managed: p.managed,
     })
 }
 
@@ -595,10 +634,12 @@ pub fn net_details(eth: bool) -> Option<WifiDetails> {
     }
 }
 
-/// The NetworkManager profile `conn` can be changed: NM manages the Wi-Fi
-/// device and the details screen named a profile (empty when it couldn't).
+/// The NetworkManager profile `conn` can be changed: the details screen
+/// named one (Wi-Fi or Ethernet) and NM knows it. Without NM the Wi-Fi
+/// screen passes the bare SSID, which is no profile.
 fn nm_profile(conn: &str) -> bool {
-    !conn.is_empty() && wifi_device_sysfs().is_some_and(|d| nm_manages(&d))
+    !conn.is_empty()
+        && capture(NMCLI, &["-t", "-g", "connection.id", "connection", "show", conn]).is_some_and(|id| !id.is_empty())
 }
 
 /// Change NetworkManager profile `conn`, then re-activate it so the new IP
