@@ -72,3 +72,13 @@ pub fn xdg_runtime_dir(uid: u32) -> String {
 }
 
 pub(crate) fn _assert_path(_p: &Path) {}
+
+/// Whether the machine is shutting down or rebooting. A session that ends then
+/// was stopped by systemd, and logind refuses new sessions ("Resource deadlock
+/// avoided"), so the daemon must exit instead of reopening the greeter.
+pub fn system_stopping() -> bool {
+    std::process::Command::new("systemctl")
+        .arg("is-system-running")
+        .output()
+        .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).trim() == "stopping")
+}
