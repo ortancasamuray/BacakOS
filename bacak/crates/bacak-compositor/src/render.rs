@@ -1983,6 +1983,7 @@ pub(crate) fn render_control_center(
         crate::state::CcAction::WifiToggle => cc.wifi_on,
         crate::state::CcAction::BtToggle => cc.bt_on,
         crate::state::CcAction::DarkToggle => state.dark_mode,
+        crate::state::CcAction::EthernetSettings => cc.eth_on,
         _ => false,
     };
 
@@ -2067,26 +2068,14 @@ pub(crate) fn render_control_center(
                 }
             }
             crate::state::CcKind::Toggle => {
-                // Tall toggles (wifi/bt) stack label + sub at the bottom;
-                // the short full-width dark tile centres its label.
+                // Name over status, left-aligned, centred vertically.
                 let label_h = tile.label.as_ref().map(|(_, _, h)| *h as f32).unwrap_or(0.0);
                 let sub_h = tile.sub.as_ref().map(|(_, _, h)| *h as f32).unwrap_or(0.0);
-                if r.h >= 80.0 * z {
-                    let lx = r.x + 14.0 * z;
-                    if tile.sub.is_some() {
-                        let sub_y = r.y + r.h - 12.0 * z - sub_h;
-                        let label_y = sub_y - label_h - 2.0 * z;
-                        cc_blit_label(out, renderer, &tile.label, lx, label_y, output_scale, off_x, off_y);
-                        cc_blit_label(out, renderer, &tile.sub, lx, sub_y, output_scale, off_x, off_y);
-                    } else {
-                        let label_y = r.y + r.h - 12.0 * z - label_h;
-                        cc_blit_label(out, renderer, &tile.label, lx, label_y, output_scale, off_x, off_y);
-                    }
-                } else {
-                    let lx = r.x + 16.0 * z;
-                    let label_y = r.y + (r.h - label_h) / 2.0;
-                    cc_blit_label(out, renderer, &tile.label, lx, label_y, output_scale, off_x, off_y);
-                }
+                let gap = if sub_h > 0.0 { 3.0 * z } else { 0.0 };
+                let lx = r.x + 14.0 * z;
+                let label_y = r.y + (r.h - label_h - gap - sub_h) / 2.0;
+                cc_blit_label(out, renderer, &tile.label, lx, label_y, output_scale, off_x, off_y);
+                cc_blit_label(out, renderer, &tile.sub, lx, label_y + label_h + gap, output_scale, off_x, off_y);
             }
         }
     }
