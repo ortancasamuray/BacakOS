@@ -84,6 +84,8 @@ pub struct ControlCenter {
     pub volume: f32,
     pub muted: bool,
     pub mic_volume: f32,
+    /// Whether an Ethernet link is up (the Ethernet tile lights up).
+    pub eth_on: bool,
     /// A power action tapped once: it runs only if tapped again before the
     /// deadline (a stray touch must not end a lesson).
     pub armed: Option<(CcAction, std::time::Instant)>,
