@@ -5016,7 +5016,7 @@ impl BacakState {
     }
 
     /// The level (0..1) a slider shows.
-    fn cc_slider_level(&self, action: CcAction) -> f32 {
+    pub(crate) fn cc_slider_level(&self, action: CcAction) -> f32 {
         let Some(cc) = self.control_center.as_ref() else { return 0.0 };
         match action {
             CcAction::Brightness => match &self.brightness_out {
