@@ -423,6 +423,10 @@ pub fn run_autologin(config: &Config, username: &str) -> Result<(), Box<dyn std:
             Vec::new(),
             Some("bacak-autologin"),
         )?;
+        if seat::system_stopping() {
+            log::info!("autologin session ended; system is shutting down, exiting");
+            return Ok(());
+        }
         log::info!("autologin session ended; restarting");
         // Guard against a session that exits instantly looping forever.
         backoff.note_exit(started);

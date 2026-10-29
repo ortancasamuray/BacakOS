@@ -87,6 +87,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 // and is granted the seat. Auth already happened; this opens the
                 // session only (acct_mgmt + setcred + open_session).
                 launch::run_session(&config, &user, &session, env, Some("bacak-display-manager"))?;
+                if seat::system_stopping() {
+                    log::info!("session for '{user}' ended; system is shutting down, exiting");
+                    return Ok(());
+                }
                 log::info!("session for '{user}' ended; returning to greeter");
                 // A completed login cycle is a healthy run.
                 backoff.reset();
