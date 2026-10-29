@@ -162,7 +162,12 @@ async fn run_forever() -> Result<(), String> {
                 return Ok(());
             }
         }
-        tokio::time::sleep(Duration::from_secs(backoff)).await;
+        // Wait out the backoff, but a SIGTERM during it (shutdown, reboot)
+        // must not hold the machine up for up to a minute.
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(backoff)) => {}
+            _ = &mut shutdown => return Ok(()),
+        }
         backoff = (backoff * 2).min(60);
     }
 }
