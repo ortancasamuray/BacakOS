@@ -1,0 +1,65 @@
+#!/bin/sh
+set -e
+
+# Hand plain-DHCP Ethernet over to NetworkManager. The Debian installer writes
+# the wired card into /etc/network/interfaces ("iface X inet dhcp"); with
+# NetworkManager's "[ifupdown] managed=false" such a card stays unmanaged, so
+# the Control Center can only show it read-only (no static IP). Comment out
+# those stanzas (marked, so postrm can undo it); NetworkManager then manages
+# the card with its default DHCP connection. Wireless cards, loopback and any
+# stanza with option lines (a static address, bridge, wpa-* …) are left alone.
+IF=/etc/network/interfaces
+MARK="# bacak-plugin-network:"
+# Tags the line below it as added by this script (interfaces(5) has no
+# end-of-line comments).
+EKLENDI="# bacak-plugin-network: eklendi"
+NET=/sys/class/net
+
+nm_devralsin() {
+    f="$1"
+    # Pass 1: interfaces whose every stanza is a bare "inet dhcp" or
+    # "inet6 auto|dhcp" (the installer's output) and that aren't wireless.
+    adaylar=$(awk '
+        /^[ \t]*#/ || /^[ \t]*$/ { next }
+        $1 == "iface" { cur = $2; if (!(cur in ok)) ok[cur] = 1
+            if (!(($3 == "inet" && $4 == "dhcp") || ($3 == "inet6" && ($4 == "auto" || $4 == "dhcp")))) ok[cur] = 0
+            next }
+        /^[ \t]/ && cur != "" { ok[cur] = 0; next }
+        { cur = "" }
+        END { for (i in ok) if (ok[i] && i != "lo") print i }
+    ' "$f")
+    secilen=""
+    for i in $adaylar; do
+        [ -d "$NET/$i/wireless" ] && continue
+        secilen="$secilen $i"
+    done
+    [ -n "$secilen" ] || return 0
+
+    # Pass 2: comment out their iface lines and drop them from auto /
+    # allow-hotplug lines (other names on such a line stay, re-written below
+    # the commented original, tagged so postrm can remove it).
+    tmp="$f.bacak-yeni"
+    awk -v sec="$secilen" -v mark="$MARK" -v eklendi="$EKLENDI" '
+        BEGIN { n = split(sec, a, " "); for (k = 1; k <= n; k++) s[a[k]] = 1 }
+        $1 == "iface" && ($2 in s) { print mark " " $0; next }
+        ($1 == "auto" || $1 ~ /^allow-/) {
+            kalan = ""; degisti = 0
+            for (k = 2; k <= NF; k++) { if ($k in s) degisti = 1; else kalan = kalan " " $k }
+            if (!degisti) { print; next }
+            print mark " " $0
+            if (kalan != "") { print eklendi; print $1 kalan }
+            next }
+        { print }
+    ' "$f" > "$tmp"
+    [ -e "$f.bacak-yedek" ] || cp -p "$f" "$f.bacak-yedek"
+    chmod --reference="$f" "$tmp"
+    mv "$tmp" "$f"
+    echo "bacak-plugin-network: Ethernet NetworkManager'a devredildi:$secilen (yedek: $f.bacak-yedek)"
+}
+
+if [ "$1" = "configure" ] && [ -f "$IF" ] && [ -x /usr/sbin/NetworkManager ]; then
+    nm_devralsin "$IF"
+fi
+
+#DEBHELPER#
+exit 0
