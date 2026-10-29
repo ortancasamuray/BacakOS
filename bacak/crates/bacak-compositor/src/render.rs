@@ -2003,15 +2003,7 @@ pub(crate) fn render_control_center(
         let r = tile.rect;
         match tile.kind {
             crate::state::CcKind::Slider => {
-                let level = match tile.action {
-                    crate::state::CcAction::Brightness => {
-                        (state.brightness - crate::state::MIN_BRIGHTNESS)
-                            / (1.0 - crate::state::MIN_BRIGHTNESS)
-                    }
-                    crate::state::CcAction::MicVolume => cc.mic_volume,
-                    _ => cc.volume,
-                }
-                .clamp(0.0, 1.0);
+                let level = state.cc_slider_level(tile.action);
                 let (tx, ty, tw, th) = cc_slider_geom(r, z);
                 let fill_col = if matches!(tile.action, crate::state::CcAction::Brightness) {
                     warm
