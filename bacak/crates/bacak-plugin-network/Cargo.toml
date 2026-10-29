@@ -19,9 +19,12 @@ priority   = "optional"
 extended-description = """\
 Provides WiFi, Bluetooth and Ethernet control panels inside the Bacak
 compositor Control Center. Install this package to enable network
-settings tiles in the quick-settings panel."""
+settings tiles in the quick-settings panel. A wired card the Debian
+installer left to ifupdown (plain DHCP in /etc/network/interfaces) is
+handed over to NetworkManager, so its address can be set from the panel."""
 depends = "bacak-compositor (>= 0.1.0), network-manager"
 assets = [
     ["plugin.conf",           "usr/share/bacak/plugins/network.plugin",                       "644"],
     ["changelog.Debian.gz",   "usr/share/doc/bacak-plugin-network/changelog.Debian.gz",       "644"],
 ]
+maintainer-scripts = "debian/"

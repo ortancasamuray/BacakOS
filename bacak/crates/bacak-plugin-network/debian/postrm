@@ -1,0 +1,25 @@
+#!/bin/sh
+set -e
+
+# Undo postinst: give the Ethernet stanzas it commented out back to ifupdown.
+IF=/etc/network/interfaces
+MARK="# bacak-plugin-network:"
+EKLENDI="# bacak-plugin-network: eklendi"
+
+if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
+    if [ -f "$IF" ] && grep -q "$MARK" "$IF"; then
+        tmp="$IF.bacak-yeni"
+        # Drop each tagged line with the line it tags; uncomment the rest.
+        awk -v mark="$MARK" -v eklendi="$EKLENDI" '
+            $0 == eklendi { getline; next }
+            index($0, mark " ") == 1 { print substr($0, length(mark) + 2); next }
+            { print }
+        ' "$IF" > "$tmp"
+        chmod --reference="$IF" "$tmp"
+        mv "$tmp" "$IF"
+    fi
+    [ "$1" = "purge" ] && rm -f "$IF.bacak-yedek"
+fi
+
+#DEBHELPER#
+exit 0
