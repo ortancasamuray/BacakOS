@@ -216,6 +216,8 @@ import os, sys, time, dbus, dbus.service
 from dbus.mainloop.glib import DBusGMainLoop
 from gi.repository import GLib
 
+# The compositor that started us; see the watchdog at the bottom.
+PARENT = os.getppid()
 HOME = os.path.expanduser("~")
 SAVE_DIR = os.path.join(HOME, "Downloads")
 os.makedirs(SAVE_DIR, exist_ok=True)
@@ -256,7 +258,18 @@ try:
 except Exception as e:
     log("register FAILED: %s" % e)
     sys.exit(0)
-GLib.MainLoop().run()
+loop = GLib.MainLoop()
+# Quit once the compositor is gone (logout): left running, this process
+# keeps the ended login session open — and with it the user's services,
+# e.g. uzakel-daemon holding its ports against the greeter's instance.
+def parent_alive():
+    if os.getppid() != PARENT:
+        log("compositor exited, quitting")
+        loop.quit()
+        return False
+    return True
+GLib.timeout_add_seconds(5, parent_alive)
+loop.run()
 "#;
 
 /// Python scripti: obexd D-Bus API'sı üzerinden dosya gönder.
