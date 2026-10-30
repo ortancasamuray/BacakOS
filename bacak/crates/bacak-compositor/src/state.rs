@@ -5656,16 +5656,24 @@ impl BacakState {
     /// per-step placeholder (no masking, no eye).
     fn wifi_pw_refresh(&mut self) {
         let Some((n, show, buf, static_step)) = self.wifi_panel.as_ref().map(|p| {
-            (p.pw_buf.chars().count(), p.pw_show, p.pw_buf.clone(), p.static_entry.as_ref().map(|s| s.step))
+            (
+                p.pw_buf.chars().count(),
+                p.pw_show,
+                p.pw_buf.clone(),
+                p.static_entry.as_ref().map(|s| (s.step, s.fresh)),
+            )
         }) else {
             return;
         };
         const SUB: [u8; 3] = [170, 178, 196];
         const LABEL: [u8; 3] = [232, 236, 244];
+        const SELECTED: [u8; 3] = [140, 190, 255];
         let tw = (380.0_f32 - 2.0 * 16.0 - 14.0 - WIFI_EYE_W).max(1.0) as usize;
-        let (s, col) = if let Some(step) = static_step {
+        let (s, col) = if let Some((step, fresh)) = static_step {
             if n == 0 {
                 (static_field_hint(step).to_string(), SUB)
+            } else if fresh {
+                (buf, SELECTED)
             } else {
                 (buf, LABEL)
             }
@@ -5702,6 +5710,11 @@ impl BacakState {
 
     fn wifi_pw_input(&mut self, s: &str) {
         if let Some(p) = self.wifi_panel.as_mut() {
+            // Typing over a static-IP prefill replaces it.
+            if let Some(e) = p.static_entry.as_mut().filter(|e| e.fresh) {
+                e.fresh = false;
+                p.pw_buf.clear();
+            }
             p.pw_buf.push_str(s);
         }
         self.wifi_pw_refresh();
@@ -5709,6 +5722,10 @@ impl BacakState {
 
     fn wifi_pw_backspace(&mut self) {
         if let Some(p) = self.wifi_panel.as_mut() {
+            // Backspace edits the prefill (e.g. fix the last octet) instead.
+            if let Some(e) = p.static_entry.as_mut() {
+                e.fresh = false;
+            }
             p.pw_buf.pop();
         }
         self.wifi_pw_refresh();
@@ -5771,6 +5788,7 @@ impl BacakState {
             gateway: String::new(),
             gw_prefill: d.gateway.clone(),
             dns_prefill: d.dns.clone(),
+            fresh: false,
         };
         self.build_wifi_static_panel(out, entry, d.ipv4.clone());
         self.open_wifi_keyboard(out);
@@ -5785,6 +5803,7 @@ impl BacakState {
     /// Build the static-IP entry panel for the current step: a title, a progress
     /// status, the editable box, and Next/Apply + Cancel buttons.
     fn build_wifi_static_panel(&mut self, out: OutputId, entry: StaticEntry, buf: String) {
+        let entry = StaticEntry { fresh: !buf.is_empty(), ..entry };
         let nets = self.wifi_panel.as_ref().map(|p| p.nets.clone()).unwrap_or_default();
         let eth = self.wifi_panel.as_ref().map(|p| p.eth).unwrap_or(false);
         let details = self.wifi_panel.as_ref().and_then(|p| p.details.clone());
@@ -5903,10 +5922,9 @@ impl BacakState {
                 self.build_wifi_details_panel(out, cur, true, eth); // "Yükleniyor…"
                 let (tx, rx) = std::sync::mpsc::channel();
                 std::thread::spawn(move || {
-                    crate::controls::wifi_set_static(&conn, &ip, &gw, &dns);
-                    let _ = tx.send(WifiMsg::Details(
-                        crate::controls::net_details(eth).unwrap_or_default(),
-                    ));
+                    let err = crate::controls::wifi_set_static(&conn, &ip, &gw, &dns).err();
+                    let details = crate::controls::net_details(eth).unwrap_or_default();
+                    let _ = tx.send(WifiMsg::Applied { details, err });
                 });
                 self.wifi_rx = Some(rx);
             }
@@ -5965,6 +5983,17 @@ impl BacakState {
     }
 
     /// Re-rasterise just the panel's status line in place (no relayout).
+    /// Like [`Self::wifi_set_status`] but in a warning colour, for a refused
+    /// network change.
+    fn wifi_set_error(&mut self, s: &str) {
+        const WARN: [u8; 3] = [255, 150, 120];
+        let inner = (380.0 - 2.0 * 16.0) as usize;
+        let lbl = cc_rasterize(self.text.as_ref(), s, 12.0, WARN, inner);
+        if let Some(p) = self.wifi_panel.as_mut() {
+            p.status = lbl;
+        }
+    }
+
     fn wifi_set_status(&mut self, s: &str) {
         const SUB: [u8; 3] = [170, 178, 196];
         let inner = (380.0 - 2.0 * 16.0) as usize;
@@ -7435,10 +7464,9 @@ impl BacakState {
                     self.build_wifi_details_panel(out, d, true, eth); // "Yükleniyor…"
                     let (tx, rx) = std::sync::mpsc::channel();
                     std::thread::spawn(move || {
-                        crate::controls::wifi_set_dhcp(&conn);
-                        let _ = tx.send(WifiMsg::Details(
-                            crate::controls::net_details(eth).unwrap_or_default(),
-                        ));
+                        let err = crate::controls::wifi_set_dhcp(&conn).err();
+                        let details = crate::controls::net_details(eth).unwrap_or_default();
+                        let _ = tx.send(WifiMsg::Applied { details, err });
                     });
                     self.wifi_rx = Some(rx);
                 }
@@ -9262,6 +9290,16 @@ impl BacakState {
                     self.wifi_rx = None;
                     if let Some((out, eth)) = self.wifi_panel.as_ref().map(|w| (w.output, w.eth)) {
                         self.build_wifi_details_panel(out, d, false, eth);
+                    }
+                    still_running = true;
+                }
+                Some(WifiMsg::Applied { details, err }) => {
+                    self.wifi_rx = None;
+                    if let Some((out, eth)) = self.wifi_panel.as_ref().map(|w| (w.output, w.eth)) {
+                        self.build_wifi_details_panel(out, details, false, eth);
+                        if let Some(e) = err {
+                            self.wifi_set_error(&format!("Kaydedilemedi: {e}"));
+                        }
                     }
                     still_running = true;
                 }
@@ -12315,6 +12353,40 @@ mod cc_layout_tests {
             assert!((b.x + b.w - (p.x + p.w)).abs() < 0.5, "{edge:?}: {b:?} vs {p:?}");
             assert!((b.y + b.h - (p.y + p.h)).abs() < 0.5, "{edge:?}: {b:?} vs {p:?}");
         }
+    }
+
+    /// The static-IP box opens with the current value; the first digit
+    /// replaces it, while Backspace edits it (and later digits append).
+    #[test]
+    fn static_ip_prefill_is_replaced_by_typing_but_editable_with_backspace() {
+        let display: Display<BacakState> = Display::new().unwrap();
+        let mut state = BacakState::new(&display, "static-ip-test-seat");
+        let out = state.wm.primary_output().unwrap();
+        let entry = |step| StaticEntry {
+            conn: "Kablolu bağlantı 1".into(),
+            step,
+            ip: String::new(),
+            gateway: String::new(),
+            gw_prefill: "192.168.1.1".into(),
+            dns_prefill: String::new(),
+            fresh: false,
+        };
+        let buf = |s: &BacakState| s.wifi_panel.as_ref().unwrap().pw_buf.clone();
+
+        state.build_wifi_static_panel(out, entry(0), "192.168.1.14/24".into());
+        state.wifi_pw_input("1");
+        state.wifi_pw_input("0");
+        assert_eq!(buf(&state), "10");
+
+        state.build_wifi_static_panel(out, entry(1), "192.168.1.1".into());
+        state.wifi_pw_backspace();
+        state.wifi_pw_input("5");
+        assert_eq!(buf(&state), "192.168.1.5");
+
+        // An empty box (no prefill) just appends.
+        state.build_wifi_static_panel(out, entry(2), String::new());
+        state.wifi_pw_input("8");
+        assert_eq!(buf(&state), "8");
     }
 
     fn tile(state: &BacakState, action: CcAction) -> Rect {

@@ -141,6 +141,9 @@ pub struct StaticEntry {
     /// Prefills for the gateway / DNS steps (the current active values).
     pub gw_prefill: String,
     pub dns_prefill: String,
+    /// The box still holds the untouched prefill: the first typed character
+    /// replaces it (shown highlighted, like a selection) instead of appending.
+    pub fresh: bool,
 }
 
 /// One row in the Wi-Fi network list: its hit rect, behaviour, and labels
@@ -218,6 +221,9 @@ pub enum WifiMsg {
     Connected { ssid: String, ok: bool, msg: String },
     /// Background-fetched details for the connected network (settings screen).
     Details(crate::controls::WifiDetails),
+    /// A finished DHCP/static change: the re-read details, plus why it was
+    /// refused (shown in the status line) on failure.
+    Applied { details: crate::controls::WifiDetails, err: Option<String> },
 }
 
 // ----- Bluetooth panel -------------------------------------------------------
