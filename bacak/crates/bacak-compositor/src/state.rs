@@ -1140,6 +1140,10 @@ pub struct BacakState {
     /// making touch behave like the (working) mouse. Wayland clients keep
     /// native `wl_touch` so in-app multitouch / pinch still works.
     pub touch_pointer_slot: Option<i32>,
+    /// Whether the current touch sequence may start compositor gestures —
+    /// decided when its first finger lands (`touch_gestures_at`) and kept
+    /// until the last lifts, so every finger of one gesture agrees.
+    pub touch_seq_gestures: bool,
 
     /// Software display brightness in `[MIN_BRIGHTNESS, 1.0]`: without a
     /// backlight the renderer dims the whole output with a translucent black
@@ -1646,6 +1650,7 @@ impl BacakState {
             apps_menu_drag: None,
             apps_menu_touch_slot: None,
             touch_pointer_slot: None,
+            touch_seq_gestures: true,
             brightness: 1.0,
             brightness_out: BrightnessOut::Preview,
             dark_mode: {
@@ -1946,6 +1951,24 @@ impl BacakState {
     /// Whether the topmost window at WM-global logical `(x, y)` is an X11
     /// (XWayland) window — used to decide whether a touch there should be
     /// pointer-emulated (see [`touch_pointer_slot`](Self::touch_pointer_slot)).
+    /// Whether a touch sequence whose first finger lands at `(x, y)` on the
+    /// device from `usb_vendor` may start compositor gestures: never on a
+    /// whiteboard sensor, and in `Auto` mode not over a drawing app either
+    /// (see [`crate::config::is_drawing_app`]).
+    pub fn touch_gestures_at(&self, usb_vendor: u32, x: f32, y: f32) -> bool {
+        if !self.config.touch_gestures_for(usb_vendor) {
+            return false;
+        }
+        if self.config.touch_gestures != crate::config::TouchGestures::Auto {
+            return true;
+        }
+        !self
+            .wm
+            .hit_test(x, y)
+            .and_then(|id| self.wm.get(id).ok())
+            .is_some_and(|w| crate::config::is_drawing_app(&w.app))
+    }
+
     pub fn hit_window_is_x11(&self, x: f32, y: f32) -> bool {
         self.wm
             .hit_test(x, y)
@@ -12373,6 +12396,29 @@ mod cc_layout_tests {
             }
             state.control_center = None;
         }
+    }
+
+    /// Fingers on Tahta reach the app (no workspace swipe / window gesture
+    /// / long-press menu); elsewhere the same touch panel keeps gestures,
+    /// unless the user forced them on or off.
+    #[test]
+    fn drawing_app_windows_take_touches_from_compositor_gestures() {
+        use crate::config::TouchGestures;
+        let display: Display<BacakState> = Display::new().unwrap();
+        let mut state = BacakState::new(&display, "touch-gesture-app-test-seat");
+        let out = state.wm.primary_output().unwrap();
+        state.wm.set_output_bounds(out, Rect::new(0.0, 0.0, 1920.0, 1080.0)).unwrap();
+        let cooltouch = 0x2149;
+        state.wm.open("tahta", "Tahta", Rect::new(0.0, 0.0, 900.0, 1080.0));
+        state.wm.open("firefox", "Firefox", Rect::new(1000.0, 0.0, 900.0, 1080.0));
+        assert!(!state.touch_gestures_at(cooltouch, 400.0, 500.0), "on Tahta");
+        assert!(state.touch_gestures_at(cooltouch, 1400.0, 500.0), "on Firefox");
+        assert!(state.touch_gestures_at(cooltouch, 950.0, 500.0), "on the desktop");
+        assert!(!state.touch_gestures_at(0x6615, 1400.0, 500.0), "ETA board: off everywhere");
+        state.config.touch_gestures = TouchGestures::On;
+        assert!(state.touch_gestures_at(cooltouch, 400.0, 500.0), "forced on");
+        state.config.touch_gestures = TouchGestures::Off;
+        assert!(!state.touch_gestures_at(cooltouch, 1400.0, 500.0), "forced off");
     }
 
     /// Sub-panels opened from the Control Center stay on screen at low

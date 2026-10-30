@@ -52,6 +52,16 @@ pub enum TouchGestures {
 /// modules copy the USB ids into the input device, so libinput reports them.
 pub const BOARD_USB_VENDORS: [u32; 2] = [0x6615, 0x2621];
 
+/// Whiteboard/drawing apps that take every finger themselves (several hands
+/// drawing, palm resting on the board): in `Auto` mode a touch sequence
+/// that starts on one of their windows starts no compositor gesture — the
+/// same treatment [`BOARD_USB_VENDORS`] get everywhere, but only there, so
+/// an ordinary touch panel keeps its gestures on the rest of the desktop.
+pub fn is_drawing_app(app_id: &str) -> bool {
+    let a = app_id.to_ascii_lowercase();
+    a == "tahta" || a.contains("openboard")
+}
+
 impl DockEdge {
     /// True for `Bottom`/`Top` — the bar runs left-to-right. The
     /// renderer / layout / drag logic branches on this to swap which
@@ -590,6 +600,15 @@ mod tests {
         assert!(part.blur);
         assert_eq!(part.blur_radius, 40.0);
         assert_eq!(part.shadow_step, 0.18); // still defaulted
+    }
+
+    #[test]
+    fn drawing_apps_are_recognised() {
+        assert!(is_drawing_app("tahta"));
+        assert!(is_drawing_app("OpenBoard"));
+        assert!(is_drawing_app("ch.openboard.OpenBoard"));
+        assert!(!is_drawing_app("firefox"));
+        assert!(!is_drawing_app("tahta-yardimci"));
     }
 
     #[test]

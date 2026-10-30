@@ -3305,10 +3305,15 @@ fn forward_libinput_event(
                 }
                 return;
             }
-            // Whiteboards (and `touch_gestures: off`) skip every compositor
-            // gesture below: all fingers go to the app, so several hands can
-            // draw without triggering a terminal or a workspace switch.
-            let gestures = data.state.config.touch_gestures_for(event.device().id_vendor());
+            // Whiteboards, drawing apps like Tahta (and `touch_gestures: off`)
+            // skip every compositor gesture below: all fingers go to the app,
+            // so several hands can draw without triggering a terminal or a
+            // workspace switch. Decided by the sequence's first finger.
+            if data.state.touch_aggregator.fingers() == 0 {
+                data.state.touch_seq_gestures =
+                    data.state.touch_gestures_at(event.device().id_vendor(), tx, ty);
+            }
+            let gestures = data.state.touch_seq_gestures;
             // Feed the aggregator first, then arbitrate: one or two free fingers
             // go to the client (tap / drag / pinch); the third finger claims the
             // whole sequence as a compositor gesture (workspace swipe / overview)
@@ -3540,7 +3545,7 @@ fn forward_libinput_event(
                     t.needs_redraw = true;
                 }
             }
-            let gestures = data.state.config.touch_gestures_for(event.device().id_vendor());
+            let gestures = data.state.touch_seq_gestures;
             // Two-finger double-tap → toggle fullscreen / restore on the target.
             let up_ms = data.state.start_time.elapsed().as_millis() as u64;
             if gestures && data.state.two_finger_up(slot, up_ms) {
