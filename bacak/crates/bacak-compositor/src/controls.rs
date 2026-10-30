@@ -643,21 +643,43 @@ fn nm_profile(conn: &str) -> bool {
 }
 
 /// Change NetworkManager profile `conn`, then re-activate it so the new IP
-/// settings apply now. Blocking (each step waits for nmcli to finish).
-fn nm_modify_and_up(conn: &str, settings: &[&str]) -> bool {
+/// settings apply now. Blocking (each step waits for nmcli to finish). A
+/// refused modify (e.g. polkit's "Insufficient privileges") is returned as a
+/// user-facing reason and the profile is not re-activated.
+fn nm_modify_and_up(conn: &str, settings: &[&str]) -> Result<(), String> {
     let mut args = vec!["connection", "modify", conn];
     args.extend_from_slice(settings);
-    let Some((_, err)) = capture_both(NMCLI, &args) else { return false };
+    let Some((_, err)) = capture_both(NMCLI, &args) else {
+        return Err("nmcli çalıştırılamadı".to_string());
+    };
     // Exit status is unreadable (SIGCHLD ignored); stderr may be a mere warning.
     if !err.is_empty() {
         tracing::warn!(conn, stderr = %err, "nmcli connection modify reported");
+        if let Some(reason) = nmcli_error(&err) {
+            return Err(reason);
+        }
     }
     if let Some((_, err)) = capture_both(NMCLI, &["--wait", "30", "connection", "up", conn]) {
         if !err.is_empty() {
             tracing::warn!(conn, stderr = %err, "nmcli connection up reported");
+            if let Some(reason) = nmcli_error(&err) {
+                return Err(reason);
+            }
         }
     }
-    true
+    Ok(())
+}
+
+/// The reason in an nmcli `Error: …` message, in Turkish for the common
+/// cases; `None` for a mere warning.
+fn nmcli_error(stderr: &str) -> Option<String> {
+    let line = stderr.lines().find(|l| l.starts_with("Error:"))?;
+    let reason = line.rsplit(": ").next().unwrap_or(line).trim();
+    Some(match reason {
+        "Insufficient privileges" => "yetki yok".to_string(),
+        r if r.contains("Timeout") => "zaman aşımı".to_string(),
+        r => r.to_string(),
+    })
 }
 
 /// Toggle auto-reconnect for a saved NetworkManager network (no-op without it).
@@ -668,19 +690,16 @@ pub fn wifi_set_autoconnect(conn: &str, on: bool) {
     }
 }
 
-/// Switch to DHCP (NetworkManager, else dhcpcd). Returns true if applied/spawned.
-pub fn wifi_set_dhcp(conn: &str) -> bool {
+/// Switch to DHCP (NetworkManager, else dhcpcd). `Err` carries why it failed.
+pub fn wifi_set_dhcp(conn: &str) -> Result<(), String> {
     if nm_profile(conn) {
         return nm_modify_and_up(
             conn,
             &["ipv4.method", "auto", "ipv4.addresses", "", "ipv4.gateway", "", "ipv4.dns", ""],
         );
     }
-    if let Some(dev) = wifi_device_sysfs() {
-        run_ok("dhcpcd", &["-n", &dev])
-    } else {
-        false
-    }
+    let Some(dev) = wifi_device_sysfs() else { return Err("ağ aygıtı yok".to_string()) };
+    if run_ok("dhcpcd", &["-n", &dev]) { Ok(()) } else { Err("dhcpcd çalıştırılamadı".to_string()) }
 }
 
 /// A static address with its prefix; a bare address defaults to /24 (NM would
@@ -694,8 +713,8 @@ fn with_prefix(ip: &str) -> String {
 }
 
 /// Switch to a static IP (NetworkManager, else `ip addr` + `ip route`).
-/// Returns true if applied/spawned.
-pub fn wifi_set_static(conn: &str, ip_prefix: &str, gateway: &str, dns: &str) -> bool {
+/// `Err` carries why it failed.
+pub fn wifi_set_static(conn: &str, ip_prefix: &str, gateway: &str, dns: &str) -> Result<(), String> {
     if nm_profile(conn) {
         let addr = with_prefix(ip_prefix.trim());
         return nm_modify_and_up(
@@ -708,12 +727,12 @@ pub fn wifi_set_static(conn: &str, ip_prefix: &str, gateway: &str, dns: &str) ->
             ],
         );
     }
-    let Some(dev) = wifi_device_sysfs() else { return false };
+    let Some(dev) = wifi_device_sysfs() else { return Err("ağ aygıtı yok".to_string()) };
     run_ok(IP, &["addr", "add", ip_prefix, "dev", &dev]);
     if !gateway.is_empty() {
         run_ok(IP, &["route", "replace", "default", "via", gateway, "dev", &dev]);
     }
-    true
+    Ok(())
 }
 
 // ----- Bluetooth -------------------------------------------------------
@@ -1064,6 +1083,16 @@ mod tests {
     fn static_address_defaults_to_a_slash_24() {
         assert_eq!(with_prefix("192.168.1.50"), "192.168.1.50/24");
         assert_eq!(with_prefix("10.0.0.5/8"), "10.0.0.5/8");
+    }
+
+    #[test]
+    fn nmcli_errors_become_reasons_and_warnings_pass() {
+        assert_eq!(
+            nmcli_error("Error: Failed to modify connection 'Kablolu bağlantı 1': Insufficient privileges").as_deref(),
+            Some("yetki yok"),
+        );
+        assert_eq!(nmcli_error("Warning: There is another connection with the name 'x'."), None);
+        assert_eq!(nmcli_error(""), None);
     }
 
     /// The panel's backlight wins over a hybrid laptop's idle GPU one, and
