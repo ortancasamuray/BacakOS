@@ -15,6 +15,7 @@ mod magnifier;
 mod palm;
 mod pdf;
 mod pdf_export;
+mod persist;
 mod prediction;
 mod protractor;
 mod renderer;
@@ -80,10 +81,14 @@ fn main() {
     // Opened "with" tahta from the file manager (Exec=tahta %f), or run
     // directly from a terminal with a path — either way, load it as a
     // fresh set of annotatable pages.
+    // Otherwise pick up the board from last time (autosave).
     if let Some(path) = std::env::args().nth(1) {
+        app.keep_autosave_as_backup();
         if let Err(e) = app.load_pdf(&path) {
             log::error!("PDF açılamadı ({path}): {e:#}");
         }
+    } else {
+        app.restore_autosave();
     }
 
     event_loop
@@ -93,7 +98,10 @@ fn main() {
                     return;
                 }
                 match event {
-                    WindowEvent::CloseRequested => elwt.exit(),
+                    WindowEvent::CloseRequested => {
+                        app.save_before_exit();
+                        elwt.exit();
+                    }
                     WindowEvent::Resized(physical_size) => app.resize(physical_size),
                     WindowEvent::ScaleFactorChanged { .. } => {
                         app.resize(window.inner_size());
