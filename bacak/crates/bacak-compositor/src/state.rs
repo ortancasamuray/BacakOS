@@ -2441,6 +2441,34 @@ impl BacakState {
     /// The part of `bounds` (output `out`) a corner panel opened from the
     /// dock may use: without the dock bar when the dock is on the bottom or
     /// right edge, so a bottom-right panel sits beside it, not under it.
+    /// Top edge for a Control Center sub-panel of height `h` in the corner
+    /// `area` (beside the dock): bottom-aligned there with margin `m`. A panel
+    /// too tall for that area is placed against the whole output instead, so
+    /// it may cover the dock but never runs off the screen.
+    fn corner_panel_y(area: Rect, bounds: Rect, h: f32, m: f32) -> f32 {
+        let r = if h + 2.0 * m <= area.h { area } else { bounds };
+        (r.y + r.h - h - m).max(r.y + m)
+    }
+
+    /// How many list rows (`row_h` tall, `gap` apart) fit in `avail` px of
+    /// height — at least one, so a list never vanishes. Lists don't scroll
+    /// yet, so a small screen shows fewer entries instead of overflowing.
+    fn rows_that_fit(avail: f32, row_h: f32, gap: f32) -> usize {
+        (((avail + gap) / (row_h + gap)).floor() as usize).max(1)
+    }
+
+    /// Cut an audio device list to `n` rows, keeping the default device even
+    /// when it sits past the cut (it then takes the last visible row).
+    fn keep_audio_rows(devs: &mut Vec<crate::controls::AudioSink>, n: usize) {
+        if devs.len() <= n {
+            return;
+        }
+        if let Some(i) = devs.iter().position(|d| d.is_default).filter(|&i| i >= n) {
+            devs.swap(n - 1, i);
+        }
+        devs.truncate(n);
+    }
+
     fn dock_corner_area(&self, out: OutputId, bounds: Rect) -> Rect {
         let Some(d) = self.dock_panel_rect_for(out) else { return bounds };
         match self.config.dock_edge {
@@ -4824,7 +4852,7 @@ impl BacakState {
         let col_w = (inner - gap) / 2.0;
         let btn_w = (inner - 2.0 * gap) / 3.0;
         let bx = (area.x + area.w - w - m).max(area.x + m);
-        let by = (area.y + area.h - panel_h - m).max(area.y + m);
+        let by = Self::corner_panel_y(area, bounds, panel_h, m);
         let panel = Rect::new(bx, by, w, panel_h);
 
         let cx = bx + pad;
@@ -5314,7 +5342,7 @@ impl BacakState {
         // Bottom-right, beside the dock, where the Control Center opened.
         let area = self.dock_corner_area(out, bounds);
         let bx = (area.x + area.w - W - m).max(area.x + m);
-        let by = (area.y + area.h - panel_h - m).max(area.y + m);
+        let by = Self::corner_panel_y(area, bounds, panel_h, m);
         let panel = Rect::new(bx, by, W, panel_h);
         let cx = bx + PAD;
 
@@ -5452,16 +5480,18 @@ impl BacakState {
         let lw = (inner - 24.0).max(1.0) as usize;
         let text = self.text.as_ref();
 
-        let shown = nets.len().min(MAX_ROWS);
-        let n_rows = shown + 1; // + the "Kapat" (dismiss) button
-        let list_h = n_rows as f32 * ROW_H + n_rows.saturating_sub(1) as f32 * GAP;
-        let panel_h = PAD + CH + GAP + STH + GAP + list_h + PAD;
-
         let m = 14.0;
         // Bottom-right, beside the dock, where the Control Center opened.
         let area = self.dock_corner_area(out, bounds);
+        let fixed_h = PAD + CH + GAP + STH + GAP + PAD;
+        let fit = Self::rows_that_fit(area.h - 2.0 * m - fixed_h, ROW_H, GAP);
+        let shown = nets.len().min(MAX_ROWS).min(fit.saturating_sub(1));
+        let n_rows = shown + 1; // + the "Kapat" (dismiss) button
+        let list_h = n_rows as f32 * ROW_H + n_rows.saturating_sub(1) as f32 * GAP;
+        let panel_h = fixed_h + list_h;
+
         let bx = (area.x + area.w - W - m).max(area.x + m);
-        let by = (area.y + area.h - panel_h - m).max(area.y + m);
+        let by = Self::corner_panel_y(area, bounds, panel_h, m);
         let panel = Rect::new(bx, by, W, panel_h);
         let cx = bx + PAD;
 
@@ -5491,7 +5521,7 @@ impl BacakState {
         // render); white/grey for the rest (dark cards).
         const DARK: [u8; 3] = [18, 22, 30];
         const DARK_SUB: [u8; 3] = [40, 48, 60];
-        for net in nets.iter().take(MAX_ROWS) {
+        for net in nets.iter().take(shown) {
             let rect = Rect::new(cx, y, inner, ROW_H);
             let (lbl_col, meta_col) = if net.active { (DARK, DARK_SUB) } else { (LABEL, SUB) };
             let label = cc_rasterize(text, &net.ssid, 15.0, lbl_col, lw);
@@ -6132,8 +6162,24 @@ impl BacakState {
         // Stable order within each (no name tiebreak — names stream in async).
         let mut paired: Vec<&BtDevice> = devices.iter().filter(|d| d.paired).collect();
         paired.sort_by_key(|d| std::cmp::Reverse(d.connected));
-        let avail: Vec<&BtDevice> =
+        let mut avail: Vec<&BtDevice> =
             devices.iter().filter(|d| !d.paired).take(MAX_ROWS).collect();
+
+        // Device rows share what's left of the corner area after the fixed
+        // parts; paired (connected first) before discovered ones.
+        let m = 14.0;
+        let area = self.dock_corner_area(out, bounds);
+        let mut fixed_h = PAD + CH + GAP + STH + GAP + ROW_H + PAD; // + Kapat
+        if powered {
+            fixed_h += ROW_H + GAP + HDR_H + GAP; // Tara + "Bulunan" header
+            if !paired.is_empty() {
+                fixed_h += HDR_H + GAP;
+            }
+        }
+        let budget = (((area.h - 2.0 * m - fixed_h) / (ROW_H + GAP)).floor().max(0.0)) as usize;
+        let (n_paired, n_found) = (paired.len(), devices.iter().filter(|d| !d.paired).count());
+        paired.truncate(budget.max(1));
+        avail.truncate(budget.saturating_sub(paired.len()));
 
         // Panel height from the actual row + header count.
         let mut rows_h = 0.0_f32;
@@ -6149,11 +6195,9 @@ impl BacakState {
         rows_h += ROW_H; // Kapat
         let panel_h = PAD + CH + GAP + STH + GAP + rows_h + PAD;
 
-        let m = 14.0;
         // Bottom-right, beside the dock, where the Control Center opened.
-        let area = self.dock_corner_area(out, bounds);
         let bx = (area.x + area.w - W - m).max(area.x + m);
-        let by = (area.y + area.h - panel_h - m).max(area.y + m);
+        let by = Self::corner_panel_y(area, bounds, panel_h, m);
         let panel = Rect::new(bx, by, W, panel_h);
         let cx = bx + PAD;
 
@@ -6166,10 +6210,10 @@ impl BacakState {
         let title = cc_rasterize(text, "Bluetooth", 17.0, LABEL, (inner - SWITCH_W - 12.0).max(1.0) as usize);
         let status_text = if !powered {
             "Kapalı".to_string()
-        } else if scanning && avail.is_empty() {
+        } else if scanning && n_found == 0 {
             "Aranıyor…".to_string()
         } else {
-            format!("{} eşleşmiş · {} bulundu", paired.len(), avail.len())
+            format!("{n_paired} eşleşmiş · {n_found} bulundu")
         };
         let status = cc_rasterize(text, &status_text, 12.0, SUB, inner as usize);
 
@@ -6472,10 +6516,16 @@ impl BacakState {
         const SUB: [u8; 3] = [170, 178, 196];
 
         // Fetch sinks; show status row if none found.
-        let sinks = crate::controls::list_sinks();
+        const CLOSE_H: f32 = 44.0;
+        let m = 14.0;
+        // Bottom-right, beside the dock, where the Control Center opened.
+        let area = self.dock_corner_area(out, bounds);
+        let fixed_h = PAD + TITLE_H + GAP + GAP + CLOSE_H + PAD;
+
+        let mut sinks = crate::controls::list_sinks();
+        Self::keep_audio_rows(&mut sinks, Self::rows_that_fit(area.h - 2.0 * m - fixed_h, ROW_H, GAP));
         let status_text = if sinks.is_empty() { Some("Cihaz bulunamadı") } else { None };
 
-        const CLOSE_H: f32 = 44.0;
         let row_count = sinks.len() as f32;
         let sink_block = if sinks.is_empty() {
             ROW_H  // "Cihaz bulunamadı" placeholder
@@ -6484,11 +6534,8 @@ impl BacakState {
         };
         let panel_h = PAD + TITLE_H + GAP + sink_block + GAP + CLOSE_H + PAD;
 
-        let m = 14.0;
-        // Bottom-right, beside the dock, where the Control Center opened.
-        let area = self.dock_corner_area(out, bounds);
         let bx = (area.x + area.w - W - m).max(area.x + m);
-        let by = (area.y + area.h - panel_h - m).max(area.y + m);
+        let by = Self::corner_panel_y(area, bounds, panel_h, m);
         let panel = Rect::new(bx, by, W, panel_h);
 
         let cx = bx + PAD;
@@ -6594,7 +6641,13 @@ impl BacakState {
         const LABEL: [u8; 3] = [232, 236, 244];
         const SUB: [u8; 3] = [170, 178, 196];
 
-        let sources = crate::controls::list_sources();
+        let m = 14.0;
+        // Bottom-right, beside the dock, where the Control Center opened.
+        let area = self.dock_corner_area(out, bounds);
+        let fixed_h = PAD + TITLE_H + GAP + GAP + CLOSE_H + PAD;
+
+        let mut sources = crate::controls::list_sources();
+        Self::keep_audio_rows(&mut sources, Self::rows_that_fit(area.h - 2.0 * m - fixed_h, ROW_H, GAP));
         let status_text = if sources.is_empty() { Some("Cihaz bulunamadı") } else { None };
         let status = status_text.and_then(|t| cc_rasterize(text, t, 14.0, SUB, (W - 2.0 * PAD) as usize));
 
@@ -6605,11 +6658,8 @@ impl BacakState {
         };
         let panel_h = PAD + TITLE_H + GAP + sink_block + GAP + CLOSE_H + PAD;
 
-        let m = 14.0;
-        // Bottom-right, beside the dock, where the Control Center opened.
-        let area = self.dock_corner_area(out, bounds);
         let bx = (area.x + area.w - W - m).max(area.x + m);
-        let by = (area.y + area.h - panel_h - m).max(area.y + m);
+        let by = Self::corner_panel_y(area, bounds, panel_h, m);
         let panel = Rect::new(bx, by, W, panel_h);
 
         let cx = bx + PAD;
@@ -6771,7 +6821,7 @@ impl BacakState {
         // Bottom-right, beside the dock, where the Control Center opened.
         let area = self.dock_corner_area(out, bounds);
         let bx = (area.x + area.w - W - m).max(area.x + m);
-        let by = (area.y + area.h - panel_h - m).max(area.y + m);
+        let by = Self::corner_panel_y(area, bounds, panel_h, m);
         let panel = Rect::new(bx, by, W, panel_h);
         let cx = bx + PAD;
         let close_y = by + panel_h - PAD - CLOSE_H;
@@ -12323,6 +12373,71 @@ mod cc_layout_tests {
             }
             state.control_center = None;
         }
+    }
+
+    /// Sub-panels opened from the Control Center stay on screen at low
+    /// resolutions: long lists show fewer rows instead of running off the
+    /// bottom, and every row stays inside its panel.
+    #[test]
+    fn control_center_sub_panels_fit_low_resolutions() {
+        let display: Display<BacakState> = Display::new().unwrap();
+        let mut state = BacakState::new(&display, "cc-sub-panel-test-seat");
+        let out = state.wm.primary_output().unwrap();
+        state.config.dock = true;
+        let nets: Vec<_> = (0..20)
+            .map(|i| crate::controls::WifiNet { ssid: format!("ağ {i}"), signal: 50, secured: true, active: i == 0 })
+            .collect();
+        let devices: Vec<_> = (0..24)
+            .map(|i| BtDevice {
+                mac: format!("00:00:00:00:00:{i:02}"),
+                name: format!("cihaz {i}"),
+                paired: i < 6,
+                connected: i == 0,
+                battery: None,
+                icon: String::new(),
+            })
+            .collect();
+        for (w, h) in [(1280.0, 720.0), (1024.0, 768.0), (800.0, 600.0), (1920.0, 1080.0)] {
+            let b = Rect::new(0.0, 0.0, w, h);
+            state.wm.set_output_bounds(out, b).unwrap();
+            let inside = |p: Rect, what: &str| {
+                assert!(p.x >= 0.0 && p.y >= 0.0 && p.x + p.w <= w && p.y + p.h <= h, "{w}x{h} {what}: {p:?}");
+            };
+            let rows_inside = |p: Rect, rows: &[Rect], what: &str| {
+                for r in rows {
+                    assert!(r.y >= p.y && r.y + r.h <= p.y + p.h + 0.5, "{w}x{h} {what}: row {r:?} outside {p:?}");
+                }
+            };
+
+            state.build_wifi_panel(out, nets.clone(), None, false, true);
+            let wp = state.wifi_panel.take().unwrap();
+            inside(wp.panel, "wifi");
+            rows_inside(wp.panel, &wp.rows.iter().map(|r| r.rect).collect::<Vec<_>>(), "wifi");
+            assert!(wp.rows.len() >= 2, "{w}x{h}: wifi shows at least one network + Kapat");
+
+            state.build_wifi_details_panel(out, crate::controls::WifiDetails::default(), false, false);
+            let dp = state.wifi_panel.take().unwrap();
+            inside(dp.panel, "details");
+            rows_inside(dp.panel, &dp.rows.iter().map(|r| r.rect).collect::<Vec<_>>(), "details");
+
+            state.build_bt_panel(out, devices.clone(), true, false);
+            let bp = state.bt_panel.take().unwrap();
+            inside(bp.panel, "bt");
+            rows_inside(bp.panel, &bp.rows.iter().map(|r| r.rect).collect::<Vec<_>>(), "bt");
+        }
+    }
+
+    /// A cut audio list keeps the default device visible.
+    #[test]
+    fn cut_audio_list_keeps_the_default_device() {
+        let dev = |i: usize| crate::controls::AudioSink { id: i.to_string(), name: format!("çıkış {i}"), is_default: i == 7 };
+        let mut devs: Vec<_> = (0..9).map(dev).collect();
+        BacakState::keep_audio_rows(&mut devs, 4);
+        let ids: Vec<_> = devs.iter().map(|d| d.id.as_str()).collect();
+        assert_eq!(ids, ["0", "1", "2", "7"]);
+        let mut short: Vec<_> = (0..3).map(dev).collect();
+        BacakState::keep_audio_rows(&mut short, 4);
+        assert_eq!(short.len(), 3);
     }
 
     /// The panel opens in the bottom-right corner, beside the dock, never
