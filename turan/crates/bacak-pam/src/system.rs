@@ -83,6 +83,7 @@ mod ffi {
         pub fn calloc(nmemb: usize, size: usize) -> *mut c_void;
         pub fn strdup(s: *const c_char) -> *mut c_char;
         pub fn free(p: *mut c_void);
+        pub fn fcntl(fd: c_int, cmd: c_int, ...) -> c_int;
     }
 }
 
@@ -465,7 +466,36 @@ pub unsafe fn open_session_preexec(
     if rc != PAM_SUCCESS {
         return Err(rc);
     }
+    keep_session_fifo_across_exec();
     // Deliberately leak `handle`: the session must outlive this call and is
     // reaped by logind when the exec'd leader process exits.
     Ok(())
+}
+
+/// pam_systemd keeps logind's session FIFO (`/run/systemd/sessions/<id>.ref`)
+/// open close-on-exec, and logind marks the session "closing" the moment its
+/// last copy closes. Opened in a pre_exec child, that would be at the very
+/// exec — the session then runs in state `closing` for its whole life, so
+/// logind won't make it the user's display session and polkit's local+active
+/// checks (reboot, NetworkManager settings) fail. Clear `FD_CLOEXEC` so the
+/// exec'd session leader keeps the FIFO open until it exits. (The fd is found
+/// via /proc: `pam_get_data` refuses calls from the application side.)
+unsafe fn keep_session_fifo_across_exec() {
+    const F_GETFD: c_int = 1;
+    const F_SETFD: c_int = 2;
+    const FD_CLOEXEC: c_int = 1;
+    let Ok(dir) = std::fs::read_dir("/proc/self/fd") else { return };
+    for entry in dir.flatten() {
+        let Some(fd) = entry.file_name().to_str().and_then(|n| n.parse::<c_int>().ok()) else {
+            continue;
+        };
+        let Ok(target) = std::fs::read_link(entry.path()) else { continue };
+        let t = target.to_string_lossy();
+        if t.starts_with("/run/systemd/sessions/") && t.ends_with(".ref") {
+            let flags = ffi::fcntl(fd, F_GETFD);
+            if flags >= 0 {
+                ffi::fcntl(fd, F_SETFD, flags & !FD_CLOEXEC);
+            }
+        }
+    }
 }
