@@ -10,8 +10,9 @@
 //! routing live here instead of in `input_handler`, which stays
 //! toolkit-agnostic on purpose.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use glam::Vec2;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
@@ -27,6 +28,10 @@ use crate::webengine::{TouchPhase, WebEngine, WebPanel};
 /// Home page for the embedded browser panel — Turkey's national education
 /// platform, the expected default for a classroom whiteboard.
 const BROWSER_HOME: &str = "https://www.eba.gov.tr";
+
+/// Autosave once the board has been still this long after a change —
+/// soon enough that little is ever lost, without writing mid-sentence.
+const AUTOSAVE_QUIET_SECS: f64 = 2.0;
 
 /// Where a screen-space point landed relative to the (open) browser
 /// panel — decides whether an event goes to the address bar, the Servo
@@ -58,6 +63,8 @@ pub struct App {
     /// press/release itself — tracked here so `key_input` can attach it
     /// when forwarding to the browser panel.
     modifiers: ModifiersState,
+    /// An autosave is being written on its thread; the next one waits.
+    saving: Arc<AtomicBool>,
 }
 
 impl App {
@@ -76,6 +83,76 @@ impl App {
             browser_draw_mode: false,
             last_mouse_pos: Vec2::ZERO,
             modifiers: ModifiersState::empty(),
+            saving: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Load the board autosaved last time, if any. An unreadable save is
+    /// set aside (`tahta.bin.bozuk`) rather than overwritten by the next
+    /// autosave, so it can still be looked at.
+    pub fn restore_autosave(&mut self) {
+        let dir = crate::persist::autosave_dir();
+        match crate::persist::load(&dir) {
+            Ok(Some(board)) => {
+                log::info!("önceki tahta yüklendi: {} sayfa", board.pages.len());
+                self.input.restore_board(board);
+            }
+            Ok(None) => {}
+            Err(e) => {
+                log::error!("kayıtlı tahta açılamadı: {e:#}");
+                let _ = std::fs::rename(dir.join("tahta.bin"), dir.join("tahta.bin.bozuk"));
+            }
+        }
+    }
+
+    /// Opening a PDF starts a new board; keep the autosaved one as the
+    /// backup instead of letting the next autosave replace it.
+    pub fn keep_autosave_as_backup(&self) {
+        let (son, onceki) = (crate::persist::autosave_dir(), crate::persist::backup_dir());
+        if son.join("tahta.bin").exists() {
+            let _ = std::fs::remove_dir_all(&onceki);
+            if let Err(e) = std::fs::rename(&son, &onceki) {
+                log::warn!("önceki tahta yedeklenemedi: {e}");
+            }
+        }
+    }
+
+    /// Hand a changed board to a writer thread once it's been quiet a
+    /// moment; and keep a board replaced by "New board" as the backup.
+    fn autosave(&mut self, now: f64) {
+        if let Some(old) = self.input.take_replaced_board() {
+            std::thread::spawn(move || {
+                if let Err(e) = crate::persist::save(&crate::persist::backup_dir(), &old) {
+                    log::error!("önceki tahta yedeklenemedi: {e:#}");
+                }
+            });
+        }
+        if self.saving.load(Ordering::Acquire) {
+            return;
+        }
+        if let Some(board) = self.input.take_save_request(now, AUTOSAVE_QUIET_SECS) {
+            self.saving.store(true, Ordering::Release);
+            let saving = self.saving.clone();
+            std::thread::spawn(move || {
+                if let Err(e) = crate::persist::save(&crate::persist::autosave_dir(), &board) {
+                    log::error!("tahta kaydedilemedi: {e:#}");
+                }
+                saving.store(false, Ordering::Release);
+            });
+        }
+    }
+
+    /// Window closing: write any unsaved change now (after an in-flight
+    /// autosave finishes, so the older board can't land last).
+    pub fn save_before_exit(&mut self) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while self.saving.load(Ordering::Acquire) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        if self.input.is_dirty() {
+            if let Err(e) = crate::persist::save(&crate::persist::autosave_dir(), &self.input.board_data()) {
+                log::error!("tahta kaydedilemedi: {e:#}");
+            }
         }
     }
 
@@ -341,6 +418,7 @@ impl App {
     pub fn render(&mut self) {
         let now = self.now_secs();
         self.input.tick(now);
+        self.autosave(now);
         self.sync_browser();
 
         if self.input.take_minimize_request() {

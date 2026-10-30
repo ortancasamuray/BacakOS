@@ -40,6 +40,8 @@ pub enum ToolbarAction {
     /// Steps through the fixed 5-color palette.
     CycleColor,
     Undo,
+    /// Re-applies the last undone step (the page's redo stack).
+    Redo,
     Clear,
     ToggleZone,
     /// Shows/hides the draggable, rotatable straightedge overlay.
@@ -73,6 +75,9 @@ pub enum ToolbarAction {
     /// Minimizes the (fullscreen) window back to the desktop — a one-shot
     /// action, not a toggle. See `App::minimize_to_desktop`.
     MinimizeToDesktop,
+    /// Starts an empty board (all pages) — takes a second tap to confirm;
+    /// the old board is kept as a backup file.
+    NewBoard,
 }
 
 /// What the toolbar needs to know to draw each button's current-state
@@ -97,6 +102,11 @@ pub struct ToolbarState {
     pub magnifier_visible: bool,
     pub textbox_visible: bool,
     pub browser_visible: bool,
+    /// Undo/Redo glyphs dim when the page has nothing to take back/redo.
+    pub can_undo: bool,
+    pub can_redo: bool,
+    /// The first "New board" tap is waiting for its confirming second tap.
+    pub new_board_armed: bool,
 }
 
 // Scaled down toward the dock's ~36px icon / ~10px gap proportions
@@ -122,6 +132,7 @@ const COLOR_BAR_BG: [f32; 4] = [0.12, 0.13, 0.17, 0.92];
 const COLOR_BUTTON_IDLE: [f32; 4] = [0.22, 0.24, 0.30, 1.0];
 const COLOR_BUTTON_ACTIVE: [f32; 4] = [0.23, 0.51, 0.96, 1.0]; // accent blue
 const COLOR_GLYPH: [f32; 4] = [0.95, 0.95, 0.97, 1.0];
+const COLOR_GLYPH_DISABLED: [f32; 4] = [0.95, 0.95, 0.97, 0.3];
 const COLOR_SEPARATOR: [f32; 4] = [1.0, 1.0, 1.0, 0.10];
 const COLOR_EXPAND_BADGE: [f32; 4] = [0.95, 0.95, 0.97, 0.9];
 
@@ -146,6 +157,7 @@ const ENTRIES: &[Entry] = &[
     Entry::Direct(ToolbarAction::CycleBrush),
     Entry::Direct(ToolbarAction::CycleColor),
     Entry::Direct(ToolbarAction::Undo),
+    Entry::Direct(ToolbarAction::Redo),
     Entry::Direct(ToolbarAction::Clear),
     Entry::Group(&[ToolbarAction::ToggleRuler, ToolbarAction::ToggleSetSquare, ToolbarAction::ToggleProtractor]),
     Entry::Group(&[ToolbarAction::ToggleCalculator, ToolbarAction::ToggleStopwatch, ToolbarAction::ToggleDice]),
@@ -158,14 +170,15 @@ const ENTRIES: &[Entry] = &[
         ToolbarAction::ExportPdf,
         ToolbarAction::PrevPage,
         ToolbarAction::NextPage,
+        ToolbarAction::NewBoard,
     ]),
     Entry::Direct(ToolbarAction::MinimizeToDesktop),
 ];
 
 /// Local index right before which a thin separator is drawn: tool-select
-/// (0-3) | brush/color/undo/clear (4-7) | drafting/widget/view groups
-/// (8-10) | text/browser (11-12) | page group (13) | minimize (14).
-const SEPARATOR_BEFORE: [usize; 5] = [4, 8, 11, 13, 14];
+/// (0-3) | brush/color/undo/redo/clear (4-8) | drafting/widget/view groups
+/// (9-11) | text/browser (12-13) | page group (14) | minimize (15).
+const SEPARATOR_BEFORE: [usize; 5] = [4, 9, 12, 14, 15];
 
 /// Bottom-center floating toolbar. Screen-space, never affected by canvas
 /// pan/zoom, recomputed each frame from the current window size (though
@@ -230,7 +243,12 @@ impl Toolbar {
             if let Entry::Group(actions) = &ENTRIES[gi] {
                 for (rect, action) in self.flyout_child_rects(gi).into_iter().zip(*actions) {
                     if rect_contains(rect, point) {
-                        self.open_group = None;
+                        // "New board" asks for a confirming second tap on
+                        // the same button, so its flyout stays open (the
+                        // handler closes it once confirmed).
+                        if *action != ToolbarAction::NewBoard {
+                            self.open_group = None;
+                        }
                         return Some(*action);
                     }
                 }
@@ -361,6 +379,7 @@ fn is_active(action: ToolbarAction, state: &ToolbarState) -> bool {
         ToolbarAction::ToggleMagnifier => state.magnifier_visible,
         ToolbarAction::ToggleTextBox => state.textbox_visible,
         ToolbarAction::ToggleBrowser => state.browser_visible,
+        ToolbarAction::NewBoard => state.new_board_armed,
         _ => false,
     }
 }
@@ -442,8 +461,26 @@ fn draw_glyph(
         }
         ToolbarAction::Undo => {
             // Left-pointing chevron ("<") — simplest arrow without a font.
-            push_line(center + Vec2::new(r * 0.5, -r), center + Vec2::new(-r * 0.5, 0.0), 5.0, COLOR_GLYPH, out_vertices, out_indices);
-            push_line(center + Vec2::new(-r * 0.5, 0.0), center + Vec2::new(r * 0.5, r), 5.0, COLOR_GLYPH, out_vertices, out_indices);
+            let c = if state.can_undo { COLOR_GLYPH } else { COLOR_GLYPH_DISABLED };
+            push_line(center + Vec2::new(r * 0.5, -r), center + Vec2::new(-r * 0.5, 0.0), 5.0, c, out_vertices, out_indices);
+            push_line(center + Vec2::new(-r * 0.5, 0.0), center + Vec2::new(r * 0.5, r), 5.0, c, out_vertices, out_indices);
+        }
+        ToolbarAction::Redo => {
+            // Mirror of Undo (">").
+            let c = if state.can_redo { COLOR_GLYPH } else { COLOR_GLYPH_DISABLED };
+            push_line(center + Vec2::new(-r * 0.5, -r), center + Vec2::new(r * 0.5, 0.0), 5.0, c, out_vertices, out_indices);
+            push_line(center + Vec2::new(r * 0.5, 0.0), center + Vec2::new(-r * 0.5, r), 5.0, c, out_vertices, out_indices);
+        }
+        ToolbarAction::NewBoard => {
+            // A blank sheet with a "+" in it.
+            let (w, h) = (r * 1.3, r * 1.8);
+            let tl = center - Vec2::new(w / 2.0, h / 2.0);
+            push_line(tl, tl + Vec2::new(w, 0.0), 3.0, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(tl + Vec2::new(w, 0.0), tl + Vec2::new(w, h), 3.0, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(tl + Vec2::new(w, h), tl + Vec2::new(0.0, h), 3.0, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(tl + Vec2::new(0.0, h), tl, 3.0, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(center - Vec2::new(r * 0.4, 0.0), center + Vec2::new(r * 0.4, 0.0), 3.5, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(center - Vec2::new(0.0, r * 0.4), center + Vec2::new(0.0, r * 0.4), 3.5, COLOR_GLYPH, out_vertices, out_indices);
         }
         ToolbarAction::Clear => {
             push_line(center + Vec2::new(-r, -r), center + Vec2::new(r, r), 5.0, COLOR_GLYPH, out_vertices, out_indices);

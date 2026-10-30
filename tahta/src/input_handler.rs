@@ -217,6 +217,17 @@ pub struct InputHandler {
     /// this via `take_minimize_request` (only it owns the winit `Window`
     /// this needs) since this module stays toolkit-agnostic.
     minimize_requested: bool,
+
+    /// The board changed since the last autosave; `last_change` is when
+    /// (input clock), so `take_save_request` can wait for a quiet moment.
+    dirty: bool,
+    last_change: f64,
+    /// Save right away instead of waiting for a quiet moment (minimize).
+    save_now: bool,
+    /// "New board" needs a second tap before this deadline (input clock).
+    new_board_armed_until: Option<f64>,
+    /// The board "New board" replaced, for `app.rs` to keep as a backup.
+    replaced_board: Option<crate::persist::BoardData>,
 }
 
 impl InputHandler {
@@ -259,6 +270,11 @@ impl InputHandler {
             toast: None,
             font_atlas,
             minimize_requested: false,
+            dirty: false,
+            last_change: 0.0,
+            save_now: false,
+            new_board_armed_until: None,
+            replaced_board: None,
         }
     }
 
@@ -299,6 +315,7 @@ impl InputHandler {
             self.pages.push(Page::new());
         }
         self.current_page = 0;
+        self.mark_dirty();
         self.view_offset = Vec2::ZERO;
         self.view_scale = 1.0;
         Ok(())
@@ -378,10 +395,119 @@ impl InputHandler {
     /// points so the fade keeps animating even without new input.
     pub fn tick(&mut self, now: f64) {
         for stroke in &mut self.pages[self.current_page].strokes {
-            if stroke.brush_type == BrushType::LaserPointer {
-                stroke.prune_expired(now);
+            if stroke.brush_type == BrushType::LaserPointer && !stroke.points.is_empty() {
+                Arc::make_mut(stroke).prune_expired(now);
             }
         }
+        if self.new_board_armed_until.is_some_and(|t| now > t) {
+            self.new_board_armed_until = None;
+        }
+    }
+
+    // --- History & autosave --------------------------------------------------
+
+    fn mark_dirty(&mut self) {
+        self.dirty = true;
+        self.last_change = self.last_input_at.unwrap_or(self.last_change);
+    }
+
+    /// Undo step for the current page, taken right before a change.
+    fn checkpoint(&mut self) {
+        self.pages[self.current_page].checkpoint();
+        self.mark_dirty();
+    }
+
+    /// Undo/redo swap the stroke list out from under any finger still
+    /// drawing; its `stroke_index` would then point at the wrong stroke.
+    fn release_drawing_pointers(&mut self) {
+        for session in self.sessions.values_mut() {
+            if matches!(session.role, PointerRole::Drawing { .. }) {
+                session.role = PointerRole::Palm;
+            }
+        }
+    }
+
+    fn undo(&mut self) {
+        self.release_drawing_pointers();
+        if self.pages[self.current_page].undo() {
+            self.mark_dirty();
+        }
+    }
+
+    fn redo(&mut self) {
+        self.release_drawing_pointers();
+        if self.pages[self.current_page].redo() {
+            self.mark_dirty();
+        }
+    }
+
+    fn clear_page(&mut self) {
+        if !self.pages[self.current_page].strokes.is_empty() {
+            self.checkpoint();
+            self.pages[self.current_page].strokes.clear();
+        }
+    }
+
+    /// Everything the board file stores, cheaply (strokes and page images
+    /// are shared, not copied) — safe to hand to a writer thread.
+    pub fn board_data(&self) -> crate::persist::BoardData {
+        crate::persist::BoardData {
+            current_page: self.current_page,
+            pages: self
+                .pages
+                .iter()
+                .map(|p| crate::persist::PageData {
+                    background: p.background,
+                    grid: p.grid,
+                    pdf_image: p.pdf_image.clone(),
+                    strokes: p.strokes.clone(),
+                })
+                .collect(),
+        }
+    }
+
+    /// Replace the board with a saved one (startup restore).
+    pub fn restore_board(&mut self, data: crate::persist::BoardData) {
+        let pages: Vec<Page> = data
+            .pages
+            .into_iter()
+            .map(|p| {
+                let mut page = Page::with(p.background, p.grid, p.pdf_image);
+                page.strokes = p.strokes;
+                page
+            })
+            .collect();
+        if pages.is_empty() {
+            return;
+        }
+        self.current_page = data.current_page.min(pages.len() - 1);
+        self.pages = pages;
+        self.dirty = false;
+    }
+
+    /// The board to autosave, once it changed and has been quiet for
+    /// `quiet_secs` with no finger still drawing (a half-drawn stroke is
+    /// saved on the next round instead). `None` when there's nothing new.
+    pub fn take_save_request(&mut self, now: f64, quiet_secs: f64) -> Option<crate::persist::BoardData> {
+        if !self.dirty {
+            return None;
+        }
+        let drawing = self.sessions.values().any(|s| matches!(s.role, PointerRole::Drawing { .. } | PointerRole::Erasing));
+        if !self.save_now && (drawing || now - self.last_change < quiet_secs) {
+            return None;
+        }
+        self.dirty = false;
+        self.save_now = false;
+        Some(self.board_data())
+    }
+
+    /// Whether the board has changes not yet handed to `take_save_request`.
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    pub fn take_replaced_board(&mut self) -> Option<crate::persist::BoardData> {
+        self.replaced_board.take()
     }
 
     fn open_radial_menu_at(&mut self, at: Vec2) {
@@ -415,10 +541,9 @@ impl InputHandler {
                 let next_color = next_palette_color(self.pen_for(zone).color);
                 self.set_color(next_color);
             }
-            ToolbarAction::Undo => {
-                self.pages[self.current_page].strokes.pop();
-            }
-            ToolbarAction::Clear => self.pages[self.current_page].strokes.clear(),
+            ToolbarAction::Undo => self.undo(),
+            ToolbarAction::Redo => self.redo(),
+            ToolbarAction::Clear => self.clear_page(),
             ToolbarAction::ToggleZone => self.zone_enabled = !self.zone_enabled,
             ToolbarAction::ToggleRuler => {
                 self.ruler = match self.ruler {
@@ -481,6 +606,7 @@ impl InputHandler {
                 self.browser_visible = !self.browser_visible;
             }
             ToolbarAction::CycleBackground => {
+                self.checkpoint();
                 let page = &mut self.pages[self.current_page];
                 let (bg, grid) = board::next_preset((page.background, page.grid));
                 page.background = bg;
@@ -488,11 +614,34 @@ impl InputHandler {
             }
             ToolbarAction::PrevPage => {
                 self.current_page = self.current_page.saturating_sub(1);
+                self.mark_dirty();
             }
             ToolbarAction::NextPage => {
                 self.current_page += 1;
                 if self.current_page >= self.pages.len() {
                     self.pages.push(Page::new());
+                }
+                self.mark_dirty();
+            }
+            ToolbarAction::NewBoard => {
+                // Wipes every page, so it takes a second tap; the old board
+                // is kept as a backup file (see `take_replaced_board`).
+                let now = self.last_input_at.unwrap_or(0.0);
+                if self.new_board_armed_until.is_some_and(|t| now <= t) {
+                    self.new_board_armed_until = None;
+                    self.toolbar.close_group();
+                    self.release_drawing_pointers();
+                    self.replaced_board = Some(self.board_data());
+                    self.pages = vec![Page::new()];
+                    self.current_page = 0;
+                    self.view_offset = Vec2::ZERO;
+                    self.view_scale = 1.0;
+                    self.mark_dirty();
+                    self.save_now = true;
+                    self.toast = Some(("YENİ TAHTA".to_string(), now + 2.0));
+                } else {
+                    self.new_board_armed_until = Some(now + 4.0);
+                    self.toast = Some(("YENİ TAHTA İÇİN TEKRAR DOKUN".to_string(), now + 4.0));
                 }
             }
             ToolbarAction::ExportPdf => {
@@ -513,6 +662,7 @@ impl InputHandler {
                 // Only `app.rs` owns the winit `Window`, so this just
                 // raises a flag — see `take_minimize_request`.
                 self.minimize_requested = true;
+                self.save_now = true;
             }
         }
     }
@@ -753,9 +903,10 @@ impl InputHandler {
                     // Remove the first tap's tiny dot so opening the menu
                     // doesn't also leave a stray mark on the page.
                     if let Some(idx) = stroke_idx {
-                        let strokes = &mut self.pages[self.current_page].strokes;
-                        if strokes.len() == idx + 1 {
-                            strokes.pop();
+                        let page = &mut self.pages[self.current_page];
+                        if page.strokes.len() == idx + 1 {
+                            page.strokes.pop();
+                            page.discard_checkpoint(idx);
                         }
                     }
                     self.open_radial_menu_at(position);
@@ -768,6 +919,8 @@ impl InputHandler {
         let role = match self.active_tool {
             Tool::Pen => {
                 if palm::is_probable_palm(position, now, self.active_pen_touch_starts()) {
+                    // Undoable: a misread palm can rub out real ink.
+                    self.checkpoint();
                     self.demote_cluster_to_palm(position);
                     self.erase_area(position, PALM_ERASE_RADIUS);
                     PointerRole::Palm
@@ -784,11 +937,15 @@ impl InputHandler {
                     let start = self.to_canvas(start_screen);
 
                     let pen = self.pen_for(zone).clone();
+                    // Laser marks fade on their own — nothing to undo.
+                    if pen.brush_type != BrushType::LaserPointer {
+                        self.checkpoint();
+                    }
                     let page = &mut self.pages[self.current_page];
                     let stroke_index = page.strokes.len();
                     let mut stroke = Stroke::new(pen.color, pen.base_width, pen.brush_type);
                     stroke.push_point(start, now);
-                    page.strokes.push(stroke);
+                    page.strokes.push(Arc::new(stroke));
 
                     let mut predictor = TouchPredictor::new(LOOKAHEAD_MS);
                     predictor.push_sample(TouchSample { position: start, timestamp: now });
@@ -798,6 +955,7 @@ impl InputHandler {
             }
             Tool::Hand => PointerRole::Panning { last_pos: position },
             Tool::Eraser => {
+                self.checkpoint();
                 self.erase_at(position, self.eraser_radius);
                 self.eraser_cursor = Some(position);
                 PointerRole::Erasing
@@ -822,7 +980,7 @@ impl InputHandler {
                 if session.start_pos.distance(position) <= PALM_CLUSTER_DEMOTE_RADIUS
                     && strokes[stroke_index].points.len() <= 3
                 {
-                    strokes[stroke_index].clear();
+                    Arc::make_mut(&mut strokes[stroke_index]).clear();
                     session.role = PointerRole::Palm;
                 }
             }
@@ -865,7 +1023,7 @@ impl InputHandler {
                     None => position,
                 };
                 let point = (point_screen - view_offset) * inv_scale;
-                let Some(stroke) = self.pages[self.current_page].strokes.get_mut(*stroke_index) else {
+                let Some(stroke) = self.pages[self.current_page].strokes.get_mut(*stroke_index).map(Arc::make_mut) else {
                     session.role = PointerRole::Palm; // stroke was undone from under us
                     return;
                 };
@@ -991,9 +1149,13 @@ impl InputHandler {
         }
         if let Some(session) = self.sessions.remove(&id) {
             match session.role {
-                PointerRole::Erasing => self.eraser_cursor = None,
+                PointerRole::Erasing => {
+                    self.eraser_cursor = None;
+                    self.mark_dirty();
+                }
                 PointerRole::CompassDrag { .. } => self.commit_compass_circle(),
                 PointerRole::Drawing { stroke_index, .. } => {
+                    self.mark_dirty();
                     // A stroke that barely moved is a tap — remember it so
                     // the *next* press can recognize a double-tap (see
                     // `DOUBLE_TAP_WINDOW_SECS` docs). A real stroke instead
@@ -1041,7 +1203,8 @@ impl InputHandler {
             let theta = i as f32 / SAMPLES as f32 * std::f32::consts::TAU;
             stroke.push_point(center + Vec2::new(theta.cos(), theta.sin()) * radius, now);
         }
-        self.pages[self.current_page].strokes.push(stroke);
+        self.checkpoint();
+        self.pages[self.current_page].strokes.push(Arc::new(stroke));
     }
 
     /// Erases using whichever mode the Eraser tool is currently set to.
@@ -1063,12 +1226,14 @@ impl InputHandler {
         let strokes = &mut self.pages[self.current_page].strokes;
         let mut new_strokes = Vec::new();
         for stroke in strokes.iter_mut() {
-            if stroke.points.is_empty() {
+            // Only touch (and so un-share from undo snapshots) strokes the
+            // eraser actually reaches.
+            if stroke.points.is_empty() || !stroke.hit_test(position, radius, view_offset, view_scale) {
                 continue;
             }
-            new_strokes.extend(stroke.erase_near(position, radius, view_offset, view_scale));
+            new_strokes.extend(Arc::make_mut(stroke).erase_near(position, radius, view_offset, view_scale));
         }
-        strokes.extend(new_strokes);
+        strokes.extend(new_strokes.into_iter().map(Arc::new));
     }
 
     /// Deletes an entire stroke if any part of it falls within `radius`.
@@ -1077,7 +1242,7 @@ impl InputHandler {
         let view_scale = self.view_scale;
         for stroke in &mut self.pages[self.current_page].strokes {
             if !stroke.points.is_empty() && stroke.hit_test(position, radius, view_offset, view_scale) {
-                stroke.clear();
+                Arc::make_mut(stroke).clear();
             }
         }
     }
@@ -1126,7 +1291,8 @@ impl InputHandler {
                 "3" => self.set_color([0.25, 0.55, 0.95, 1.0]),
                 "4" => self.set_color([0.30, 0.85, 0.35, 1.0]),
                 "5" => self.set_color([0.98, 0.78, 0.15, 1.0]),
-                "c" | "C" => self.pages[self.current_page].strokes.clear(),
+                "c" | "C" => self.clear_page(),
+                "y" | "Y" => self.redo(),
                 "p" | "P" => self.active_tool = Tool::Pen,
                 "h" | "H" => self.active_tool = Tool::Hand,
                 "e" | "E" => self.active_tool = Tool::Eraser,
@@ -1143,9 +1309,7 @@ impl InputHandler {
                 }
                 _ => {}
             },
-            Key::Named(NamedKey::Backspace) => {
-                self.pages[self.current_page].strokes.pop();
-            }
+            Key::Named(NamedKey::Backspace) => self.undo(),
             _ => {}
         }
     }
@@ -1308,6 +1472,9 @@ impl InputHandler {
             magnifier_visible: self.magnifier.is_some(),
             textbox_visible: self.textbox.is_some(),
             browser_visible: self.browser_visible,
+            can_undo: page.can_undo(),
+            can_redo: page.can_redo(),
+            new_board_armed: self.new_board_armed_until.is_some(),
         };
         if self.toolbar_visible {
             self.toolbar.render(&toolbar_state, &mut normal_v, &mut normal_i);

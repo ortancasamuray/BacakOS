@@ -43,6 +43,7 @@ impl Vertex {
 /// One freehand pen stroke: raw input points (+ their arrival timestamps,
 /// needed for Calligraphy's speed-to-width mapping and LaserPointer's
 /// age-fade), plus stable base color/width/brush.
+#[derive(Clone)]
 pub struct Stroke {
     pub points: Vec<Vec2>,
     pub timestamps: Vec<f64>,
