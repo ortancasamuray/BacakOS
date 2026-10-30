@@ -501,6 +501,26 @@ impl InputHandler {
         Some(self.board_data())
     }
 
+    /// Whether something on screen moves by itself right now, so frames must
+    /// keep coming without input: a finger down (stroke prediction, eraser
+    /// cursor, pinch), a fading laser mark, a toast, a running stopwatch.
+    /// Otherwise the app sleeps until the next event — an idle board costs
+    /// no CPU/GPU.
+    pub fn needs_animation(&self, now: f64) -> bool {
+        !self.sessions.is_empty()
+            || self.toast.as_ref().is_some_and(|(_, until)| now < *until)
+            || self.stopwatch.as_ref().is_some_and(|s| s.is_running())
+            || self.pages[self.current_page]
+                .strokes
+                .iter()
+                .any(|s| s.brush_type == BrushType::LaserPointer && !s.points.is_empty())
+    }
+
+    /// When the pending autosave becomes due (input clock), if one is.
+    pub fn save_due_at(&self, quiet_secs: f64) -> Option<f64> {
+        self.dirty.then(|| self.last_change + quiet_secs)
+    }
+
     /// Whether the board has changes not yet handed to `take_save_request`.
     pub fn is_dirty(&self) -> bool {
         self.dirty
