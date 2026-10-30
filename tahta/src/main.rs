@@ -44,11 +44,11 @@ fn main() {
     env_logger::init();
 
     let event_loop = EventLoop::new().expect("failed to create event loop");
-    // Poll continuously rather than waiting for OS events: paired with the
-    // renderer's Mailbox/Immediate present mode, this keeps the pipeline
-    // fed every frame instead of sleeping between input events, which is
-    // what actually buys back touch-to-photon latency.
-    event_loop.set_control_flow(ControlFlow::Poll);
+    // Frames are drawn on demand: on input, and continuously (Poll) only
+    // while something moves — a finger drawing, with the renderer's
+    // Mailbox/Immediate present mode for touch-to-photon latency, a fading
+    // laser mark, the browser. An idle board sleeps (see `AboutToWait`).
+    event_loop.set_control_flow(ControlFlow::Wait);
 
     let window = Arc::new(
         WindowBuilder::new()
@@ -97,6 +97,10 @@ fn main() {
                 if window_id != window.id() {
                     return;
                 }
+                // Any input may change what's on screen.
+                if !matches!(event, WindowEvent::RedrawRequested) {
+                    window.request_redraw();
+                }
                 match event {
                     WindowEvent::CloseRequested => {
                         app.save_before_exit();
@@ -128,10 +132,18 @@ fn main() {
                     _ => {}
                 }
             } else if let Event::AboutToWait = event {
-                // Drive a new frame every loop iteration so predicted
-                // (extrapolated) geometry stays fresh even between input
-                // events.
-                window.request_redraw();
+                app.background_tick();
+                if app.needs_frame() {
+                    // Keep frames coming so predicted (extrapolated) stroke
+                    // geometry stays fresh even between input events.
+                    window.request_redraw();
+                    elwt.set_control_flow(ControlFlow::Poll);
+                } else {
+                    elwt.set_control_flow(match app.next_wakeup() {
+                        Some(at) => ControlFlow::WaitUntil(at),
+                        None => ControlFlow::Wait,
+                    });
+                }
             }
         })
         .expect("event loop error");

@@ -36,6 +36,11 @@ impl Stopwatch {
         Self { position, base_elapsed: 0.0, running: false, resumed_at: 0.0 }
     }
 
+    /// The digits change every frame while it runs.
+    pub fn is_running(&self) -> bool {
+        self.running
+    }
+
     fn panel_width(&self) -> f32 {
         PADDING * 2.0 + BTN * 2.0 + GAP
     }

@@ -65,6 +65,9 @@ pub struct App {
     modifiers: ModifiersState,
     /// An autosave is being written on its thread; the next one waits.
     saving: Arc<AtomicBool>,
+    /// The last frame still had something moving — draw one more after it
+    /// stops, so the final state (a laser mark gone, the toast hidden) shows.
+    animating: bool,
 }
 
 impl App {
@@ -84,7 +87,30 @@ impl App {
             last_mouse_pos: Vec2::ZERO,
             modifiers: ModifiersState::empty(),
             saving: Arc::new(AtomicBool::new(false)),
+            animating: false,
         }
+    }
+
+    /// Work that runs every loop turn, frame or not (the autosave).
+    pub fn background_tick(&mut self) {
+        let now = self.now_secs();
+        self.autosave(now);
+    }
+
+    /// Whether to keep drawing frames without waiting for input: something
+    /// animates, or the browser panel is open (Servo paints on its own).
+    pub fn needs_frame(&self) -> bool {
+        self.animating || self.input.browser_visible || self.input.needs_animation(self.now_secs())
+    }
+
+    /// When the event loop should wake up by itself while idle — the
+    /// pending autosave — so a board left alone still gets saved.
+    pub fn next_wakeup(&self) -> Option<Instant> {
+        let due = self.input.save_due_at(AUTOSAVE_QUIET_SECS)?;
+        // Overdue but held back (a finger still drawing, a save in flight):
+        // look again shortly instead of spinning.
+        let due = due.max(self.now_secs() + 0.5);
+        Some(self.start + Duration::from_secs_f64(due))
     }
 
     /// Load the board autosaved last time, if any. An unreadable save is
@@ -418,7 +444,7 @@ impl App {
     pub fn render(&mut self) {
         let now = self.now_secs();
         self.input.tick(now);
-        self.autosave(now);
+        self.animating = self.input.needs_animation(now);
         self.sync_browser();
 
         if self.input.take_minimize_request() {
