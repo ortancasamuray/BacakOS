@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Agent gateway: the mTLS port agents dial out to.
 //!
-//! A connection either carries **no** client certificate and exactly one
-//! `Kayit` (enrollment with a one-time token), or a certificate issued by our
-//! CA whose fingerprint maps to a non-revoked machine — anything else is
-//! dropped. Commands are request/response with ids; screenshots are pushed.
+//! A connection either carries exactly one `Kayit` (enrollment with a
+//! one-time token), or a certificate issued by our CA whose fingerprint maps
+//! to a non-revoked machine — anything else is dropped. A `Kayit` normally
+//! comes without a certificate; one that comes with the machine's current
+//! certificate is a re-enrollment (`kaydol --zorla`) and renews that machine
+//! instead of adding a second one. Commands are request/response with ids; screenshots are pushed.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
@@ -167,8 +169,11 @@ async fn handle(app: Arc<App>, tls: tokio_rustls::server::TlsStream<tokio::net::
         .ok_or("bağlantı kapandı")?;
 
     match (first, cert_fp) {
-        (AgentMsg::Kayit { jeton, csr_pem, makine_adi }, None) => {
-            let reply = enroll(&app, &jeton, &csr_pem, &makine_adi, peer);
+        (AgentMsg::Kayit { jeton, csr_pem, makine_adi }, fp) => {
+            // Holding a live certificate proves which machine this is; an
+            // unknown or revoked one just enrolls as a new machine.
+            let prior = fp.and_then(|fp| app.db.machine_by_cert(&fp));
+            let reply = enroll(&app, &jeton, &csr_pem, &makine_adi, peer, prior);
             write_frame(&mut wr, &reply).await.map_err(|e| e.to_string())
         }
         (AgentMsg::Merhaba(hello), Some(fp)) => {
@@ -183,18 +188,35 @@ async fn handle(app: Arc<App>, tls: tokio_rustls::server::TlsStream<tokio::net::
     }
 }
 
-fn enroll(app: &App, token: &str, csr: &str, name: &str, peer: SocketAddr) -> ServerMsg {
+fn enroll(app: &App, token: &str, csr: &str, name: &str, peer: SocketAddr, prior: Option<String>) -> ServerMsg {
     if !app.db.consume_token(&files::sha256_hex(token)) {
         app.enroll_limit.fail(peer.ip());
         log::warn!("geçersiz katılım jetonu: {peer}");
         return ServerMsg::KayitRed { neden: "katılım kodu geçersiz, kullanılmış ya da süresi dolmuş".into() };
     }
-    let id: String = files::random_bytes::<8>().iter().map(|b| format!("{b:02x}")).collect();
+    let renew = prior.is_some();
+    let id: String = prior.unwrap_or_else(|| files::random_bytes::<8>().iter().map(|b| format!("{b:02x}")).collect());
     let name: String = name.chars().filter(|c| !c.is_control()).take(64).collect();
     let signed = app.ca.lock().unwrap().sign_agent(csr, &id);
-    match signed.and_then(|(pem, fp)| app.db.add_machine(&id, &name, &fp).map(|_| pem)) {
+    let stored = signed.and_then(|(pem, fp)| {
+        if renew {
+            match app.db.rekey_machine(&id, &name, &fp)? {
+                true => Ok(pem),
+                false => Err("makine bu arada filodan çıkarıldı".into()),
+            }
+        } else {
+            app.db.add_machine(&id, &name, &fp).map(|_| pem)
+        }
+    });
+    match stored {
         Ok(pem) => {
-            app.db.audit("ajan", &id, "makine_kaydi", &format!("{name} ({peer})"), "tamam");
+            if renew {
+                // The running session still uses the old certificate.
+                app.agents.disconnect(&id);
+                log::info!("makine yeniden kaydedildi: {name} ({id}) {peer}");
+            }
+            let what = if renew { "makine_yeniden_kaydi" } else { "makine_kaydi" };
+            app.db.audit("ajan", &id, what, &format!("{name} ({peer})"), "tamam");
             ServerMsg::KayitTamam { sertifika_pem: pem, ca_pem: app.ca_pem.clone(), makine_id: id }
         }
         Err(e) => ServerMsg::KayitRed { neden: e },

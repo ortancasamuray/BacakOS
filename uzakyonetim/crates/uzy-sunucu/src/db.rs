@@ -194,6 +194,16 @@ impl Db {
             .map_err(|e| e.to_string())
     }
 
+    /// Re-enrollment of a known machine: its new certificate replaces the old
+    /// one on the same record (history, name and id kept), so the panel shows
+    /// one card per computer. False if the machine is gone or revoked.
+    pub fn rekey_machine(&self, id: &str, name: &str, cert_fp: &str) -> Result<bool, String> {
+        self.c()
+            .execute("UPDATE makineler SET ad=?2, sertifika_fp=?3 WHERE id=?1 AND iptal=0", params![id, name, cert_fp])
+            .map(|n| n == 1)
+            .map_err(|e| e.to_string())
+    }
+
     /// Machine id for an active (not revoked) client certificate.
     pub fn machine_by_cert(&self, fp: &str) -> Option<String> {
         self.c()
@@ -328,5 +338,17 @@ mod tests {
         assert_eq!(db.machine_by_cert("fp1").as_deref(), Some("m1"));
         assert!(db.revoke("m1"));
         assert!(db.machine_by_cert("fp1").is_none());
+        assert!(!db.rekey_machine("m1", "lab-01", "fp2").unwrap(), "iptal edilen makine yeniden anahtarlanmamalı");
+    }
+
+    #[test]
+    fn rekey_keeps_the_record_and_drops_the_old_certificate() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(&dir.path().join("t.db")).unwrap();
+        db.add_machine("m1", "lab-01", "fp1").unwrap();
+        assert!(db.rekey_machine("m1", "lab-01b", "fp2").unwrap());
+        assert!(db.machine_by_cert("fp1").is_none());
+        assert_eq!(db.machine_by_cert("fp2").as_deref(), Some("m1"));
+        assert_eq!(db.machines().len(), 1);
     }
 }

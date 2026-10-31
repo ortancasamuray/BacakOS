@@ -199,3 +199,61 @@ async fn certificate_from_another_ca_is_rejected() {
     .await;
     assert!(matches!(res, Err(_) | Ok(None)), "yabancı CA'nın sertifikası kabul edilmemeli");
 }
+
+#[tokio::test]
+async fn re_enrollment_with_the_current_certificate_renews_the_same_machine() {
+    let f = start().await;
+    let (key, csr_pem) = csr();
+    let ServerMsg::KayitTamam { sertifika_pem, ca_pem, makine_id } =
+        enroll(&f, &f.app.ca_fp, &token(&f.app), &csr_pem).await.unwrap()
+    else {
+        panic!("kayıt reddedildi")
+    };
+    let mtls = |cert: String, key: String| {
+        let (addr, ca_pem) = (f.addr.clone(), ca_pem.clone());
+        async move { ajan_tls::connect_mtls(&addr, ca_pem.as_bytes(), cert.as_bytes(), key.as_bytes()).await.unwrap() }
+    };
+    let mut live = mtls(sertifika_pem.clone(), key.serialize_pem()).await;
+    write_frame(&mut live, &hello()).await.unwrap();
+    assert!(matches!(read_frame::<_, ServerMsg>(&mut live).await.unwrap(), Some(ServerMsg::Ayarlar { .. })));
+
+    // `kaydol --zorla`: a new key, a new token, sent over the current certificate.
+    let (key2, csr2) = csr();
+    let mut c = mtls(sertifika_pem.clone(), key.serialize_pem()).await;
+    write_frame(&mut c, &AgentMsg::Kayit { jeton: token(&f.app), csr_pem: csr2, makine_adi: "lab-01".into() })
+        .await
+        .unwrap();
+    let ServerMsg::KayitTamam { sertifika_pem: cert2, makine_id: id2, .. } = read_frame(&mut c).await.unwrap().unwrap() else {
+        panic!("yeniden kayıt reddedildi")
+    };
+    assert_eq!(id2, makine_id, "aynı makine yeni kimlik almamalı");
+    assert_eq!(f.app.db.machines().len(), 1, "panelde tek kart kalmalı");
+
+    // The session on the old certificate is closed and the old certificate is dead.
+    let ended = tokio::time::timeout(Duration::from_secs(5), async {
+        while let Ok(Some(_)) = read_frame::<_, ServerMsg>(&mut live).await {}
+    })
+    .await;
+    assert!(ended.is_ok(), "eski sertifikalı oturum kapanmalı");
+    let mut old = mtls(sertifika_pem, key.serialize_pem()).await;
+    write_frame(&mut old, &hello()).await.unwrap();
+    assert!(matches!(read_frame::<_, ServerMsg>(&mut old).await, Ok(None) | Err(_)), "eski sertifika artık geçmemeli");
+    let mut new = mtls(cert2.clone(), key2.serialize_pem()).await;
+    write_frame(&mut new, &hello()).await.unwrap();
+    assert!(matches!(read_frame::<_, ServerMsg>(&mut new).await.unwrap(), Some(ServerMsg::Ayarlar { .. })));
+
+    // A machine taken out of the fleet that enrolls again comes back as a new
+    // machine, never by reviving the revoked record.
+    assert!(f.app.db.revoke(&makine_id));
+    f.app.agents.disconnect(&makine_id);
+    let (_, csr3) = csr();
+    let mut c = mtls(cert2, key2.serialize_pem()).await;
+    write_frame(&mut c, &AgentMsg::Kayit { jeton: token(&f.app), csr_pem: csr3, makine_adi: "lab-01".into() })
+        .await
+        .unwrap();
+    let ServerMsg::KayitTamam { makine_id: id3, .. } = read_frame(&mut c).await.unwrap().unwrap() else {
+        panic!("iptal sonrası kayıt reddedildi")
+    };
+    assert_ne!(id3, makine_id);
+    assert_eq!(f.app.db.machines().len(), 2);
+}

@@ -88,7 +88,10 @@ async fn enroll(args: &[String]) -> Result<(), String> {
     let csr = params.serialize_request(&key).map_err(|e| e.to_string())?.pem().map_err(|e| e.to_string())?;
 
     let pinned = Arc::new(tls::PinnedCa::new(&join.f));
-    let mut conn = tls::connect_enroll(&join.s, pinned.clone()).await?;
+    let mut conn = match renewal(&join).await {
+        Some(c) => c,
+        None => tls::connect_enroll(&join.s, pinned.clone()).await?,
+    };
     write_frame(&mut conn, &AgentMsg::Kayit { jeton: join.j.clone(), csr_pem: csr, makine_adi: name.clone() })
         .await
         .map_err(|e| e.to_string())?;
@@ -113,6 +116,20 @@ async fn enroll(args: &[String]) -> Result<(), String> {
     println!("✓ '{name}' sunucuya kaydedildi (makine kimliği {id}).");
     println!("  Başlatmak için: sudo systemctl enable --now uzakyonetim-ajan");
     Ok(())
+}
+
+/// `--zorla` on a machine already enrolled with this same server: dial with
+/// the current certificate, so the server renews this machine's record rather
+/// than listing the computer twice. `None` (enroll as a new machine) if there
+/// is no certificate, it is from another server, or the server refuses it.
+async fn renewal(join: &JoinCode) -> Option<tokio_rustls::client::TlsStream<tokio::net::TcpStream>> {
+    let read = |n| std::fs::read(config::path(n)).ok();
+    let (ca, cert, key) = (read("ca.crt")?, read("ajan.crt")?, read("ajan.key")?);
+    let ca_der = rustls_pemfile::certs(&mut &ca[..]).next()?.ok()?;
+    if tls::fingerprint(&ca_der) != join.f.to_ascii_lowercase() {
+        return None;
+    }
+    tls::connect_mtls(&join.s, &ca, &cert, &key).await.ok()
 }
 
 fn status() -> Result<(), String> {
