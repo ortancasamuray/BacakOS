@@ -2310,6 +2310,7 @@ fn render_dirty_targets(data: &mut LoopData) -> Result<()> {
     crate::render::process_pending_screencopy(&mut data.state, &mut data.renderer);
     // Take a built-in PrintScreen screenshot to disk, if one was requested.
     crate::render::process_pending_screenshot(&mut data.state, &mut data.renderer);
+    crate::render::process_ipc_screenshots(&mut data.state, &mut data.renderer);
 
     if data
         .targets

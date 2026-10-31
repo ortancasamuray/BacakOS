@@ -313,7 +313,7 @@ pub use crate::plugins::dock::{
     DockDrag, DockEntry, DockMenu, DockMenuAction, DockMenuItem, DockTooltip,
 };
 pub use crate::plugins::onboarding::{OnboardingDialog, TERM_W_FRAC};
-pub use crate::plugins::screenshot::{RegionShot, ScreenshotReq, ShotDialog, Toast};
+pub use crate::plugins::screenshot::{IpcScreenshot, PendingDocShot, RegionShot, ScreenshotReq, ShotDialog, Toast};
 pub use crate::plugins::desktop_settings::{
     DsAction, DsMode, DsResult, DsRow, DesktopSettingsPanel, FbEntry, FileBrowserPanel,
 };
@@ -647,6 +647,14 @@ pub struct BacakState {
     /// writes a PNG to disk (`render::process_pending_screenshot`). Cleared once
     /// taken.
     pub pending_screenshot: Option<ScreenshotReq>,
+    /// IPC `ekran_goruntusu` requests waiting for the render tick
+    /// (`render::process_ipc_screenshots`), which replies once written.
+    pub ipc_screenshots: Vec<IpcScreenshot>,
+    /// IPC screenshots of a web page waiting for its bounds (`atspi` thread).
+    pub ipc_doc_shots: Vec<PendingDocShot>,
+    /// Window left out of the frame being captured for an IPC screenshot
+    /// (set only during that offscreen render).
+    pub capture_hidden: Option<WindowId>,
     /// Active interactive region screenshot (Shift+PrintScreen). While `Some`,
     /// the compositor swallows pointer input and draws a selection rectangle;
     /// the drag's release queues a [`ScreenshotReq`] with the chosen region and
@@ -1508,6 +1516,9 @@ impl BacakState {
             outputs: std::collections::HashMap::new(),
             pending_screencopy: Vec::new(),
             pending_screenshot: None,
+            ipc_screenshots: Vec::new(),
+            ipc_doc_shots: Vec::new(),
+            capture_hidden: None,
             region_shot: None,
             window_pick: false,
             flash: None,
@@ -7942,11 +7953,13 @@ impl BacakState {
         let requests = ipc.poll();
         let mut redraw = false;
         for (client, m) in requests {
-            let reply = self.ipc_handle(client, m, &mut redraw);
+            // `None`: answered later (a screenshot waits for the render tick).
+            let Some(reply) = self.ipc_handle(client, m, &mut redraw) else { continue };
             if let Some(ipc) = self.ipc.as_mut() {
                 ipc.reply(client, reply);
             }
         }
+        redraw |= self.poll_ipc_doc_shots();
         if self.ipc.as_ref().is_some_and(|i| i.has_subscribers()) {
             let focus = self.wm.all_windows().into_iter().find(|w| w.focused).map(|w| w.id);
             if focus != self.ipc_last_focus {
@@ -7962,10 +7975,50 @@ impl BacakState {
         redraw
     }
 
-    fn ipc_handle(&mut self, client: crate::ipc::ClientId, m: bacak_ipc::Mesaj, redraw: &mut bool) -> bacak_ipc::Yanit {
+    /// Queue the web-page screenshots whose bounds have come back: cut to the
+    /// page (within its window), or to the whole window if none was found.
+    fn poll_ipc_doc_shots(&mut self) -> bool {
+        let mut ready = false;
+        let mut i = 0;
+        while i < self.ipc_doc_shots.len() {
+            let found = match self.ipc_doc_shots[i].rx.try_recv() {
+                Ok(found) => found,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    i += 1;
+                    continue;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => None,
+            };
+            let PendingDocShot { mut shot, origin, .. } = self.ipc_doc_shots.remove(i);
+            if let (Some((x, y, w, h)), Some(win)) = (found, shot.region) {
+                let (x0, y0) = ((origin.0 + x as f32).max(win.x), (origin.1 + y as f32).max(win.y));
+                let x1 = (origin.0 + (x + w) as f32).min(win.x + win.w);
+                let y1 = (origin.1 + (y + h) as f32).min(win.y + win.h);
+                if x1 - x0 >= 1.0 && y1 - y0 >= 1.0 {
+                    shot.region = Some(Rect::new(x0, y0, x1 - x0, y1 - y0));
+                }
+            }
+            self.ipc_screenshots.push(shot);
+            ready = true;
+        }
+        ready
+    }
+
+    /// The topmost window on `output`'s workspace other than `except` — what
+    /// an app capturing "behind itself" means.
+    fn topmost_window_except(&self, output: OutputId, except: Option<WindowId>) -> Option<crate::wm::Window> {
+        let ws = self.wm.active_workspace_on(output)?;
+        self.wm
+            .windows_on_workspace(ws)
+            .into_iter()
+            .filter(|w| Some(w.id) != except && !matches!(w.state, WinState::Minimized))
+            .max_by_key(|w| w.z)
+    }
+
+    fn ipc_handle(&mut self, client: crate::ipc::ClientId, m: bacak_ipc::Mesaj, redraw: &mut bool) -> Option<bacak_ipc::Yanit> {
         use bacak_ipc::{Istek, Yanit};
         let clip = |t: String| -> String { t.chars().filter(|c| !c.is_control()).take(bacak_ipc::BILDIRIM_MAX).collect() };
-        match m.istek {
+        Some(match m.istek {
             Istek::Surum => Yanit::ok(
                 m.id,
                 Some(serde_json::json!({
@@ -7976,9 +8029,9 @@ impl BacakState {
             Istek::Bildirim { baslik, ayrinti } => {
                 let (baslik, ayrinti) = (clip(baslik), clip(ayrinti));
                 if baslik.trim().is_empty() {
-                    return Yanit::err(m.id, "başlık boş olamaz");
+                    return Some(Yanit::err(m.id, "başlık boş olamaz"));
                 }
-                let Some(out) = self.pointer_output() else { return Yanit::err(m.id, "ekran yok") };
+                let Some(out) = self.pointer_output() else { return Some(Yanit::err(m.id, "ekran yok")) };
                 self.show_toast(out, &baslik, &ayrinti);
                 *redraw = true;
                 Yanit::ok(m.id, None)
@@ -7997,7 +8050,7 @@ impl BacakState {
                     Some(false) => self.close_control_center(),
                     Some(true) if open => {}
                     _ => {
-                        let Some(out) = self.pointer_output() else { return Yanit::err(m.id, "ekran yok") };
+                        let Some(out) = self.pointer_output() else { return Some(Yanit::err(m.id, "ekran yok")) };
                         self.toggle_control_center(out);
                     }
                 }
@@ -8042,7 +8095,46 @@ impl BacakState {
                 self.ipc_last_focus = self.wm.all_windows().into_iter().find(|w| w.focused).map(|w| w.id);
                 Yanit::ok(m.id, None)
             }
-        }
+            Istek::EkranGoruntusu { dosya, gizle, alan } => {
+                let dosya = std::path::PathBuf::from(dosya);
+                if !dosya.is_absolute() {
+                    return Some(Yanit::err(m.id, "dosya yolu mutlak olmalı"));
+                }
+                let output = match gizle {
+                    Some(id) => match self.wm.output_for_window(id) {
+                        Some(o) => o.id,
+                        None => return Some(Yanit::err(m.id, "pencere yok")),
+                    },
+                    None => match self.pointer_output() {
+                        Some(o) => o,
+                        None => return Some(Yanit::err(m.id, "ekran yok")),
+                    },
+                };
+                let mut shot = IpcScreenshot { client, id: m.id, output, path: dosya, hide: gizle, region: None };
+                let target = (alan != bacak_ipc::Alan::Ekran).then(|| self.topmost_window_except(output, gizle)).flatten();
+                if let Some(win) = target {
+                    shot.region = self.window_shot_rect(win.id);
+                    let pid = self
+                        .surface_for_window(win.id)
+                        .and_then(|s| self.display_handle.get_client(smithay::reexports::wayland_server::Resource::id(&s)).ok())
+                        .and_then(|c| c.get_credentials(&self.display_handle).ok())
+                        .map(|cr| cr.pid as u32);
+                    if let (bacak_ipc::Alan::Belge, Some(bridge), Some(pid)) = (alan, self.atspi.as_ref(), pid) {
+                        let conn = bridge.connection();
+                        let (tx, rx) = std::sync::mpsc::channel();
+                        std::thread::spawn(move || {
+                            let _ = tx.send(crate::atspi::document_extents(&conn, pid));
+                        });
+                        // The surface sits at the window's position (see `surface_at`).
+                        self.ipc_doc_shots.push(PendingDocShot { shot, origin: (win.geom.x, win.geom.y), rx });
+                        return None;
+                    }
+                }
+                self.ipc_screenshots.push(shot);
+                *redraw = true;
+                return None;
+            }
+        })
     }
 
     pub fn show_toast(&mut self, output: OutputId, title: &str, sub: &str) {

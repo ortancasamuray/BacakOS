@@ -37,6 +37,35 @@ pub enum Istek {
     Ekranlar,
     /// Subscribes this connection to [`Olay`] events until it closes.
     Abone,
+    /// Saves the screen as a PNG at `dosya` (an absolute path): the windows
+    /// and wallpaper, without the dock, on-screen keyboard, cursor or
+    /// dimming. `gizle` leaves that window out and picks its screen (else
+    /// the pointer's) — an app capturing what's behind its own window, like
+    /// a whiteboard putting the screen onto a page. `alan` narrows it to
+    /// the window underneath. Replies once written; no clipboard copy, no
+    /// banner.
+    EkranGoruntusu {
+        dosya: String,
+        #[serde(default)]
+        gizle: Option<u64>,
+        #[serde(default)]
+        alan: Alan,
+    },
+}
+
+/// What part of the screen [`Istek::EkranGoruntusu`] keeps.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Alan {
+    /// The whole screen.
+    #[default]
+    Ekran,
+    /// The topmost window (other than `gizle`).
+    Pencere,
+    /// That window's document — for a browser the web page, without tabs,
+    /// address bar or window frame (found through accessibility); the whole
+    /// window when the app doesn't say.
+    Belge,
 }
 
 /// Longest notification title/body kept, in characters.

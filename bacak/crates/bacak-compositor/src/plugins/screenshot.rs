@@ -27,6 +27,29 @@ pub struct ScreenshotReq {
     pub window: Option<WindowId>,
 }
 
+/// An IPC `ekran_goruntusu` request: capture `output` without window `hide`
+/// (cut to `region`, WM-global logical px) into `path`, then answer request
+/// `id` of `client`.
+#[derive(Debug, Clone)]
+pub struct IpcScreenshot {
+    pub client: crate::ipc::ClientId,
+    pub id: u64,
+    pub output: OutputId,
+    pub path: std::path::PathBuf,
+    pub hide: Option<WindowId>,
+    pub region: Option<Rect>,
+}
+
+/// An IPC screenshot of a browser's page, waiting for the page's bounds from
+/// accessibility (a lookup thread). `origin` is the window's surface origin
+/// the WINDOW-relative bounds are measured from; `shot.region` holds the
+/// whole window meanwhile — the fallback if no page is found.
+pub struct PendingDocShot {
+    pub shot: IpcScreenshot,
+    pub origin: (f32, f32),
+    pub rx: std::sync::mpsc::Receiver<Option<(i32, i32, i32, i32)>>,
+}
+
 /// Live state of an interactive region screenshot (Shift+PrintScreen). `anchor`
 /// is the press point and `cur` the current pointer position, both WM-global
 /// logical px; the selection is the normalised rectangle between them.
