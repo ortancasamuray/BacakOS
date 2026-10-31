@@ -4,16 +4,16 @@
 
 Four small Rust + [Slint](https://slint.dev) viewer binaries for BacakOS. The
 one that actually ships as *the* document viewer is `bacak-belge`, a unified
-PDF + EPUB + image + text viewer with pen/marker annotation tools; the other
-three (`bacak-pdf`, `bacak-epub`, `bacak-resim`) are focused single-format
-viewers, built and packaged independently. See
+PDF + EPUB + image viewer with pen/highlighter notes; the other three
+(`bacak-pdf`, `bacak-epub`, `bacak-resim`) are older single-format viewers
+that `build-debs.sh` does not build. See
 [ARCHITECTURE.md](ARCHITECTURE.md) for the module/crate boundary.
 
 ## Binaries
 
 | Binary | Formats | Renderer |
 |---|---|---|
-| `bacak-belge` | PDF, EPUB, image, text — **plus pen/marker annotation** | MuPDF (PDF) + `epub` crate + `image` crate |
+| `bacak-belge` | PDF, EPUB, image — **plus pen/highlighter notes, saved per document** | MuPDF (PDF) + `epub` crate + `image` crate |
 | `bacak-pdf` | PDF only | MuPDF |
 | `bacak-epub` | EPUB only | `epub` crate + a small in-house HTML-to-text stripper |
 | `bacak-resim` | JPEG, PNG, GIF, WebP, BMP, TIFF, ICO, QOI, HDR, PNM | `image` crate |

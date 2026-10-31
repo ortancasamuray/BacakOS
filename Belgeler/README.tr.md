@@ -4,10 +4,9 @@
 
 BacakOS için dört küçük Rust + [Slint](https://slint.dev) görüntüleyici
 ikilisi (binary). Asıl *belge görüntüleyici* olarak dağıtılan
-`bacak-belge`'dir — kalem/marker ile not alma araçlarına sahip, birleşik
-PDF + EPUB + resim + metin görüntüleyicisi; diğer üçü (`bacak-pdf`,
-`bacak-epub`, `bacak-resim`) tek formata odaklı görüntüleyicilerdir,
-bağımsız olarak derlenir ve paketlenir. Modül/crate sınırı için
+`bacak-belge`'dir — kalem/fosforlu notlu, birleşik PDF + EPUB + resim
+görüntüleyicisi; diğer üçü (`bacak-pdf`, `bacak-epub`, `bacak-resim`)
+`build-debs.sh`'nin derlemediği eski, tek formatlı görüntüleyicilerdir. Modül/crate sınırı için
 [ARCHITECTURE.md](ARCHITECTURE.md) (İngilizce) /
 [ARCHITECTURE.tr.md](ARCHITECTURE.tr.md) (Türkçe özet) dosyalarına bakın.
 
@@ -15,7 +14,7 @@ bağımsız olarak derlenir ve paketlenir. Modül/crate sınırı için
 
 | İkili | Formatlar | Render motoru |
 |---|---|---|
-| `bacak-belge` | PDF, EPUB, resim, metin — **artı kalem/marker not alma** | MuPDF (PDF) + `epub` crate + `image` crate |
+| `bacak-belge` | PDF, EPUB, resim — **artı belge başına kaydedilen kalem/fosforlu notlar** | MuPDF (PDF) + `epub` crate + `image` crate |
 | `bacak-pdf` | Sadece PDF | MuPDF |
 | `bacak-epub` | Sadece EPUB | `epub` crate + basit, kendi yazdığımız HTML-metne çevirici |
 | `bacak-resim` | JPEG, PNG, GIF, WebP, BMP, TIFF, ICO, QOI, HDR, PNM | `image` crate |

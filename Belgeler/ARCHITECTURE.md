@@ -28,43 +28,54 @@ Belgeler/
 └─ icons/hicolor/scalable/apps/     # one SVG icon per binary
 ```
 
-`bacak-belge` is the only workspace member; the other three intentionally
-declare their own `[workspace]` at the top of their `Cargo.toml` so they
-build and version independently of the unified viewer.
+`bacak-belge` is the only workspace member and the only one `build-debs.sh`
+builds and packages; the other three declare their own `[workspace]` and
+have not had `bacak-belge`'s fixes (see §3).
 
 ---
 
 ## 2. `bacak-belge` — the unified viewer
 
-`src/main.rs` (≈670 lines, single file) holds three renderers side by side,
-selected by the opened file's extension:
+`src/main.rs` holds the three viewing modes, selected by the opened file's
+extension; the logic that doesn't need a window lives in small modules with
+unit tests (`cargo test -p bacak-belge`):
 
-- **PDF** — `mupdf::Document::load_page` → `Matrix::new_scale` at
-  `zoom * 96/72` DPI → `page.to_pixmap` → converted into a Slint `Image` via
-  `SharedPixelBuffer<Rgba8Pixel>`.
-- **EPUB** — the `epub` crate for container/spine parsing; chapter HTML is
-  run through an in-house `html_to_text` stripper (tag removal + common
-  entity decoding) rather than a full HTML rendering engine.
-- **Image** — the `image` crate's `DynamicImage::into_rgba8`, copied into the
-  same `SharedPixelBuffer<Rgba8Pixel>` path the PDF renderer uses.
+| Module | What |
+|---|---|
+| `cizim.rs` | Pen/highlighter notes as vector strokes, undo, saving |
+| `metin.rs` | EPUB chapter (X)HTML → readable text |
+| `yerlesim.rs` | Fit/zoom/pan arithmetic, natural file order |
 
-All three converge on the same Slint `Image` type, so the viewport, zoom, and
-page-navigation UI in `ui/main.slint` is format-agnostic.
+- **PDF** — MuPDF renders the page at `zoom × window scale factor × 96/72`,
+  so one image pixel is one physical pixel (sharp on HiDPI); a render that
+  would exceed 40 MP is made smaller and scaled up instead. The page opens
+  fitted to the window ("Sayfaya sığdır" ↔ "Genişliğe sığdır"); a password
+  protected PDF asks for its password; a file MuPDF can't read shows an
+  error in the window instead of exiting.
+- **EPUB** — the `epub` crate for container/spine/TOC; chapter titles come
+  from the table of contents. `metin::html_to_text` keeps paragraphs,
+  headings, list items and line breaks, decodes named and numeric entities,
+  and drops `<head>`, `<style>`, `<script>` and comments. Each chapter starts
+  at its top.
+- **Image** — decoded upright (EXIF orientation), fitted to the window
+  without enlarging small pictures; ◀ ▶ walk the folder's pictures in
+  natural order ("2" before "10").
 
-### Annotation layer
+Mouse wheel scrolls (at a PDF page's edge it turns the page), Ctrl+wheel
+zooms, a drag pans (the page can't leave the view), two fingers pinch.
+Keys: PageDown/→/Space, PageUp/←, Home/End, `+` `-` `0`, ↑ ↓, Esc, Ctrl+Z.
 
-`AnnotationState` (top of `main.rs`) keeps three RGBA buffers per page:
+### Notes (`cizim.rs`)
 
-- `base_buf` — completed strokes, committed.
-- `stroke_buf` — the in-progress stroke at full opacity.
-- `composite` — `base_buf` + `stroke_buf`, what's actually drawn to screen.
-
-Pen and marker are the same code path with different alpha: pen strokes
-commit at alpha 220, marker strokes at a translucent 110
-(`marker_alpha`) so overlapping highlighter strokes darken naturally instead
-of stacking to opaque. A stroke is finalized (flattened into `base_buf`) on
-pointer-up; until then only `composite` is touched, so an in-progress stroke
-never costs a full-page re-render of committed ink.
+Pen and highlighter strokes are stored as points in **page coordinates**
+(fractions of the page's width/height) and drawn by the UI as Slint `Path`
+elements inside the page rectangle, so they stay on the words they mark at
+any zoom, pan or window size, and each PDF page or picture has its own. A
+highlighter stroke is one translucent path, so it doesn't darken where it
+crosses itself. Undo (button or Ctrl+Z) reverts the last stroke or a
+"Notları sil". After every change the notes are written to
+`$XDG_DATA_HOME/bacak-belge/notlar/<hash of the document path>.json` and
+come back when the document is opened again.
 
 ---
 
@@ -99,9 +110,7 @@ subset of that they actually need (e.g. `bacak-resim` never links MuPDF).
 
 ## 5. Testing
 
-No dedicated test suite currently — verification is manual, opening real
-PDF/EPUB/image files through each binary. A useful next step for any of the
-four would be extracting the render functions (`render_page`, `html_to_text`,
-`load_slint_image`) into pure functions over bytes-in/pixels-or-text-out so
-they're unit-testable without a Slint event loop, as `kur`'s `backend/`
-already does for the installer.
+`bacak-belge`'s window-free logic is unit-tested (`cargo test -p
+bacak-belge`: notes, EPUB text, fit/pan). Rendering and the UI are checked
+by opening real PDF/EPUB/image files. The three standalone viewers have no
+tests.

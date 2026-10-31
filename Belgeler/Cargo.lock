@@ -381,6 +381,8 @@ dependencies = [
  "epub",
  "image",
  "mupdf",
+ "serde",
+ "serde_json",
  "slint",
  "slint-build",
 ]
