@@ -281,6 +281,7 @@ pub fn run() -> Result<()> {
 
         // ----- 1d. BacakOS IPC (winit redraws every frame anyway) ----------
         state.poll_ipc();
+        state.refit_maximized();
 
         // ----- 2. tick window animations -----------------------------------
         // This is where post-drag spring physics drives the WM geometry —

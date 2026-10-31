@@ -1206,6 +1206,9 @@ pub struct BacakState {
     /// unmaximise / unfullscreen path can restore the floating size
     /// and position.
     pub maximize_restore: HashMap<WindowId, Rect>,
+    /// Each output's work area as maximised windows were last fitted to;
+    /// see [`refit_maximized`](Self::refit_maximized).
+    fitted_work_areas: HashMap<OutputId, Rect>,
     /// Independent tick clock for [`dock_reveal`](Self::dock_reveal) so
     /// its `dt` isn't consumed by [`tick_animations`](Self::tick_animations).
     pub last_reveal_tick: Instant,
@@ -1672,6 +1675,7 @@ impl BacakState {
             ipc: None,
             ipc_last_focus: None,
             maximize_restore: HashMap::new(),
+            fitted_work_areas: HashMap::new(),
             wallpaper_cache: HashMap::new(),
             wallpaper_rx: None,
             wallpaper_cache_path: None,
@@ -1959,9 +1963,6 @@ impl BacakState {
         self.layer_surface_at(x, y, &[Layer::Bottom, Layer::Background])
     }
 
-    /// Whether the topmost window at WM-global logical `(x, y)` is an X11
-    /// (XWayland) window — used to decide whether a touch there should be
-    /// pointer-emulated (see [`touch_pointer_slot`](Self::touch_pointer_slot)).
     /// Whether a touch sequence whose first finger lands at `(x, y)` on the
     /// device from `usb_vendor` may start compositor gestures: never on a
     /// whiteboard sensor, and in `Auto` mode not over a drawing app either
@@ -1980,6 +1981,23 @@ impl BacakState {
             .is_some_and(|w| crate::config::is_drawing_app(&w.app))
     }
 
+    /// A first finger focuses (and raises) the window it lands on, like a
+    /// click under click-to-focus. Under focus-follows-pointer a touch never
+    /// moves the pointer, so without this the keyboard — and the app's own
+    /// idea of being the active window — stayed wherever it was.
+    pub fn focus_window_at_touch(&mut self, x: f32, y: f32) {
+        let Some(id) = self.wm.hit_test(x, y) else { return };
+        if self.wm.get(id).is_ok_and(|w| w.focused) {
+            return;
+        }
+        let _ = self.wm.focus(id);
+        let surface = self.surface_for_window(id);
+        self.set_keyboard_focus(surface);
+    }
+
+    /// Whether the topmost window at WM-global logical `(x, y)` is an X11
+    /// (XWayland) window — used to decide whether a touch there should be
+    /// pointer-emulated (see [`touch_pointer_slot`](Self::touch_pointer_slot)).
     pub fn hit_window_is_x11(&self, x: f32, y: f32) -> bool {
         self.wm
             .hit_test(x, y)
@@ -8984,6 +9002,39 @@ impl BacakState {
         self.ftl_refresh_all_state();
     }
 
+    /// Keep maximised windows fitted to their output's work area when it
+    /// changes under them. The on-screen keyboard reserves the bottom while
+    /// it is open: a maximised window (Rüzgar, whose address bar is at the
+    /// bottom) must shrink above it and grow back when it closes, else the
+    /// bar sits behind the keys. Cheap when nothing changed.
+    pub fn refit_maximized(&mut self) {
+        let mut changed = Vec::new();
+        for o in self.wm.outputs() {
+            let area = o.work_area();
+            if self.fitted_work_areas.insert(o.id, area).is_some_and(|old| old != area) {
+                changed.push(o.id);
+            }
+        }
+        if changed.is_empty() {
+            return;
+        }
+        for w in self.wm.all_windows() {
+            if !matches!(w.state, WinState::Maximized | WinState::Snapped(SnapZone::Maximize)) {
+                continue;
+            }
+            if !self.wm.output_for_window(w.id).is_some_and(|o| changed.contains(&o.id)) {
+                continue;
+            }
+            let Ok(area) = self.wm.snap(w.id, SnapZone::Maximize) else { continue };
+            let bar = if self.decorated.contains(&w.id) { crate::decoration::BAR_H } else { 0.0 };
+            let target = Rect::new(area.x, area.y + bar, area.w, (area.h - bar).max(1.0));
+            if bar > 0.0 {
+                let _ = self.wm.set_geom(w.id, target);
+            }
+            self.notify_maximize(w.id, true, target);
+        }
+    }
+
     /// Notify the client of a maximise change: xdg via a configure carrying the
     /// state + size; X11 via the X11 surface. `geom` is the new content rect.
     fn notify_maximize(&self, id: WindowId, maximized: bool, geom: Rect) {
@@ -9662,6 +9713,15 @@ impl BacakState {
                         // rect so a future un-minimize expands sanely.
                         let _ = self.wm.minimize(id);
                         let _ = self.wm.r#move(id, restore);
+                        // It held the focus (an app minimising itself, e.g.
+                        // Tahta opening the browser): hand it to the next
+                        // window down instead of leaving keyboard and touch
+                        // with something no longer on screen.
+                        if !self.wm.all_windows().iter().any(|w| w.focused) {
+                            if let Ok(w) = self.wm.get(id) {
+                                self.auto_focus_workspace(w.workspace);
+                            }
+                        }
                         // The window is *now* actually minimized — reflect it to
                         // wlr foreign-toplevel taskbars (state lagged the anim).
                         self.ftl_refresh_all_state();
