@@ -196,7 +196,7 @@ impl UrlBar {
 /// `text` cut to fit `max_w` (as measured by `measure`): while editing the
 /// end stays visible (where the cursor is), otherwise the start, with "…"
 /// marking the cut.
-fn fit_text(text: &str, max_w: f32, keep_end: bool, measure: impl Fn(&str) -> f32) -> String {
+pub(crate) fn fit_text(text: &str, max_w: f32, keep_end: bool, measure: impl Fn(&str) -> f32) -> String {
     if measure(text) <= max_w {
         return text.to_string();
     }

@@ -140,7 +140,8 @@ enum PointerRole {
     /// Touch landed on the toolbar; consumed, never reaches the canvas.
     Toolbar,
     /// Flagged by the palm-rejection heuristic, or consumed by a
-    /// two-finger-tap gesture / the open radial menu; ignored until lift.
+    /// two-finger-tap gesture / the open radial menu / the open "Aç"
+    /// panel; ignored until lift.
     Palm,
 }
 
@@ -177,6 +178,11 @@ pub struct InputHandler {
     spotlight: Option<crate::spotlight::Spotlight>,
     magnifier: Option<crate::magnifier::Magnifier>,
     textbox: Option<crate::textbox::TextBox>,
+    /// The "Aç" panel, while open (modal, see `opener.rs`).
+    opener: Option<crate::opener::Opener>,
+    /// A PDF picked in the "Aç" panel, being decoded on its own thread
+    /// (a long document takes seconds) — picked up by `tick`.
+    pdf_loading: Option<std::sync::mpsc::Receiver<anyhow::Result<Vec<Arc<board::PdfImage>>>>>,
     /// Whether the embedded browser panel should be shown. The real
     /// `webengine::WebPanel` lives in `app.rs` (it needs to hand its
     /// frames to the wgpu renderer directly) — this is just the on/off
@@ -255,6 +261,8 @@ impl InputHandler {
             spotlight: None,
             magnifier: None,
             textbox: None,
+            opener: None,
+            pdf_loading: None,
             browser_visible: false,
             zone_enabled: false,
             zone_pens: [
@@ -310,6 +318,12 @@ impl InputHandler {
     /// than merging into whatever was already on the board.
     pub fn load_pdf(&mut self, path: &str) -> anyhow::Result<()> {
         let images = crate::pdf::load_pdf_pages(path)?;
+        self.set_pdf_pages(images);
+        Ok(())
+    }
+
+    fn set_pdf_pages(&mut self, images: Vec<Arc<board::PdfImage>>) {
+        self.release_drawing_pointers();
         self.pages = images.into_iter().map(Page::from_pdf_image).collect();
         if self.pages.is_empty() {
             self.pages.push(Page::new());
@@ -318,7 +332,6 @@ impl InputHandler {
         self.mark_dirty();
         self.view_offset = Vec2::ZERO;
         self.view_scale = 1.0;
-        Ok(())
     }
 
     /// Screen-space `p` to canvas-space, inverting the current pan/zoom
@@ -401,6 +414,78 @@ impl InputHandler {
         }
         if self.new_board_armed_until.is_some_and(|t| now > t) {
             self.new_board_armed_until = None;
+        }
+        self.poll_pdf_loading(now);
+    }
+
+    // --- Opening a PDF / the backup ("Aç" panel) ----------------------------
+
+    fn open_choice(&mut self, choice: crate::opener::Choice, now: f64) {
+        match choice {
+            crate::opener::Choice::Backup => {
+                let message = match crate::persist::load(&crate::persist::backup_dir()) {
+                    Ok(Some(data)) => {
+                        // A swap: the board in use becomes the backup, so
+                        // opening it was never a step that loses work.
+                        self.release_drawing_pointers();
+                        self.keep_as_backup();
+                        self.restore_board(data);
+                        self.view_offset = Vec2::ZERO;
+                        self.view_scale = 1.0;
+                        self.mark_dirty();
+                        self.save_now = true;
+                        "Önceki tahta açıldı"
+                    }
+                    Ok(None) => "Önceki tahta yok",
+                    Err(e) => {
+                        log::error!("önceki tahta açılamadı: {e:#}");
+                        "Önceki tahta açılamadı"
+                    }
+                };
+                self.toast = Some((message.to_string(), now + 2.5));
+            }
+            crate::opener::Choice::Pdf(path) => {
+                let (tx, rx) = std::sync::mpsc::channel();
+                std::thread::spawn(move || {
+                    let _ = tx.send(crate::pdf::load_pdf_pages(&path.to_string_lossy()));
+                });
+                self.pdf_loading = Some(rx);
+                self.toast = Some(("PDF açılıyor…".to_string(), now + 120.0));
+            }
+        }
+    }
+
+    /// The PDF picked in the "Aç" panel replaces the board once decoded;
+    /// the board it replaces is kept as the backup.
+    fn poll_pdf_loading(&mut self, now: f64) {
+        let Some(rx) = &self.pdf_loading else { return };
+        let result = match rx.try_recv() {
+            Ok(result) => result,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(anyhow::anyhow!("PDF okuyucu durdu")),
+        };
+        self.pdf_loading = None;
+        let message = match result {
+            Ok(images) => {
+                self.keep_as_backup();
+                self.set_pdf_pages(images);
+                self.save_now = true;
+                "PDF açıldı"
+            }
+            Err(e) => {
+                log::error!("PDF açılamadı: {e:#}");
+                "PDF açılamadı"
+            }
+        };
+        self.toast = Some((message.to_string(), now + 2.5));
+    }
+
+    /// Hand the board about to be replaced to `app.rs` as the backup —
+    /// unless it's blank, which would only push out a backup worth more.
+    fn keep_as_backup(&mut self) {
+        let blank = self.pages.len() == 1 && self.pages[0].pdf_image.is_none() && self.pages[0].strokes.is_empty();
+        if !blank {
+            self.replaced_board = Some(self.board_data());
         }
     }
 
@@ -510,6 +595,7 @@ impl InputHandler {
         !self.sessions.is_empty()
             || self.toast.as_ref().is_some_and(|(_, until)| now < *until)
             || self.stopwatch.as_ref().is_some_and(|s| s.is_running())
+            || self.pdf_loading.is_some()
             || self.pages[self.current_page]
                 .strokes
                 .iter()
@@ -656,7 +742,7 @@ impl InputHandler {
                     self.new_board_armed_until = None;
                     self.toolbar.close_group();
                     self.release_drawing_pointers();
-                    self.replaced_board = Some(self.board_data());
+                    self.keep_as_backup();
                     self.pages = vec![Page::new()];
                     self.current_page = 0;
                     self.view_offset = Vec2::ZERO;
@@ -668,6 +754,12 @@ impl InputHandler {
                     self.new_board_armed_until = Some(now + 4.0);
                     self.toast = Some(("Yeni tahta için tekrar dokunun".to_string(), now + 4.0));
                 }
+            }
+            ToolbarAction::OpenFile => {
+                self.opener = match self.opener {
+                    Some(_) => None,
+                    None => Some(crate::opener::Opener::new()),
+                };
             }
             ToolbarAction::ExportPdf => {
                 let now = self.last_input_at.unwrap_or(0.0);
@@ -733,6 +825,26 @@ impl InputHandler {
                 self.apply_radial_action(action, zone);
             }
             self.close_radial_menu();
+            self.sessions.insert(id, PointerSession { role: PointerRole::Palm, start_pos: position, start_time: now });
+            return;
+        }
+
+        // The "Aç" panel is modal the same way: a touch inside picks a row
+        // or a button, anywhere else closes it.
+        if let Some(opener) = &mut self.opener {
+            let press = if opener.contains(self.screen_size, position) {
+                opener.press_at(self.screen_size, position)
+            } else {
+                crate::opener::Press::Close
+            };
+            match press {
+                crate::opener::Press::None => {}
+                crate::opener::Press::Close => self.opener = None,
+                crate::opener::Press::Choose(choice) => {
+                    self.opener = None;
+                    self.open_choice(choice, now);
+                }
+            }
             self.sessions.insert(id, PointerSession { role: PointerRole::Palm, start_pos: position, start_time: now });
             return;
         }
@@ -1500,6 +1612,7 @@ impl InputHandler {
             can_undo: page.can_undo(),
             can_redo: page.can_redo(),
             new_board_armed: self.new_board_armed_until.is_some(),
+            opener_visible: self.opener.is_some(),
         };
         if self.toolbar_visible {
             self.toolbar.render(&toolbar_state, &mut normal_v, &mut normal_i);
@@ -1516,6 +1629,10 @@ impl InputHandler {
         }
         if let Some(textbox) = &self.textbox {
             textbox.render(&self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
+        }
+
+        if let Some(opener) = &self.opener {
+            opener.render(self.screen_size, &self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
         }
 
         if let Some(menu) = &self.radial_menu {

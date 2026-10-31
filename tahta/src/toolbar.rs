@@ -78,6 +78,9 @@ pub enum ToolbarAction {
     /// Starts an empty board (all pages) — takes a second tap to confirm;
     /// the old board is kept as a backup file.
     NewBoard,
+    /// Shows/hides the "Aç" panel: a PDF from the usual folders or a USB
+    /// stick, or the backup board (see `opener.rs`).
+    OpenFile,
 }
 
 /// What the toolbar needs to know to draw each button's current-state
@@ -107,6 +110,7 @@ pub struct ToolbarState {
     pub can_redo: bool,
     /// The first "New board" tap is waiting for its confirming second tap.
     pub new_board_armed: bool,
+    pub opener_visible: bool,
 }
 
 // Scaled down toward the dock's ~36px icon / ~10px gap proportions
@@ -171,6 +175,7 @@ const ENTRIES: &[Entry] = &[
         ToolbarAction::PrevPage,
         ToolbarAction::NextPage,
         ToolbarAction::NewBoard,
+        ToolbarAction::OpenFile,
     ]),
     Entry::Direct(ToolbarAction::MinimizeToDesktop),
 ];
@@ -380,6 +385,7 @@ fn is_active(action: ToolbarAction, state: &ToolbarState) -> bool {
         ToolbarAction::ToggleTextBox => state.textbox_visible,
         ToolbarAction::ToggleBrowser => state.browser_visible,
         ToolbarAction::NewBoard => state.new_board_armed,
+        ToolbarAction::OpenFile => state.opener_visible,
         _ => false,
     }
 }
@@ -481,6 +487,18 @@ fn draw_glyph(
             push_line(tl + Vec2::new(0.0, h), tl, 3.0, COLOR_GLYPH, out_vertices, out_indices);
             push_line(center - Vec2::new(r * 0.4, 0.0), center + Vec2::new(r * 0.4, 0.0), 3.5, COLOR_GLYPH, out_vertices, out_indices);
             push_line(center - Vec2::new(0.0, r * 0.4), center + Vec2::new(0.0, r * 0.4), 3.5, COLOR_GLYPH, out_vertices, out_indices);
+        }
+        ToolbarAction::OpenFile => {
+            // A folder: body outline with a tab on its top-left.
+            let (w, h) = (r * 1.9, r * 1.4);
+            let tl = center - Vec2::new(w / 2.0, h / 2.0 - r * 0.15);
+            let tab = tl + Vec2::new(w * 0.4, 0.0);
+            push_line(tl - Vec2::new(0.0, r * 0.3), tab + Vec2::new(-r * 0.15, -r * 0.3), 3.0, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(tab + Vec2::new(-r * 0.15, -r * 0.3), tab, 3.0, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(tl - Vec2::new(0.0, r * 0.3), tl + Vec2::new(0.0, h), 3.0, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(tab, tl + Vec2::new(w, 0.0), 3.0, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(tl + Vec2::new(w, 0.0), tl + Vec2::new(w, h), 3.0, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(tl + Vec2::new(w, h), tl + Vec2::new(0.0, h), 3.0, COLOR_GLYPH, out_vertices, out_indices);
         }
         ToolbarAction::Clear => {
             push_line(center + Vec2::new(-r, -r), center + Vec2::new(r, r), 5.0, COLOR_GLYPH, out_vertices, out_indices);

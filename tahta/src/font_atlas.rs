@@ -33,7 +33,7 @@ const RASTER_PX: f32 = 64.0;
 /// Every character `textbox.rs`'s virtual keyboard can produce (see its
 /// `ROWS` and `to_lower_tr`), plus the punctuation URLs, search
 /// terms and UI messages use (the address bar and toasts draw with this).
-const CHARSET: &str = " 0123456789ABCÇDEFGĞHIİJKLMNOÖPQRSŞTUÜVWXYZabcçdefgğhıijklmnoöpqrsştuüvwxyz.,:;/\\?=&%#-_+~@!'\"()[]{}*<>|$…";
+const CHARSET: &str = " 0123456789ABCÇDEFGĞHIİJKLMNOÖPQRSŞTUÜVWXYZabcçdefgğhıijklmnoöpqrsştuüvwxyz.,:;/\\?=&%#-_+~@!'\"()[]{}*<>|$…·";
 
 const ATLAS_WIDTH: u32 = 512;
 
