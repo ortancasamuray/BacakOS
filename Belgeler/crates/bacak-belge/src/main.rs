@@ -1,671 +1,777 @@
-use anyhow::{Context, Result};
-use slint::{Image, Rgba8Pixel, SharedPixelBuffer};
+//! Bacak Belge — the BacakOS document and picture viewer: PDF (MuPDF),
+//! EPUB (as text) and pictures, with pen/highlighter notes on PDF pages and
+//! pictures.
+
+mod cizim;
+mod metin;
+mod yerlesim;
+
+use anyhow::{anyhow, bail, Context, Result};
+use slint::{Color, ComponentHandle, Image, Model, Rgba8Pixel, SharedPixelBuffer, VecModel};
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::time::Duration;
+use yerlesim::Sigdir;
 
 slint::include_modules!();
 
-// ── Annotation / drawing ───────────────────────────────────────────────────
+const RESIM_UZANTILARI: &[&str] = &[
+    "jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff", "tif", "ico", "qoi", "hdr", "pbm", "pgm", "ppm", "pnm",
+];
 
-struct AnnotationState {
-    base_buf:     Vec<u8>,  // completed strokes (RGBA)
-    composite:    Vec<u8>,  // base_buf + current stroke preview
-    stroke_buf:   Vec<u8>,  // current marker stroke at full opacity
-    last_pt:      Option<(f32, f32)>,
-    pen_color:    [u8; 4],  // RGB + alpha (220 pen / 255 marker)
-    pen_radius:   f32,
-    is_marker:    bool,
-    marker_alpha: u8,       // layer opacity for marker strokes
-    canvas_w:     u32,
-    canvas_h:     u32,
+/// Above this many pixels a PDF page is rendered smaller and scaled up
+/// instead: a huge zoom must not take gigabytes or freeze the window.
+const EN_COK_PIKSEL: f32 = 40.0e6;
+
+/// Pen and highlighter: diameter in logical px on screen when the stroke is
+/// drawn, and opacity. The highlighter's whole stroke is one path, so where
+/// it crosses itself it does not get darker.
+const KALEM: (f32, u8) = (4.0, 235);
+const FOSFORLU: (f32, u8) = (24.0, 100);
+
+fn main() -> Result<()> {
+    let ui = AppWindow::new()?;
+    // The EPUB reading mode follows the desktop's dark mode (BacakOsSDK);
+    // its button switches it for this window only.
+    ui.set_dark_mode(bacak_sdk::Gorunum::load().koyu);
+    ui.on_dosya_yoneticisi(dosya_yoneticisini_ac);
+
+    // Dock/menu launches pass no file: still show a window, never exit.
+    let Some(arg) = std::env::args_os().nth(1).map(PathBuf::from) else {
+        ui.set_mode("bos".into());
+        ui.set_status("Açık belge yok. PDF, EPUB ya da resim dosyasını dosya yöneticisinde açın.".into());
+        ui.run()?;
+        return Ok(());
+    };
+    let path = arg.canonicalize().unwrap_or(arg);
+    ui.set_filename(dosya_adi(&path).into());
+
+    let sonuc = match tur(&path) {
+        Some(Tur::Pdf) => pdf_ac(&ui, path),
+        Some(Tur::Epub) => epub_ac(&ui, &path),
+        Some(Tur::Resim) => resim_ac(&ui, path),
+        None => Err(anyhow!("Bu dosya türü açılamıyor: {}", dosya_adi(&path))),
+    };
+    if let Err(e) = sonuc {
+        hata_goster(&ui, &e);
+    }
+    ui.run()?;
+    Ok(())
 }
 
-impl AnnotationState {
-    fn new() -> Self {
-        Self {
-            base_buf:     Vec::new(),
-            composite:    Vec::new(),
-            stroke_buf:   Vec::new(),
-            last_pt:      None,
-            pen_color:    [255, 68, 68, 220],
-            pen_radius:   3.5,
-            is_marker:    false,
-            marker_alpha: 110,
-            canvas_w:     0,
-            canvas_h:     0,
-        }
-    }
-
-    fn ensure_sized(&mut self, w: u32, h: u32) {
-        let need = (w * h * 4) as usize;
-        if self.canvas_w != w || self.canvas_h != h {
-            self.canvas_w = w;
-            self.canvas_h = h;
-            self.base_buf.resize(need, 0);
-            self.composite.resize(need, 0);
-            self.stroke_buf.resize(need, 0);
-        }
-    }
-
-    fn to_image(&self) -> Image {
-        if self.canvas_w == 0 || self.canvas_h == 0 {
-            return Image::default();
-        }
-        let buf = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
-            &self.composite, self.canvas_w, self.canvas_h,
-        );
-        Image::from_rgba8(buf)
-    }
+fn hata_goster(ui: &AppWindow, e: &anyhow::Error) {
+    ui.set_mode("error".into());
+    ui.set_status(format!("{e:#}").into());
 }
 
-fn alpha_blend(dst: &mut [u8], idx: usize, color: [u8; 4], coverage: f32) {
-    let sa = color[3] as f32 / 255.0 * coverage;
-    let da = dst[idx + 3] as f32 / 255.0;
-    let oa = sa + da * (1.0 - sa);
-    if oa < 1e-4 { return; }
-    dst[idx]     = ((color[0] as f32 * sa + dst[idx]     as f32 * da * (1.0 - sa)) / oa) as u8;
-    dst[idx + 1] = ((color[1] as f32 * sa + dst[idx + 1] as f32 * da * (1.0 - sa)) / oa) as u8;
-    dst[idx + 2] = ((color[2] as f32 * sa + dst[idx + 2] as f32 * da * (1.0 - sa)) / oa) as u8;
-    dst[idx + 3] = (oa * 255.0) as u8;
+fn dosya_adi(p: &Path) -> String {
+    p.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
-fn stamp_circle(buf: &mut [u8], w: u32, h: u32, cx: f32, cy: f32, r: f32, color: [u8; 4]) {
-    let x0 = ((cx - r - 1.0) as i32).max(0) as u32;
-    let x1 = ((cx + r + 1.0) as i32).min(w as i32 - 1) as u32;
-    let y0 = ((cy - r - 1.0) as i32).max(0) as u32;
-    let y1 = ((cy + r + 1.0) as i32).min(h as i32 - 1) as u32;
-    for py in y0..=y1 {
-        for px in x0..=x1 {
-            let dist = (((px as f32 - cx).powi(2) + (py as f32 - cy).powi(2)) as f32).sqrt();
-            if dist > r + 1.0 { continue; }
-            let coverage = (r + 1.0 - dist).clamp(0.0, 1.0);
-            let idx = ((py * w + px) * 4) as usize;
-            alpha_blend(buf, idx, color, coverage);
-        }
+fn dosya_yoneticisini_ac() {
+    let ev = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/"));
+    let acildi = bacak_sdk::masaustu::uygulama("altay").is_some_and(|u| u.baslat(&[ev.as_path()]).is_ok());
+    if !acildi {
+        let _ = std::process::Command::new("altay").arg(&ev).spawn();
     }
 }
 
-/// Composite a full-opacity stroke layer onto dst at reduced opacity (for marker tool).
-/// Prevents alpha accumulation within a single stroke — uniform transparency across the whole path.
-fn blend_layer(dst: &mut [u8], src: &[u8], alpha: u8) {
-    let npix = dst.len() / 4;
-    for i in 0..npix {
-        let si = i * 4;
-        let src_a = src[si + 3];
-        if src_a == 0 { continue; }
-        let eff_a = (src_a as u32 * alpha as u32 / 255) as u8;
-        alpha_blend(dst, si, [src[si], src[si + 1], src[si + 2], eff_a], 1.0);
-    }
-}
-
-fn draw_segment(buf: &mut [u8], w: u32, h: u32, p0: (f32, f32), p1: (f32, f32), r: f32, color: [u8; 4]) {
-    let dx = p1.0 - p0.0;
-    let dy = p1.1 - p0.1;
-    let dist = (dx * dx + dy * dy).sqrt();
-    let steps = (dist * 1.5).ceil() as u32 + 1;
-    for i in 0..=steps {
-        let t = i as f32 / steps as f32;
-        stamp_circle(buf, w, h, p0.0 + dx * t, p0.1 + dy * t, r, color);
-    }
-}
-
-fn bind_annotations(ui: &AppWindow, annot: Rc<RefCell<AnnotationState>>) {
-    // set-tool: "pen" or "marker"; clicking the active tool toggles draw-mode off
-    let ui_h = ui.as_weak();
-    let a1 = annot.clone();
-    ui.on_set_tool(move |tool| {
-        let Some(ui) = ui_h.upgrade() else { return };
-        let same = ui.get_draw_mode() && ui.get_active_tool().as_str() == tool.as_str();
-        if same {
-            ui.set_draw_mode(false);
-        } else {
-            ui.set_active_tool(tool.clone());
-            ui.set_draw_mode(true);
-            let mut st = a1.borrow_mut();
-            st.is_marker = tool.as_str() == "marker";
-            st.pen_radius = if st.is_marker { 12.0 } else { 3.5 };
-            st.pen_color[3] = if st.is_marker { 255 } else { 220 };
-        }
-    });
-
-    let ui_h = ui.as_weak();
-    let a2 = annot.clone();
-    ui.on_pick_color(move |color| {
-        let mut st = a2.borrow_mut();
-        let alpha = if st.is_marker { 255 } else { 220 };
-        st.pen_color = [color.red(), color.green(), color.blue(), alpha];
-        if let Some(ui) = ui_h.upgrade() {
-            ui.set_pen_color(color);
-        }
-    });
-
-    let ui_h = ui.as_weak();
-    let a3 = annot.clone();
-    ui.on_draw_start(move |x, y| {
-        let Some(ui) = ui_h.upgrade() else { return };
-        let w = ui.get_canvas_w_px() as u32;
-        let h = ui.get_canvas_h_px() as u32;
-        if w == 0 || h == 0 { return; }
-        let mut st = a3.borrow_mut();
-        st.ensure_sized(w, h);
-        if st.is_marker {
-            st.stroke_buf.fill(0);
-            let c = st.pen_color;
-            let r = st.pen_radius;
-            stamp_circle(&mut st.stroke_buf, w, h, x, y, r, c);
-            let base = st.base_buf.clone();
-            st.composite.copy_from_slice(&base);
-            let ma = st.marker_alpha;
-            let sb = st.stroke_buf.clone();
-            blend_layer(&mut st.composite, &sb, ma);
-        } else {
-            let base = st.base_buf.clone();
-            st.composite.copy_from_slice(&base);
-            let r = st.pen_radius;
-            let c = st.pen_color;
-            stamp_circle(&mut st.composite, w, h, x, y, r, c);
-        }
-        st.last_pt = Some((x, y));
-        drop(st);
-        let img = a3.borrow().to_image();
-        ui.set_annotation_layer(img);
-    });
-
-    let ui_h = ui.as_weak();
-    let a4 = annot.clone();
-    ui.on_draw_move(move |x, y| {
-        let Some(ui) = ui_h.upgrade() else { return };
-        let w = ui.get_canvas_w_px() as u32;
-        let h = ui.get_canvas_h_px() as u32;
-        let prev = {
-            let st = a4.borrow();
-            if w == 0 || h == 0 || st.last_pt.is_none() { return; }
-            st.last_pt.unwrap()
-        };
-        {
-            let mut st = a4.borrow_mut();
-            let r = st.pen_radius;
-            let c = st.pen_color;
-            if st.is_marker {
-                draw_segment(&mut st.stroke_buf, w, h, prev, (x, y), r, c);
-                let base = st.base_buf.clone();
-                st.composite.copy_from_slice(&base);
-                let ma = st.marker_alpha;
-                let sb = st.stroke_buf.clone();
-                blend_layer(&mut st.composite, &sb, ma);
-            } else {
-                draw_segment(&mut st.composite, w, h, prev, (x, y), r, c);
-            }
-            st.last_pt = Some((x, y));
-        }
-        let img = a4.borrow().to_image();
-        ui.set_annotation_layer(img);
-    });
-
-    let a5 = annot.clone();
-    ui.on_draw_end(move || {
-        let mut st = a5.borrow_mut();
-        if st.is_marker {
-            // Commit the marker stroke onto base at reduced opacity
-            let ma = st.marker_alpha;
-            let sb = st.stroke_buf.clone();
-            blend_layer(&mut st.base_buf, &sb, ma);
-            st.stroke_buf.fill(0);
-            let base = st.base_buf.clone();
-            st.composite.copy_from_slice(&base);
-        } else {
-            let comp = st.composite.clone();
-            st.base_buf.copy_from_slice(&comp);
-        }
-        st.last_pt = None;
-    });
-
-    let ui_h = ui.as_weak();
-    let a6 = annot.clone();
-    ui.on_clear_annotations(move || {
-        let mut st = a6.borrow_mut();
-        st.base_buf.fill(0);
-        st.composite.fill(0);
-        st.stroke_buf.fill(0);
-        st.last_pt = None;
-        if let Some(ui) = ui_h.upgrade() {
-            ui.set_annotation_layer(Image::default());
-        }
-    });
-}
-
-fn bind_annotations_noop(ui: &AppWindow) {
-    ui.on_set_tool(|_| {});
-    ui.on_pick_color(|_| {});
-    ui.on_draw_start(|_, _| {});
-    ui.on_draw_move(|_, _| {});
-    ui.on_draw_end(|| {});
-    ui.on_clear_annotations(|| {});
-}
-
-// ── File-type detection ────────────────────────────────────────────────────
-
-enum FileKind {
+enum Tur {
     Pdf,
     Epub,
-    Image,
+    Resim,
 }
 
-fn detect(path: &Path) -> Option<FileKind> {
-    match path.extension()?.to_string_lossy().to_lowercase().as_str() {
-        "pdf" => Some(FileKind::Pdf),
-        "epub" => Some(FileKind::Epub),
-        "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp" | "tiff" | "tif"
-        | "ico" | "qoi" | "hdr" | "pbm" | "pgm" | "ppm" | "pnm" => Some(FileKind::Image),
+fn tur(path: &Path) -> Option<Tur> {
+    let ext = path.extension()?.to_string_lossy().to_lowercase();
+    match ext.as_str() {
+        "pdf" => Some(Tur::Pdf),
+        "epub" => Some(Tur::Epub),
+        e if RESIM_UZANTILARI.contains(&e) => Some(Tur::Resim),
         _ => None,
     }
 }
 
-// ── Image helpers ──────────────────────────────────────────────────────────
+// ── View: zoom, fit, pan ────────────────────────────────────────────────────
 
-fn image_siblings(path: &Path) -> Vec<PathBuf> {
-    const EXTS: &[&str] = &[
-        "jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff", "tif",
-        "ico", "qoi", "hdr", "pbm", "pgm", "ppm", "pnm",
-    ];
+/// The view's size; before the first layout the window's.
+fn gorunum(ui: &AppWindow) -> (f32, f32) {
+    let (w, h) = (ui.get_view_w(), ui.get_view_h());
+    if w > 1.0 && h > 1.0 {
+        return (w, h);
+    }
+    let s = ui.window().size().to_logical(ui.window().scale_factor());
+    ((s.width).max(400.0), (s.height - 56.0).max(300.0))
+}
+
+struct Gorus {
+    zoom: f32,
+    kip: Sigdir,
+    /// May the fit enlarge small content (PDF pages yes, pictures no)?
+    buyutme: bool,
+}
+
+impl Gorus {
+    /// Zoom for content of `boyut` (logical px at 100 %) in the current fit.
+    fn uygula(&mut self, boyut: (f32, f32), view: (f32, f32)) {
+        if let Some(z) = yerlesim::sigdir_zoom(boyut, view, self.kip, self.buyutme) {
+            self.zoom = z;
+        }
+    }
+}
+
+/// Shows content of logical size `boyut` (at 100 %) at the current zoom and
+/// keeps the pan inside the view.
+fn olcu_yaz(ui: &AppWindow, g: &Gorus, boyut: (f32, f32)) {
+    let (w, h) = (boyut.0 * g.zoom, boyut.1 * g.zoom);
+    ui.set_icerik_w(w);
+    ui.set_icerik_h(h);
+    ui.set_zoom(g.zoom);
+    ui.set_sigdir_kipi(g.kip.etiket().into());
+    let (vw, vh) = gorunum(ui);
+    ui.set_pan_x(yerlesim::sinirla(ui.get_pan_x(), w, vw));
+    ui.set_pan_y(yerlesim::sinirla(ui.get_pan_y(), h, vh));
+}
+
+/// After a page change: horizontally centred, at the top of the page.
+fn sayfa_basina(ui: &AppWindow) {
+    ui.set_pan_x(0.0);
+    ui.set_pan_y(f32::MAX);
+}
+
+/// Zoom buttons/keys keep the point at the view's centre where it was.
+fn zoom_degisti(ui: &AppWindow, eski: f32, yeni: f32) {
+    let k = yeni / eski.max(1e-3);
+    ui.set_pan_x(ui.get_pan_x() * k);
+    ui.set_pan_y(ui.get_pan_y() * k);
+}
+
+/// Re-fit after the window was resized, once it has settled.
+fn yeniden_boyut_baglanti(ui: &AppWindow, mut yenile: impl FnMut() + 'static) {
+    let zamanlayici = Rc::new(slint::Timer::default());
+    let yenile = Rc::new(RefCell::new(move || yenile()));
+    ui.on_view_resized(move || {
+        let y = yenile.clone();
+        zamanlayici.start(slint::TimerMode::SingleShot, Duration::from_millis(120), move || (y.borrow_mut())());
+    });
+}
+
+// ── Notes ───────────────────────────────────────────────────────────────────
+
+struct NotDurumu {
+    notlar: cizim::Notlar,
+    sayfa: usize,
+    /// The page's height / width.
+    oran: f32,
+    model: Rc<VecModel<Cizgi>>,
+    renk: [u8; 3],
+    fosforlu: bool,
+}
+
+impl NotDurumu {
+    fn new(ui: &AppWindow, notlar: cizim::Notlar) -> Rc<RefCell<NotDurumu>> {
+        let model = Rc::new(VecModel::default());
+        ui.set_cizgiler(model.clone().into());
+        Rc::new(RefCell::new(NotDurumu { notlar, sayfa: 0, oran: 1.0, model, renk: [0xe5, 0x39, 0x35], fosforlu: false }))
+    }
+
+    fn ui_cizgi(&self, c: &cizim::Cizgi) -> Cizgi {
+        let [r, g, b, a] = c.renk;
+        Cizgi { komut: c.komut(self.oran).into(), renk: Color::from_argb_u8(a, r, g, b), kalinlik: c.kalinlik }
+    }
+
+    /// Shows the notes of `sayfa`, whose height/width is `oran`.
+    fn sayfa(&mut self, ui: &AppWindow, sayfa: usize, oran: f32) {
+        self.notlar.bitir();
+        self.sayfa = sayfa;
+        self.oran = oran;
+        self.yenile(ui);
+    }
+
+    fn yenile(&self, ui: &AppWindow) {
+        let v: Vec<Cizgi> = self.notlar.cizgiler(self.sayfa).iter().map(|c| self.ui_cizgi(c)).collect();
+        self.model.set_vec(v);
+        self.durum(ui);
+    }
+
+    fn durum(&self, ui: &AppWindow) {
+        ui.set_not_var(self.notlar.var_mi(self.sayfa));
+        ui.set_geri_alinabilir(self.notlar.geri_alinabilir(self.sayfa));
+    }
+}
+
+fn notlari_bagla(ui: &AppWindow, st: &Rc<RefCell<NotDurumu>>) {
+    let ui_h = ui.as_weak();
+    let s = st.clone();
+    ui.on_set_tool(move |arac| {
+        let Some(ui) = ui_h.upgrade() else { return };
+        // Tapping the active tool again leaves drawing mode.
+        if ui.get_draw_mode() && ui.get_active_tool() == arac {
+            ui.set_draw_mode(false);
+            return;
+        }
+        let mut st = s.borrow_mut();
+        st.fosforlu = arac.as_str() == "marker";
+        // A highlighter is yellow unless chosen otherwise.
+        if st.fosforlu && st.renk == [0xe5, 0x39, 0x35] {
+            st.renk = [0xfd, 0xd8, 0x35];
+        } else if !st.fosforlu && st.renk == [0xfd, 0xd8, 0x35] {
+            st.renk = [0xe5, 0x39, 0x35];
+        }
+        let [r, g, b] = st.renk;
+        ui.set_pen_color(Color::from_rgb_u8(r, g, b));
+        ui.set_active_tool(arac);
+        ui.set_draw_mode(true);
+    });
+
+    let ui_h = ui.as_weak();
+    let s = st.clone();
+    ui.on_pick_color(move |c| {
+        s.borrow_mut().renk = [c.red(), c.green(), c.blue()];
+        if let Some(ui) = ui_h.upgrade() {
+            ui.set_pen_color(c);
+        }
+    });
+
+    let s = st.clone();
+    ui.on_draw_start(move |x, y, w| {
+        let mut st = s.borrow_mut();
+        let (cap, alfa) = if st.fosforlu { FOSFORLU } else { KALEM };
+        let [r, g, b] = st.renk;
+        let sayfa = st.sayfa;
+        st.notlar.basla(sayfa, (x, y), [r, g, b, alfa], cap / w.max(1.0));
+        let c = st.notlar.cizgiler(sayfa).last().map(|c| st.ui_cizgi(c));
+        if let Some(c) = c {
+            st.model.push(c);
+        }
+    });
+
+    let s = st.clone();
+    ui.on_draw_move(move |x, y, w| {
+        let mut st = s.borrow_mut();
+        // Points closer than ~0.7 px on screen add nothing but path length.
+        let Some(c) = st.notlar.devam((x, y), 0.7 / w.max(1.0)).cloned() else { return };
+        let ui_c = st.ui_cizgi(&c);
+        let n = st.model.row_count();
+        if n > 0 {
+            st.model.set_row_data(n - 1, ui_c);
+        }
+    });
+
+    let ui_h = ui.as_weak();
+    let s = st.clone();
+    ui.on_draw_end(move || {
+        let mut st = s.borrow_mut();
+        if st.notlar.bitir() {
+            if let Some(ui) = ui_h.upgrade() {
+                st.durum(&ui);
+            }
+        }
+    });
+
+    let ui_h = ui.as_weak();
+    let s = st.clone();
+    ui.on_undo(move || {
+        let Some(ui) = ui_h.upgrade() else { return };
+        let mut st = s.borrow_mut();
+        let sayfa = st.sayfa;
+        if st.notlar.geri_al(sayfa) {
+            st.yenile(&ui);
+        }
+    });
+
+    let ui_h = ui.as_weak();
+    let s = st.clone();
+    ui.on_clear_annotations(move || {
+        let Some(ui) = ui_h.upgrade() else { return };
+        let mut st = s.borrow_mut();
+        let sayfa = st.sayfa;
+        st.notlar.temizle(sayfa);
+        st.yenile(&ui);
+    });
+}
+
+// ── PDF ─────────────────────────────────────────────────────────────────────
+
+const DPI: f32 = 96.0;
+
+struct Pdf {
+    doc: mupdf::Document,
+    sayfa: i32,
+    adet: i32,
+    gorus: Gorus,
+}
+
+/// A page's size in logical px at 100 % (96 dpi).
+fn pdf_sayfa_boyutu(doc: &mupdf::Document, i: i32) -> Result<(f32, f32)> {
+    let b = doc.load_page(i)?.bounds()?;
+    Ok(((b.x1 - b.x0) * DPI / 72.0, (b.y1 - b.y0) * DPI / 72.0))
+}
+
+/// Renders page `i` so that 1 pixel is 1 physical pixel at `zoom` on a
+/// screen of `olcek` (HiDPI) — sharp, never blurry from upscaling.
+fn pdf_ciz(doc: &mupdf::Document, i: i32, zoom: f32, olcek: f32) -> Result<Image> {
+    let page = doc.load_page(i)?;
+    let b = page.bounds()?;
+    let mut s = zoom * olcek * DPI / 72.0;
+    let piksel = (b.x1 - b.x0) * (b.y1 - b.y0) * s * s;
+    if piksel > EN_COK_PIKSEL {
+        s *= (EN_COK_PIKSEL / piksel).sqrt();
+    }
+    let px = page.to_pixmap(&mupdf::Matrix::new_scale(s, s), &mupdf::Colorspace::device_rgb(), 0.0, true)?;
+    let (w, h, n) = (px.width(), px.height(), px.n() as usize);
+    if n < 3 {
+        bail!("beklenmeyen renk biçimi");
+    }
+    let mut buf = SharedPixelBuffer::<Rgba8Pixel>::new(w, h);
+    for (d, s) in buf.make_mut_slice().iter_mut().zip(px.samples().chunks_exact(n)) {
+        *d = Rgba8Pixel { r: s[0], g: s[1], b: s[2], a: 255 };
+    }
+    Ok(Image::from_rgba8(buf))
+}
+
+fn pdf_ac(ui: &AppWindow, path: PathBuf) -> Result<()> {
+    let yol = path.to_str().context("dosya yolu UTF-8 değil")?;
+    let doc = mupdf::Document::open(yol)
+        .map_err(|e| anyhow!("PDF açılamadı: dosya bozuk ya da PDF değil.\n\n({e})"))?;
+    let gerekli = doc.needs_password().unwrap_or(false);
+    let pdf = Rc::new(RefCell::new(None::<Pdf>));
+    let notlar = NotDurumu::new(ui, cizim::Notlar::ac(&path));
+    notlari_bagla(ui, &notlar);
+
+    let goster: Rc<dyn Fn()> = {
+        let ui_h = ui.as_weak();
+        let pdf = pdf.clone();
+        let notlar = notlar.clone();
+        Rc::new(move || {
+            let Some(ui) = ui_h.upgrade() else { return };
+            let mut p = pdf.borrow_mut();
+            let Some(p) = p.as_mut() else { return };
+            let sonuc = pdf_sayfa_boyutu(&p.doc, p.sayfa).and_then(|boyut| {
+                p.gorus.uygula(boyut, gorunum(&ui));
+                let img = pdf_ciz(&p.doc, p.sayfa, p.gorus.zoom, ui.window().scale_factor())?;
+                Ok((boyut, img))
+            });
+            match sonuc {
+                Ok((boyut, img)) => {
+                    ui.set_content_image(img);
+                    olcu_yaz(&ui, &p.gorus, boyut);
+                    ui.set_page_num(p.sayfa + 1);
+                    ui.set_page_count(p.adet);
+                    ui.set_has_prev(p.sayfa > 0);
+                    ui.set_has_next(p.sayfa + 1 < p.adet);
+                    ui.set_status("".into());
+                    ui.set_mode("pdf".into());
+                    let mut n = notlar.borrow_mut();
+                    if n.sayfa != p.sayfa as usize || n.model.row_count() == 0 {
+                        n.sayfa(&ui, p.sayfa as usize, boyut.1 / boyut.0);
+                    }
+                }
+                Err(e) => {
+                    ui.set_content_image(Image::default());
+                    ui.set_status(format!("Sayfa {} gösterilemedi: {e}", p.sayfa + 1).into());
+                    ui.set_mode("pdf".into());
+                }
+            }
+        })
+    };
+
+    // Opens the document once it can be read (after the password, if any).
+    let baslat: Rc<dyn Fn(mupdf::Document) -> Result<()>> = {
+        let pdf = pdf.clone();
+        let goster = goster.clone();
+        Rc::new(move |doc: mupdf::Document| {
+            let adet = doc.page_count().map_err(|e| anyhow!("PDF okunamadı: {e}"))?;
+            if adet <= 0 {
+                bail!("Belgede gösterilecek sayfa yok.");
+            }
+            *pdf.borrow_mut() = Some(Pdf { doc, sayfa: 0, adet, gorus: Gorus { zoom: 1.0, kip: Sigdir::Sayfa, buyutme: true } });
+            let g = goster.clone();
+            // After the window is laid out, so the fit sees its real size.
+            slint::Timer::single_shot(Duration::ZERO, move || g());
+            Ok(())
+        })
+    };
+
+    if gerekli {
+        ui.set_mode("parola".into());
+        let ui_h = ui.as_weak();
+        let bekleyen = RefCell::new(Some(doc));
+        let baslat = baslat.clone();
+        ui.on_parola_gir(move |parola| {
+            let Some(ui) = ui_h.upgrade() else { return };
+            let mut b = bekleyen.borrow_mut();
+            let Some(doc) = b.as_mut() else { return };
+            match doc.authenticate(&parola) {
+                Ok(true) => {
+                    ui.set_parola_hatasi("".into());
+                    ui.set_mode("loading".into());
+                    let doc = b.take().expect("belge var");
+                    if let Err(e) = baslat(doc) {
+                        hata_goster(&ui, &e);
+                    }
+                }
+                _ => ui.set_parola_hatasi("Parola yanlış.".into()),
+            }
+        });
+    } else {
+        baslat(doc)?;
+    }
+
+    let sayfaya_git = {
+        let pdf = pdf.clone();
+        let goster = goster.clone();
+        let ui_h = ui.as_weak();
+        move |hedef: Box<dyn Fn(i32, i32) -> i32>| {
+            let degisti = {
+                let mut p = pdf.borrow_mut();
+                let Some(p) = p.as_mut() else { return };
+                let yeni = hedef(p.sayfa, p.adet).clamp(0, p.adet - 1);
+                let d = yeni != p.sayfa;
+                p.sayfa = yeni;
+                d
+            };
+            if degisti {
+                if let Some(ui) = ui_h.upgrade() {
+                    sayfa_basina(&ui);
+                }
+                goster();
+            }
+        }
+    };
+    let git = Rc::new(sayfaya_git);
+    let g = git.clone();
+    ui.on_next_action(move || g(Box::new(|s, _| s + 1)));
+    let g = git.clone();
+    ui.on_prev_action(move || g(Box::new(|s, _| s - 1)));
+    let g = git.clone();
+    ui.on_first_page(move || g(Box::new(|_, _| 0)));
+    let g = git.clone();
+    ui.on_last_page(move || g(Box::new(|_, n| n - 1)));
+
+    let zoomla = {
+        let pdf = pdf.clone();
+        let goster = goster.clone();
+        let ui_h = ui.as_weak();
+        Rc::new(move |yeni: Box<dyn Fn(&mut Gorus)>| {
+            let (eski, z) = {
+                let mut p = pdf.borrow_mut();
+                let Some(p) = p.as_mut() else { return };
+                let eski = p.gorus.zoom;
+                yeni(&mut p.gorus);
+                (eski, p.gorus.zoom)
+            };
+            if let Some(ui) = ui_h.upgrade() {
+                zoom_degisti(&ui, eski, z);
+            }
+            goster();
+        })
+    };
+    let z = zoomla.clone();
+    ui.on_zoom_in(move || z(Box::new(|g| {
+        g.zoom = yerlesim::adim(g.zoom, true);
+        g.kip = Sigdir::Serbest;
+    })));
+    let z = zoomla.clone();
+    ui.on_zoom_out(move || z(Box::new(|g| {
+        g.zoom = yerlesim::adim(g.zoom, false);
+        g.kip = Sigdir::Serbest;
+    })));
+    let z = zoomla.clone();
+    ui.on_pinch_ended(move |v| z(Box::new(move |g| {
+        g.zoom = v.clamp(yerlesim::ZOOM_MIN, yerlesim::ZOOM_MAX);
+        g.kip = Sigdir::Serbest;
+    })));
+    let z = zoomla.clone();
+    let ui_h = ui.as_weak();
+    ui.on_fit(move || {
+        if let Some(ui) = ui_h.upgrade() {
+            sayfa_basina(&ui);
+        }
+        z(Box::new(|g| g.kip = g.kip.sonraki()));
+    });
+
+    let g = goster.clone();
+    let p = pdf.clone();
+    yeniden_boyut_baglanti(ui, move || {
+        // Only a fitted page changes with the window.
+        if p.borrow().as_ref().is_some_and(|p| p.gorus.kip != Sigdir::Serbest) {
+            g();
+        }
+    });
+    Ok(())
+}
+
+// ── Pictures ────────────────────────────────────────────────────────────────
+
+/// The pictures in the same folder, in natural order.
+fn kardes_resimler(path: &Path) -> Vec<PathBuf> {
     let dir = path.parent().unwrap_or(Path::new("."));
     let mut v: Vec<PathBuf> = std::fs::read_dir(dir)
         .into_iter()
         .flatten()
         .flatten()
         .map(|e| e.path())
-        .filter(|p| {
-            p.is_file()
-                && p.extension()
-                    .and_then(|e| e.to_str())
-                    .map(|e| EXTS.contains(&e.to_lowercase().as_str()))
-                    .unwrap_or(false)
-        })
+        .filter(|p| matches!(tur(p), Some(Tur::Resim)) && p.is_file())
         .collect();
-    v.sort();
+    if !v.iter().any(|p| p == path) {
+        v.push(path.to_path_buf());
+    }
+    v.sort_by(|a, b| yerlesim::dogal_sira(&dosya_adi(a), &dosya_adi(b)));
     v
 }
 
-fn load_image(path: &Path) -> Option<Image> {
-    let img = image::open(path).ok()?.into_rgba8();
-    let (w, h) = img.dimensions();
-    let buf = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(img.as_raw(), w, h);
-    Some(Image::from_rgba8(buf))
+/// Decodes a picture upright: phone photos carry their rotation in EXIF.
+fn resim_yukle(path: &Path) -> Result<(Image, (u32, u32))> {
+    use image::ImageDecoder;
+    let mut dec = image::ImageReader::open(path)?.with_guessed_format()?.into_decoder()?;
+    let yon = dec.orientation().unwrap_or(image::metadata::Orientation::NoTransforms);
+    let mut img = image::DynamicImage::from_decoder(dec)?;
+    img.apply_orientation(yon);
+    let rgba = img.into_rgba8();
+    let (w, h) = rgba.dimensions();
+    let buf = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(rgba.as_raw(), w, h);
+    Ok((Image::from_rgba8(buf), (w, h)))
 }
 
-fn image_info(path: &Path, idx: usize, total: usize) -> String {
-    if let Ok((w, h)) = image::image_dimensions(path) {
-        format!("{}×{}  {}/{}", w, h, idx + 1, total)
-    } else {
-        format!("{}/{}", idx + 1, total)
-    }
+struct Resimler {
+    liste: Vec<PathBuf>,
+    sira: usize,
+    boyut: (f32, f32),
+    gorus: Gorus,
 }
 
-// ── PDF helpers ────────────────────────────────────────────────────────────
+fn resim_ac(ui: &AppWindow, path: PathBuf) -> Result<()> {
+    let liste = kardes_resimler(&path);
+    let sira = liste.iter().position(|p| *p == path).unwrap_or(0);
+    let r = Rc::new(RefCell::new(Resimler {
+        liste,
+        sira,
+        boyut: (0.0, 0.0),
+        gorus: Gorus { zoom: 1.0, kip: Sigdir::Sayfa, buyutme: false },
+    }));
+    let notlar = NotDurumu::new(ui, cizim::Notlar::default());
+    notlari_bagla(ui, &notlar);
+    ui.set_mode("image".into());
 
-const DPI_BASE: f32 = 96.0;
-
-fn render_pdf_page(doc: &mupdf::Document, page_idx: i32, zoom: f32) -> Result<Image> {
-    let page = doc.load_page(page_idx)?;
-    let scale = zoom * DPI_BASE / 72.0;
-    let mat = mupdf::Matrix::new_scale(scale, scale);
-    let px = page.to_pixmap(&mat, &mupdf::Colorspace::device_rgb(), 0.0, true)?;
-    let w = px.width() as u32;
-    let h = px.height() as u32;
-    let mut rgba = Vec::with_capacity((w * h * 4) as usize);
-    for chunk in px.samples().chunks(3) {
-        rgba.extend_from_slice(chunk);
-        rgba.push(255);
-    }
-    let buf = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(&rgba, w, h);
-    Ok(Image::from_rgba8(buf))
-}
-
-// ── EPUB helpers ───────────────────────────────────────────────────────────
-
-fn html_to_text(html: &str) -> String {
-    let mut out = String::with_capacity(html.len());
-    let mut in_tag = false;
-    let mut buf = String::new();
-    for ch in html.chars() {
-        match ch {
-            '<' => { in_tag = true; buf.clear(); }
-            '>' => {
-                in_tag = false;
-                let tag = buf.trim().to_lowercase();
-                if matches!(tag.as_str(), "p" | "/p" | "br" | "br/" | "br /")
-                    || tag.starts_with("h1") || tag.starts_with("h2") || tag.starts_with("h3")
-                    || tag.starts_with("/h")
-                {
-                    out.push('\n');
-                    if (tag.starts_with('h') && !tag.starts_with("/h")) || tag == "p" {
-                        out.push('\n');
-                    }
-                }
-                buf.clear();
-            }
-            _ if in_tag => { buf.push(ch); }
-            '&' => { buf.clear(); buf.push('&'); }
-            ';' if buf.starts_with('&') => {
-                let entity = &buf[1..];
-                out.push(match entity {
-                    "amp" => '&', "lt" => '<', "gt" => '>',
-                    "nbsp" => '\u{00A0}', "quot" => '"', "apos" => '\'',
-                    _ => { out.push_str(&buf); out.push(';'); buf.clear(); continue; }
-                });
-                buf.clear();
-            }
-            _ if buf.starts_with('&') => { buf.push(ch); }
-            _ => { out.push(ch); }
-        }
-    }
-    // Collapse blank lines > 2
-    let mut result = String::new();
-    let mut blank = 0u32;
-    for line in out.lines() {
-        let t = line.trim();
-        if t.is_empty() { blank += 1; if blank <= 2 { result.push('\n'); } }
-        else { blank = 0; result.push_str(t); result.push('\n'); }
-    }
-    result
-}
-
-// ── Main ───────────────────────────────────────────────────────────────────
-
-fn main() -> Result<()> {
-    // Dock/menu launches pass no argument (there's no file to open yet), so
-    // show an empty-state window instead of erroring out before any window
-    // exists — a dock click must always produce a visible window.
-    let Some(path) = std::env::args().nth(1).map(PathBuf::from) else {
-        let ui = AppWindow::new()?;
-        ui.set_mode("error".into());
-        ui.set_status("Bir dosya açmak için Altay dosya yöneticisini kullanın.".into());
-        ui.run()?;
-        return Ok(());
-    };
-    let path = path.canonicalize().unwrap_or(path);
-
-    let filename = path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("")
-        .to_string();
-
-    let ui = AppWindow::new()?;
-    ui.set_filename(filename.clone().into());
-    // EPUB reading mode starts dark when the desktop is dark (BacakOsSDK);
-    // the ☀ button still switches it for this window only.
-    ui.set_dark_mode(bacak_sdk::Gorunum::load().koyu);
-
-    let Some(kind) = detect(&path) else {
-        ui.set_mode("error".into());
-        ui.set_status("Desteklenmeyen dosya türü".into());
-        ui.run()?;
-        return Ok(());
-    };
-    ui.set_mode("loading".into());
-
-    match kind {
-        FileKind::Image => run_image(ui, path)?,
-        FileKind::Pdf   => run_pdf(ui, path)?,
-        FileKind::Epub  => run_epub(ui, path)?,
-    }
-
-    Ok(())
-}
-
-// ── Image mode ─────────────────────────────────────────────────────────────
-
-fn run_image(ui: AppWindow, path: PathBuf) -> Result<()> {
-    bind_annotations(&ui, Rc::new(RefCell::new(AnnotationState::new())));
-
-    let siblings = image_siblings(&path);
-    let start_idx = siblings.iter().position(|p| p == &path).unwrap_or(0);
-
-    let idx = Rc::new(Cell::new(start_idx));
-    let zoom = Rc::new(Cell::new(1.0f32));
-    let siblings = Rc::new(siblings);
-
-    let load = {
+    let yukle = {
         let ui_h = ui.as_weak();
-        let sib  = siblings.clone();
-        let z    = zoom.clone();
-        move |i: usize| {
+        let r = r.clone();
+        let notlar = notlar.clone();
+        Rc::new(move || {
             let Some(ui) = ui_h.upgrade() else { return };
-            let path = &sib[i];
-            let img = load_image(path).unwrap_or_default();
-            let info = image_info(path, i, sib.len());
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
-            ui.set_content_image(img);
-            ui.set_filename(name.into());
-            ui.set_status(info.into());
-            ui.set_zoom(z.get());
+            let mut r = r.borrow_mut();
+            let path = r.liste[r.sira].clone();
+            let (sira, adet) = (r.sira, r.liste.len());
+            ui.set_filename(dosya_adi(&path).into());
+            ui.set_has_prev(sira > 0);
+            ui.set_has_next(sira + 1 < adet);
             ui.set_pan_x(0.0);
             ui.set_pan_y(0.0);
-            ui.set_has_prev(i > 0);
-            ui.set_has_next(i + 1 < sib.len());
-            ui.set_mode("image".into());
-        }
-    };
-
-    // Deferred first load so window appears before heavy I/O
-    let load_c = load.clone();
-    let idx_init = start_idx;
-    slint::Timer::single_shot(std::time::Duration::ZERO, move || load_c(idx_init));
-
-    let idx_c = idx.clone(); let load_c = load.clone();
-    ui.on_prev_action(move || {
-        let i = idx_c.get(); if i > 0 { idx_c.set(i - 1); load_c(i - 1); }
-    });
-
-    let idx_c = idx.clone(); let sib_len = siblings.len(); let load_c = load.clone();
-    ui.on_next_action(move || {
-        let i = idx_c.get();
-        if i + 1 < sib_len { idx_c.set(i + 1); load_c(i + 1); }
-    });
-
-    let z = zoom.clone(); let ui_h = ui.as_weak();
-    ui.on_zoom_in(move || {
-        if let Some(ui) = ui_h.upgrade() { let v = (z.get() * 1.25).min(8.0); z.set(v); ui.set_zoom(v); }
-    });
-    let z = zoom.clone(); let ui_h = ui.as_weak();
-    ui.on_zoom_out(move || {
-        if let Some(ui) = ui_h.upgrade() { let v = (z.get() / 1.25).max(0.1); z.set(v); ui.set_zoom(v); }
-    });
-    let z = zoom.clone(); let ui_h = ui.as_weak();
-    ui.on_fit(move || {
-        if let Some(ui) = ui_h.upgrade() {
-            z.set(1.0); ui.set_zoom(1.0);
-            ui.set_pan_x(0.0); ui.set_pan_y(0.0);
-        }
-    });
-
-    let z = zoom.clone(); let ui_h = ui.as_weak();
-    ui.on_pinch_ended(move |new_zoom| {
-        if let Some(ui) = ui_h.upgrade() {
-            let v = new_zoom.clamp(0.1, 8.0);
-            z.set(v);
-            ui.set_zoom(v);
-        }
-    });
-
-    ui.run()?;
-    Ok(())
-}
-
-// ── PDF mode ───────────────────────────────────────────────────────────────
-
-fn run_pdf(ui: AppWindow, path: PathBuf) -> Result<()> {
-    bind_annotations(&ui, Rc::new(RefCell::new(AnnotationState::new())));
-
-    let doc = mupdf::Document::open(path.to_str().context("geçersiz yol")?)
-        .context("PDF açılamadı")?;
-    let page_count = doc.page_count()?;
-
-    ui.set_page_count(page_count);
-    ui.set_has_prev(false);
-    ui.set_has_next(page_count > 1);
-    ui.set_mode("pdf".into());
-
-    let doc  = Rc::new(doc);
-    let pidx = Rc::new(Cell::new(0i32));
-    let zoom = Rc::new(Cell::new(1.0f32));
-
-    let refresh = {
-        let ui_h = ui.as_weak();
-        let doc  = doc.clone();
-        let pi   = pidx.clone();
-        let zi   = zoom.clone();
-        let pc   = page_count;
-        move || {
-            let Some(ui) = ui_h.upgrade() else { return };
-            let idx  = pi.get();
-            let z    = zi.get();
-            match render_pdf_page(&doc, idx, z) {
-                Ok(img) => {
+            ui.set_draw_mode(false);
+            let mut n = notlar.borrow_mut();
+            n.notlar.bitir();
+            match resim_yukle(&path) {
+                Ok((img, (w, h))) => {
+                    r.boyut = (w as f32, h as f32);
+                    r.gorus.kip = Sigdir::Sayfa;
+                    let boyut = r.boyut;
+                    r.gorus.uygula(boyut, gorunum(&ui));
                     ui.set_content_image(img);
-                    ui.set_page_num(idx + 1);
-                    ui.set_zoom(z);
-                    ui.set_status(format!("{}/{}", idx + 1, pc).into());
-                    ui.set_has_prev(idx > 0);
-                    ui.set_has_next(idx + 1 < pc);
-                    ui.set_mode("pdf".into());
+                    olcu_yaz(&ui, &r.gorus, boyut);
+                    ui.set_status(format!("{w}×{h}   {}/{adet}", sira + 1).into());
+                    n.notlar = cizim::Notlar::ac(&path);
+                    n.sayfa(&ui, 0, h as f32 / w.max(1) as f32);
                 }
                 Err(e) => {
-                    ui.set_status(format!("Hata: {e}").into());
-                    ui.set_mode("error".into());
+                    ui.set_content_image(Image::default());
+                    ui.set_status(format!("Resim açılamadı: {e}   {}/{adet}", sira + 1).into());
+                    n.notlar = cizim::Notlar::default();
+                    n.sayfa(&ui, 0, 1.0);
                 }
             }
-        }
+        })
     };
+    let y = yukle.clone();
+    slint::Timer::single_shot(Duration::ZERO, move || y());
 
-    let r = refresh.clone();
-    slint::Timer::single_shot(std::time::Duration::ZERO, move || r());
+    let git = {
+        let r = r.clone();
+        let yukle = yukle.clone();
+        Rc::new(move |hedef: Box<dyn Fn(usize, usize) -> usize>| {
+            let degisti = {
+                let mut r = r.borrow_mut();
+                let yeni = hedef(r.sira, r.liste.len()).min(r.liste.len() - 1);
+                let d = yeni != r.sira;
+                r.sira = yeni;
+                d
+            };
+            if degisti {
+                yukle();
+            }
+        })
+    };
+    let g = git.clone();
+    ui.on_next_action(move || g(Box::new(|s, _| s + 1)));
+    let g = git.clone();
+    ui.on_prev_action(move || g(Box::new(|s, _| s.saturating_sub(1))));
+    let g = git.clone();
+    ui.on_first_page(move || g(Box::new(|_, _| 0)));
+    let g = git.clone();
+    ui.on_last_page(move || g(Box::new(|_, n| n.saturating_sub(1))));
 
-    let pi = pidx.clone(); let r = refresh.clone(); let ui_h = ui.as_weak();
-    ui.on_prev_action(move || {
-        let i = pi.get(); if i > 0 { pi.set(i - 1); r();
-            if let Some(ui) = ui_h.upgrade() { ui.set_pan_x(0.0); ui.set_pan_y(0.0); }
+    let zoomla = {
+        let r = r.clone();
+        let ui_h = ui.as_weak();
+        Rc::new(move |yeni: Box<dyn Fn(&mut Gorus)>| {
+            let Some(ui) = ui_h.upgrade() else { return };
+            let mut r = r.borrow_mut();
+            let eski = r.gorus.zoom;
+            yeni(&mut r.gorus);
+            let boyut = r.boyut;
+            r.gorus.uygula(boyut, gorunum(&ui));
+            zoom_degisti(&ui, eski, r.gorus.zoom);
+            olcu_yaz(&ui, &r.gorus, boyut);
+        })
+    };
+    let z = zoomla.clone();
+    ui.on_zoom_in(move || z(Box::new(|g| {
+        g.zoom = yerlesim::adim(g.zoom, true);
+        g.kip = Sigdir::Serbest;
+    })));
+    let z = zoomla.clone();
+    ui.on_zoom_out(move || z(Box::new(|g| {
+        g.zoom = yerlesim::adim(g.zoom, false);
+        g.kip = Sigdir::Serbest;
+    })));
+    let z = zoomla.clone();
+    ui.on_pinch_ended(move |v| z(Box::new(move |g| {
+        g.zoom = v.clamp(yerlesim::ZOOM_MIN, yerlesim::ZOOM_MAX);
+        g.kip = Sigdir::Serbest;
+    })));
+    let z = zoomla.clone();
+    ui.on_fit(move || z(Box::new(|g| {
+        // A picture: whole picture ↔ 100 %.
+        g.kip = if g.kip == Sigdir::Sayfa { Sigdir::Serbest } else { Sigdir::Sayfa };
+        if g.kip == Sigdir::Serbest {
+            g.zoom = 1.0;
         }
-    });
+    })));
 
-    let pi = pidx.clone(); let pc = page_count; let r = refresh.clone(); let ui_h = ui.as_weak();
-    ui.on_next_action(move || {
-        let i = pi.get(); if i + 1 < pc { pi.set(i + 1); r();
-            if let Some(ui) = ui_h.upgrade() { ui.set_pan_x(0.0); ui.set_pan_y(0.0); }
-        }
-    });
-
-    let zi = zoom.clone(); let r = refresh.clone();
-    ui.on_zoom_in(move || { zi.set((zi.get() * 1.25).min(5.0)); r(); });
-
-    let zi = zoom.clone(); let r = refresh.clone();
-    ui.on_zoom_out(move || { zi.set((zi.get() / 1.25).max(0.2)); r(); });
-
-    let zi = zoom.clone(); let r = refresh.clone(); let ui_h = ui.as_weak();
-    ui.on_fit(move || {
-        zi.set(1.0); r();
-        if let Some(ui) = ui_h.upgrade() { ui.set_pan_x(0.0); ui.set_pan_y(0.0); }
-    });
-
-    let zi = zoom.clone(); let r = refresh.clone();
-    ui.on_pinch_ended(move |new_zoom| {
-        zi.set(new_zoom.clamp(0.2, 5.0));
-        r();
-    });
-
-    ui.run()?;
+    let z = zoomla.clone();
+    yeniden_boyut_baglanti(ui, move || z(Box::new(|_| {})));
     Ok(())
 }
 
-// ── EPUB mode ──────────────────────────────────────────────────────────────
+// ── EPUB ────────────────────────────────────────────────────────────────────
 
-fn run_epub(ui: AppWindow, path: PathBuf) -> Result<()> {
-    bind_annotations_noop(&ui);
+/// Chapter titles from the table of contents; a spine item without an entry
+/// of its own (a chapter split into files) keeps the title before it.
+fn bolum_basliklari(book: &epub::doc::EpubDoc<std::io::BufReader<std::fs::File>>) -> Vec<String> {
+    fn duzle(v: &[epub::doc::NavPoint], out: &mut Vec<(String, PathBuf)>) {
+        for n in v {
+            let yol = n.content.to_string_lossy();
+            let yol = yol.split('#').next().unwrap_or("").to_string();
+            out.push((n.label.trim().to_string(), PathBuf::from(yol)));
+            duzle(&n.children, out);
+        }
+    }
+    let mut girdiler = Vec::new();
+    duzle(&book.toc, &mut girdiler);
+    let mut basliklar = vec![String::new(); book.get_num_chapters()];
+    for (ad, yol) in girdiler {
+        if let Some(i) = book.resource_uri_to_chapter(&yol) {
+            if basliklar[i].is_empty() && !ad.is_empty() {
+                basliklar[i] = ad;
+            }
+        }
+    }
+    let mut onceki = String::new();
+    for b in basliklar.iter_mut() {
+        if b.is_empty() {
+            b.clone_from(&onceki);
+        } else {
+            onceki.clone_from(b);
+        }
+    }
+    basliklar
+}
 
-    let mut book = epub::doc::EpubDoc::new(&path).context("EPUB açılamadı")?;
-
-    let title = book.mdata("title").map(|m| m.value.clone())
-        .unwrap_or_else(|| path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string());
-
-    let num_ch = book.get_num_chapters();
-
-    let ch_titles: Vec<String> = (0..num_ch)
-        .map(|i| {
-            book.set_current_chapter(i);
-            book.get_current_id()
-                .map(|id| format!("Bölüm {} — {}", i + 1, id))
-                .unwrap_or_else(|| format!("Bölüm {}", i + 1))
-        })
-        .collect();
-
-    ui.set_filename(title.into());
+fn epub_ac(ui: &AppWindow, path: &Path) -> Result<()> {
+    let book = epub::doc::EpubDoc::new(path)
+        .map_err(|e| anyhow!("EPUB açılamadı: dosya bozuk ya da EPUB değil.\n\n({e})"))?;
+    let adet = book.get_num_chapters();
+    if adet == 0 {
+        bail!("Kitapta okunacak bölüm yok.");
+    }
+    let baslik = book
+        .mdata("title")
+        .map(|m| m.value.clone())
+        .filter(|t| !t.trim().is_empty())
+        .unwrap_or_else(|| path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default());
+    let basliklar = bolum_basliklari(&book);
+    ui.set_filename(baslik.into());
     ui.set_mode("epub".into());
 
     let book = Rc::new(RefCell::new(book));
-    let cidx = Rc::new(Cell::new(0usize));
-
-    let load_ch = {
-        let ui_h   = ui.as_weak();
-        let book   = book.clone();
-        let titles = ch_titles.clone();
-        move |i: usize| {
+    let sira = Rc::new(Cell::new(0usize));
+    let yukle = {
+        let ui_h = ui.as_weak();
+        let book = book.clone();
+        let sira = sira.clone();
+        Rc::new(move |i: usize| {
             let Some(ui) = ui_h.upgrade() else { return };
+            let i = i.min(adet - 1);
+            sira.set(i);
             let mut b = book.borrow_mut();
             b.set_current_chapter(i);
-            let text = b.get_current_str()
-                .map(|(html, _)| html_to_text(&html))
-                .unwrap_or_else(|| "(Bölüm okunamadı)".to_string());
-            let ct = titles.get(i).cloned().unwrap_or_default();
-            ui.set_chapter_title(ct.into());
-            ui.set_body_text(text.into());
-            ui.set_status(format!("{}/{}", i + 1, num_ch).into());
+            let metin = b
+                .get_current_str()
+                .map(|(html, _)| metin::html_to_text(&html))
+                .unwrap_or_else(|| "(Bu bölüm okunamadı.)".to_string());
+            ui.set_chapter_title(basliklar[i].clone().into());
+            ui.set_body_text(metin.into());
+            ui.set_status(format!("Bölüm {}/{adet}", i + 1).into());
             ui.set_has_prev(i > 0);
-            ui.set_has_next(i + 1 < num_ch);
-            ui.set_mode("epub".into());
-        }
+            ui.set_has_next(i + 1 < adet);
+        })
     };
+    let y = yukle.clone();
+    slint::Timer::single_shot(Duration::ZERO, move || y(0));
 
-    let lc = load_ch.clone();
-    slint::Timer::single_shot(std::time::Duration::ZERO, move || lc(0));
-
-    let ci = cidx.clone(); let lc = load_ch.clone();
-    ui.on_prev_action(move || {
-        let i = ci.get(); if i > 0 { ci.set(i - 1); lc(i - 1); }
-    });
-
-    let ci = cidx.clone(); let lc = load_ch.clone();
-    ui.on_next_action(move || {
-        let i = ci.get(); if i + 1 < num_ch { ci.set(i + 1); lc(i + 1); }
-    });
+    let (y, s) = (yukle.clone(), sira.clone());
+    ui.on_next_action(move || y(s.get() + 1));
+    let (y, s) = (yukle.clone(), sira.clone());
+    ui.on_prev_action(move || y(s.get().saturating_sub(1)));
+    let y = yukle.clone();
+    ui.on_first_page(move || y(0));
+    let y = yukle.clone();
+    ui.on_last_page(move || y(adet - 1));
 
     let ui_h = ui.as_weak();
     ui.on_font_larger(move || {
-        if let Some(ui) = ui_h.upgrade() { ui.set_font_size((ui.get_font_size() + 2).min(32)); }
+        if let Some(ui) = ui_h.upgrade() {
+            ui.set_font_size((ui.get_font_size() + 2).min(40));
+        }
     });
     let ui_h = ui.as_weak();
     ui.on_font_smaller(move || {
-        if let Some(ui) = ui_h.upgrade() { ui.set_font_size((ui.get_font_size() - 2).max(10)); }
+        if let Some(ui) = ui_h.upgrade() {
+            ui.set_font_size((ui.get_font_size() - 2).max(10));
+        }
     });
     let ui_h = ui.as_weak();
     ui.on_toggle_dark(move || {
-        if let Some(ui) = ui_h.upgrade() { ui.set_dark_mode(!ui.get_dark_mode()); }
-    });
-
-    // zoom/fit not used in epub but must be bound
-    ui.on_zoom_in(|| {});
-    ui.on_zoom_out(|| {});
-    ui.on_fit(|| {});
-
-    let ui_h = ui.as_weak();
-    ui.on_pinch_ended(move |scale| {
         if let Some(ui) = ui_h.upgrade() {
-            let new_fs = ((ui.get_font_size() as f32 * scale).round() as i32).clamp(10, 32);
-            ui.set_font_size(new_fs);
+            ui.set_dark_mode(!ui.get_dark_mode());
         }
     });
-
-    ui.run()?;
+    let ui_h = ui.as_weak();
+    ui.on_pinch_ended(move |olcek| {
+        if let Some(ui) = ui_h.upgrade() {
+            ui.set_font_size(((ui.get_font_size() as f32 * olcek).round() as i32).clamp(10, 40));
+        }
+    });
     Ok(())
 }

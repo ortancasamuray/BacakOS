@@ -29,34 +29,44 @@ Belgeler/
 
 ## `bacak-belge` — birleşik görüntüleyici
 
-`src/main.rs` (~670 satır, tek dosya), açılan dosyanın uzantısına göre
-seçilen üç render motorunu yan yana barındırır:
+`src/main.rs` açılan dosyanın uzantısına göre üç görüntüleme kipini
+barındırır; pencere gerektirmeyen mantık birim testli küçük modüllerdedir
+(`cargo test -p bacak-belge`):
 
-- **PDF** — `mupdf::Document::load_page` → `zoom * 96/72` DPI'de
-  `Matrix::new_scale` → `page.to_pixmap` → `SharedPixelBuffer<Rgba8Pixel>`
-  üzerinden bir Slint `Image`'a dönüştürülür.
-- **EPUB** — konteyner/spine ayrıştırması için `epub` crate; bölüm HTML'i,
-  tam bir HTML render motoru yerine kendi yazdığımız `html_to_text`
-  temizleyicisinden (etiket kaldırma + yaygın entity çözme) geçirilir.
-- **Resim** — `image` crate'in `DynamicImage::into_rgba8`'i, PDF
-  render'ının kullandığı aynı `SharedPixelBuffer<Rgba8Pixel>` yoluna
-  kopyalanır.
+| Modül | Görevi |
+|---|---|
+| `cizim.rs` | Kalem/fosforlu notlar (vektör çizgiler), geri al, kayıt |
+| `metin.rs` | EPUB bölümü (X)HTML → okunur metin |
+| `yerlesim.rs` | Sığdırma/yakınlaştırma/kaydırma hesabı, doğal dosya sırası |
 
-Üçü de aynı Slint `Image` tipinde buluşur, bu yüzden `ui/main.slint`
-içindeki görünüm alanı, yakınlaştırma ve sayfa gezinme arayüzü formattan
-bağımsızdır.
+- **PDF** — MuPDF sayfayı `zoom × pencere ölçeği × 96/72` ile çizer; HiDPI
+  ekranda da keskindir, 40 MP'yi aşacak çizim küçültülüp büyütülür. Sayfa
+  pencereye sığdırılmış açılır ("Sayfaya sığdır" ↔ "Genişliğe sığdır");
+  parolalı PDF parola sorar; okunamayan dosya pencerede hata gösterir.
+- **EPUB** — kapsayıcı/omurga/içindekiler için `epub` crate; bölüm adları
+  içindekilerden gelir. `metin::html_to_text` paragrafları, başlıkları,
+  liste maddelerini ve satır sonlarını korur, adlı ve sayısal karakter
+  kodlarını çözer, `<head>`, `<style>`, `<script>` ve yorumları atar. Her
+  bölüm başından açılır.
+- **Resim** — EXIF yönüne göre dik açılır, küçük resimler büyütülmeden
+  pencereye sığdırılır; ◀ ▶ klasördeki resimleri doğal sırayla gezer.
 
-### Not alma katmanı
+Tekerlek kaydırır (PDF sayfasının sonunda sayfa çevirir), Ctrl+tekerlek
+yakınlaştırır, sürükleme kaydırır (sayfa görünümden çıkamaz), iki parmak
+sıkıştırır. Tuşlar: PageDown/→/Boşluk, PageUp/←, Home/End, `+` `-` `0`,
+↑ ↓, Esc, Ctrl+Z.
 
-`AnnotationState` (`main.rs`'nin başında) sayfa başına üç RGBA buffer
-tutar: `base_buf` (tamamlanmış vuruşlar), `stroke_buf` (devam eden vuruş,
-tam opaklıkta), `composite` (ikisinin toplamı, ekrana çizilen). Kalem ve
-marker aynı kod yolunu farklı alfa ile kullanır: kalem vuruşları 220
-alfa'da, marker vuruşları ise 110 alfa'da (`marker_alpha`) — bu sayede
-üst üste binen fosforlu vuruşlar opak yığılmak yerine doğal şekilde
-koyulaşır. Bir vuruş, işaretçi bırakıldığında (`base_buf`'a düzleştirilir)
-kesinleşir; o ana kadar yalnızca `composite` dokunulur, böylece devam eden
-bir vuruş tam sayfa yeniden çizim maliyeti getirmez.
+### Notlar (`cizim.rs`)
+
+Kalem ve fosforlu çizgiler **sayfa koordinatlarında** (sayfanın eni/boyuna
+oran olarak) saklanır ve sayfa dikdörtgeninin içinde Slint `Path` olarak
+çizilir; yakınlaştırma, kaydırma ya da pencere boyutu ne olursa olsun
+işaretledikleri yerde kalırlar, her PDF sayfasının ve resmin notu kendine
+aittir. Fosforlu çizgi tek bir yarı saydam yoldur, kendi üstünden geçtiği
+yerde koyulaşmaz. Geri al (düğme ya da Ctrl+Z) son çizgiyi ya da "Notları
+sil"i geri alır. Notlar her değişiklikte
+`$XDG_DATA_HOME/bacak-belge/notlar/<belge yolunun özeti>.json` dosyasına
+yazılır ve belge yeniden açılınca geri gelir.
 
 ## Üç bağımsız görüntüleyici
 
@@ -82,9 +92,7 @@ yansıtır (ör. `bacak-resim` hiçbir zaman MuPDF'e bağlanmaz).
 
 ## Test
 
-Şu an ayrı bir test paketi yok — doğrulama, her ikiliye gerçek
-PDF/EPUB/resim dosyaları açılarak manuel yapılıyor. Dördü için de faydalı
-bir sonraki adım, render fonksiyonlarını (`render_page`, `html_to_text`,
-`load_slint_image`) bir Slint olay döngüsü olmadan birim test edilebilir
-hale getirmek için saf byte-girdi/piksel-veya-metin-çıktı fonksiyonlarına
-ayırmak olur — `kur`'un `backend/`'i kurulumcu için zaten bunu yapıyor.
+`bacak-belge`'nin pencere gerektirmeyen mantığı birim testlidir (`cargo
+test -p bacak-belge`: notlar, EPUB metni, sığdırma/kaydırma). Çizim ve arayüz
+gerçek PDF/EPUB/resim dosyaları açılarak denenir. Üç bağımsız görüntüleyicinin
+testi yoktur ve `build-debs.sh` onları derlemez.
