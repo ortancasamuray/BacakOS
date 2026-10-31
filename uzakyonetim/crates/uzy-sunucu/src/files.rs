@@ -6,16 +6,24 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
 fn write(path: &Path, data: &[u8], mode: u32) -> Result<(), String> {
-    let tmp = path.with_extension("tmp");
-    let _ = std::fs::remove_file(&tmp);
+    // A unique temp name: two writers of the same file (a periodic and a
+    // manual screenshot both updating `son.jpg`) must not trip over one.
+    let suffix: String = random_bytes::<6>().iter().map(|b| format!("{b:02x}")).collect();
+    let tmp = path.with_extension(format!("tmp.{suffix}"));
     let mut f = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(mode)
         .open(&tmp)
         .map_err(|e| format!("{}: {e}", tmp.display()))?;
-    f.write_all(data).and_then(|_| f.sync_all()).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))
+    if let Err(e) = f.write_all(data).and_then(|_| f.sync_all()) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e.to_string());
+    }
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("{}: {e}", path.display())
+    })
 }
 
 pub fn write_private(path: &Path, data: &[u8]) -> Result<(), String> {

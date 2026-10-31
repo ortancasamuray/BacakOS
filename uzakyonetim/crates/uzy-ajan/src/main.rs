@@ -151,14 +151,14 @@ async fn run_forever() -> Result<(), String> {
         let session = session(&saved.sunucu, pending.clone());
         tokio::select! {
             r = session => {
-                screen::set_indicator(false);
+                screen::clear();
                 match r {
                     Ok(()) => { log::info!("sunucu bağlantıyı kapattı"); backoff = 5; }
                     Err(e) => log::warn!("bağlantı: {e} — {backoff} sn sonra yeniden denenecek"),
                 }
             }
             _ = &mut shutdown => {
-                screen::set_indicator(false);
+                screen::clear();
                 return Ok(());
             }
         }
@@ -204,7 +204,12 @@ async fn session(addr: &str, pending: Arc<ops::PendingTotp>) -> Result<(), Strin
         loop {
             let secs = *interval_rx.borrow_and_update();
             let on = secs > 0 && policy.ekran_izleme;
-            screen::set_indicator(on);
+            let was_shown = screen::badge_shown();
+            screen::set_periodic(on);
+            if on && !was_shown {
+                // The first shot must already carry the badge.
+                tokio::time::sleep(screen::BADGE_DELAY).await;
+            }
             if !on {
                 if interval_rx.changed().await.is_err() {
                     break;
@@ -275,7 +280,7 @@ async fn execute(cmd: Command, policy: uzy_proto::Policy, pending: &ops::Pending
             denied("Bacak Onay")
         }
         Command::EkranAl if policy.ekran_izleme => {
-            let shot = screen::capture().await?;
+            let shot = screen::capture_on_demand().await?;
             Ok(Payload::Ekran(shot))
         }
         Command::EkranAl => denied("ekran izleme"),
