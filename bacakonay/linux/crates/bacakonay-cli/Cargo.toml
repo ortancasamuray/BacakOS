@@ -36,3 +36,18 @@ assets = [
     ["target/release/libpam_bacakonay.so", "usr/lib/x86_64-linux-gnu/security/pam_bacakonay.so", "644"],
 ]
 maintainer-scripts = "debian/"
+
+# libpam looks for modules only in the multiarch directory, and cargo-deb has
+# no placeholder for it: one variant per cross architecture (build-debs.sh
+# passes `--variant <arch>`). The package name stays `bacakonay`.
+[package.metadata.deb.variants.arm64]
+assets = [
+    ["target/release/bacakonay", "usr/bin/", "755"],
+    ["target/release/libpam_bacakonay.so", "usr/lib/aarch64-linux-gnu/security/pam_bacakonay.so", "644"],
+]
+
+[package.metadata.deb.variants.riscv64]
+assets = [
+    ["target/release/bacakonay", "usr/bin/", "755"],
+    ["target/release/libpam_bacakonay.so", "usr/lib/riscv64-linux-gnu/security/pam_bacakonay.so", "644"],
+]
