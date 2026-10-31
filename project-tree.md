@@ -141,13 +141,10 @@ sudo pkill bacak-compositor
 
 | Krate | Binary | Açıklama |
 |-------|--------|----------|
-| `bacak-belge` | `/usr/bin/bacak-belge` | Birleşik görüntüleyici: PDF + EPUB + resim + metin |
-| `bacak-pdf` | `/usr/bin/bacak-pdf` | Sadece PDF (`pdfium`) |
-| `bacak-epub` | `/usr/bin/bacak-epub` | Sadece EPUB |
-| `bacak-resim` | `/usr/bin/bacak-resim` | Sadece resim |
+| `bacak-belge` | `/usr/bin/bacak-belge` | Birleşik görüntüleyici: PDF + EPUB + resim |
 
-**UI:** Her krate `ui/main.slint` dosyasında Slint UI tanımlar.
-**Araçlar:** kalem, marker, silgi, renk seçimi, sayfa kaydırma (tek parmak pan), yakınlaştırma (pinch-to-zoom).
+**UI:** `crates/bacak-belge/ui/main.slint` (Slint).
+**Araçlar:** kalem, fosforlu kalem, renk seçimi, geri al, belge başına kaydedilen notlar; sığdırma, yakınlaştırma (tekerlek/sıkıştırma), kaydırma.
 
 ---
 
