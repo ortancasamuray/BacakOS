@@ -12,6 +12,21 @@
 //! `/var/lib/bacakonay` so a user can neither read their secret back nor
 //! replace it with one an attacker knows. `KULLANICI` defaults to the user
 //! who ran `sudo` (`$SUDO_USER`).
+//!
+//! `bacakonay arayuz durum|kur [--zorla]|kaldir` is the line protocol the
+//! desktop window (`bacakonay-ayar`, run as `sudo -S bacakonay arayuz …`)
+//! speaks. It only ever acts on `$SUDO_USER` — the person at the desktop
+//! enrolls themselves, never someone else. Replies on stdout, one per line:
+//!
+//! ```text
+//! durum  → ACIK <algoritma> <hane> <periyot> | KAPALI
+//! kur    → KAYITLI                       (already enrolled, no --zorla; exit 3)
+//!          URI <otpauth://…>  ANAHTAR <base32 in groups of 4>
+//!          then per code line read from stdin:
+//!          TAMAM | HATALI <deneme>/3 | IPTAL (empty line) | VAZGECILDI
+//! kaldir → KALDIRILDI | KAYITSIZDI
+//! ```
+//! Errors go to stderr with a non-zero exit, like the other commands.
 
 use std::ffi::{CStr, CString};
 use std::io::{self, BufRead, IsTerminal, Write};
@@ -54,6 +69,7 @@ fn main() -> ExitCode {
         "durum" => cmd_status(rest),
         "dogrula" | "doğrula" => cmd_verify(rest),
         "kaldir" | "kaldır" => cmd_remove(rest),
+        "arayuz" | "arayüz" => return cmd_ui(rest),
         _ => Err(format!("bilinmeyen komut: {cmd}\n\n{USAGE}")),
     };
     match result {
@@ -136,11 +152,8 @@ fn cmd_enroll(args: &[String]) -> Result<(), String> {
         ));
     }
 
-    let secret = Zeroizing::new(
-        otp::generate_secret(params.algorithm.recommended_secret_len()).map_err(|e| e.to_string())?,
-    );
+    let (secret, link) = new_secret(&user, &params)?;
     let host = hostname();
-    let link = Zeroizing::new(uri::totp_uri(&user, &host, &secret, &params));
 
     println!("\n  Bacak Onay — {user}@{host} için iki adımlı doğrulama\n");
     let code = QrCode::new(link.as_bytes()).map_err(|e| e.to_string())?;
@@ -174,9 +187,7 @@ fn cmd_enroll(args: &[String]) -> Result<(), String> {
         if line.trim().is_empty() {
             return Err("iptal edildi; hiçbir şey değiştirilmedi".into());
         }
-        if otp::verify_totp(&secret, &params, &line, now(), 1, None).is_some() {
-            let e = Enrollment { secret: secret.clone(), params, last_step: None };
-            store.save(&user, &e).map_err(|e| e.to_string())?;
+        if confirm_and_save(&store, &user, &secret, &params, &line)? {
             println!(
                 "\n  ✓ Etkin. {user} artık giriş ekranında paroladan sonra Bacak Onay kodu girecek."
             );
@@ -185,6 +196,109 @@ fn cmd_enroll(args: &[String]) -> Result<(), String> {
         println!("  ✗ Kod tutmadı ({attempt}/3). Telefonun saatinin otomatik olduğundan emin olun.");
     }
     Err("3 hatalı deneme; hiçbir şey değiştirilmedi".into())
+}
+
+/// A fresh secret for `user` and its pairing `otpauth://` link.
+fn new_secret(user: &str, params: &OtpParams) -> Result<(Zeroizing<Vec<u8>>, Zeroizing<String>), String> {
+    let secret = Zeroizing::new(
+        otp::generate_secret(params.algorithm.recommended_secret_len()).map_err(|e| e.to_string())?,
+    );
+    let link = Zeroizing::new(uri::totp_uri(user, &hostname(), &secret, params));
+    Ok((secret, link))
+}
+
+/// Turn 2FA on only once the phone proves it has the secret — otherwise a
+/// mis-scan would lock the user out at the next login.
+fn confirm_and_save(store: &Store, user: &str, secret: &[u8], params: &OtpParams, code: &str) -> Result<bool, String> {
+    if otp::verify_totp(secret, params, code, now(), 1, None).is_none() {
+        return Ok(false);
+    }
+    let e = Enrollment { secret: Zeroizing::new(secret.to_vec()), params: *params, last_step: None };
+    store.save(user, &e).map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
+/// The desktop window's protocol (see the module doc).
+fn cmd_ui(args: &[String]) -> ExitCode {
+    let reply = |line: &str| {
+        let mut out = io::stdout().lock();
+        let _ = writeln!(out, "{line}");
+        let _ = out.flush();
+    };
+    let fail = |e: String| {
+        eprintln!("bacakonay: {e}");
+        ExitCode::from(1)
+    };
+    // Only ever the person who ran sudo — never a user named on the line.
+    let user = match std::env::var("SUDO_USER") {
+        Ok(u) => u,
+        Err(_) => return fail("arayüz kipi yalnız `sudo` ile çalışır".into()),
+    };
+    let user = match target_user(Some(&user)) {
+        Ok(u) => u,
+        Err(e) => return fail(e),
+    };
+    let store = Store::system();
+    match args.first().map(String::as_str) {
+        Some("durum") => match store.load(&user) {
+            Ok(Some(e)) => reply(&format!(
+                "ACIK {} {} {}",
+                e.params.algorithm.as_str(),
+                e.params.digits,
+                e.params.period
+            )),
+            Ok(None) => reply("KAPALI"),
+            Err(e) => return fail(e.to_string()),
+        },
+        Some("kaldir") => match store.remove(&user) {
+            Ok(true) => reply("KALDIRILDI"),
+            Ok(false) => reply("KAYITSIZDI"),
+            Err(e) => return fail(e.to_string()),
+        },
+        Some("kur") => {
+            match store.is_enrolled(&user) {
+                Ok(true) if !args.iter().any(|a| a == "--zorla") => {
+                    reply("KAYITLI");
+                    return ExitCode::from(3);
+                }
+                Ok(_) => {}
+                Err(e) => return fail(e.to_string()),
+            }
+            let params = OtpParams::default();
+            let (secret, link) = match new_secret(&user, &params) {
+                Ok(v) => v,
+                Err(e) => return fail(e),
+            };
+            reply(&format!("URI {}", link.as_str()));
+            reply(&format!("ANAHTAR {}", group4(&bacakonay_core::base32::encode(&secret))));
+            let stdin = io::stdin();
+            for attempt in 1..=3 {
+                let mut line = Zeroizing::new(String::new());
+                match stdin.lock().read_line(&mut line) {
+                    Ok(0) | Err(_) => {
+                        reply("IPTAL");
+                        return ExitCode::SUCCESS;
+                    }
+                    Ok(_) => {}
+                }
+                if line.trim().is_empty() {
+                    reply("IPTAL");
+                    return ExitCode::SUCCESS;
+                }
+                match confirm_and_save(&store, &user, &secret, &params, &line) {
+                    Ok(true) => {
+                        reply("TAMAM");
+                        return ExitCode::SUCCESS;
+                    }
+                    Ok(false) => reply(&format!("HATALI {attempt}/3")),
+                    Err(e) => return fail(e),
+                }
+            }
+            reply("VAZGECILDI");
+        }
+        _ => return fail(format!("arayüz komutu: durum | kur [--zorla] | kaldir\n\n{USAGE}")),
+    }
+    ExitCode::SUCCESS
 }
 
 fn group4(s: &str) -> String {

@@ -1,0 +1,34 @@
+[package]
+name = "bacakonay-ayar"
+description = "Bacak Onay — turn two-step login on or off from the desktop, with the pairing QR on screen"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+gtk = { package = "gtk4", version = "0.11", features = ["v4_12"] }
+qrcode.workspace = true
+zeroize.workspace = true
+libc.workspace = true
+
+[package.metadata.deb]
+name = "bacakonay-ayar"
+revision = "1"
+maintainer = "Anadolu Panteri <bilgi@anadolupanteri.org.tr>"
+copyright = "2026, Anadolu Panteri <bilgi@anadolupanteri.org.tr>"
+section = "admin"
+priority = "optional"
+depends = "$auto, bacakonay (>= 0.1.0-2), sudo"
+extended-description = """\
+Desktop window for Bacak Onay two-step login on BacakOS. It shows the pairing
+QR large on screen for the Bacak Onay phone app, takes the confirmation code
+from the on-screen keyboard and can turn two-step login off again. The work is
+done by `sudo bacakonay arayuz`, so the administrator password is asked first;
+it only ever changes the enrollment of the person who is logged in."""
+assets = [
+    ["target/release/bacakonay-ayar", "usr/bin/", "755"],
+    ["data/tr.org.anadolupanteri.BacakOnay.desktop", "usr/share/applications/", "644"],
+    ["data/tr.org.anadolupanteri.BacakOnay.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
+]

@@ -4,6 +4,7 @@ members = [
     "crates/bacakonay-core",
     "crates/bacakonay-cli",
     "crates/pam-bacakonay",
+    "crates/bacakonay-ayar",
 ]
 
 [workspace.package]

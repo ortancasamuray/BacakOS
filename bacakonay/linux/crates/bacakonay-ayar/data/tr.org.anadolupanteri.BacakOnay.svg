@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#34d399"/>
+      <stop offset="1" stop-color="#059669"/>
+    </linearGradient>
+  </defs>
+  <!-- A shield with a tick: the second lock on the login. -->
+  <path d="M64 10 L108 26 V60 C108 88 90 108 64 118 C38 108 20 88 20 60 V26 Z" fill="url(#g)"/>
+  <path d="M64 10 L108 26 V60 C108 88 90 108 64 118 C38 108 20 88 20 60 V26 Z" fill="none" stroke="#065f46" stroke-opacity="0.5" stroke-width="3"/>
+  <path d="M42 64 L58 80 L88 48" fill="none" stroke="#ffffff" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
