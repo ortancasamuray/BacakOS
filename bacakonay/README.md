@@ -37,6 +37,7 @@ linux/                           Rust workspace
   crates/bacakonay-core/         OTP, base32, otpauth URI, enrollment store
   crates/bacakonay-cli/          `bacakonay` command (+ deb packaging)
   crates/pam-bacakonay/          pam_bacakonay.so (+ end-to-end tests against real libpam)
+  crates/bacakonay-ayar/         desktop window: pairing QR, on/off (GTK4, `bacakonay-ayar` deb)
   pam/                           sample lines for other PAM services
 ```
 
@@ -121,9 +122,19 @@ Android signing follows uzakel-android: a git-ignored
 | App says the vault key is invalid | Screen lock was removed; create a new vault and re-pair with `sudo bacakonay kur --zorla`. |
 | Locked out after many failures | `pam_faillock`: `sudo faillock --user <user> --reset`. |
 
+## Enrolling from the desktop (`bacakonay-ayar`)
+
+The **Bacak Onay** shortcut in the Control Center (or the apps menu) opens the
+`bacakonay-ayar` window: administrator password → status → **Telefonu eşle**
+shows the QR large on screen and takes the phone's code from the on-screen
+keyboard; re-pairing and turning it off live there too. The window never
+touches the store: each step runs `sudo -S -k bacakonay arayuz
+durum|kur|kaldir` and talks to it line by line (protocol in
+`crates/bacakonay-cli/src/main.rs`). The UI mode acts on `$SUDO_USER` only —
+whoever is at the desk can enroll themselves and nobody else. `-k` makes sudo
+always read the password line, so it can never reach bacakonay as a code.
+
 ## Next steps
 
-- Move enrollment into the Control Center (using the compositor's existing QR
-  renderer) so no terminal is needed.
 - The same PAM line for the session lock screen.
 - Encrypted export/import for moving to a new phone.

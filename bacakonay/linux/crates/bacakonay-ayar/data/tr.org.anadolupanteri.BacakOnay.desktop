@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Bacak Onay
+GenericName=İki adımlı giriş
+Comment=Giriş ekranında telefondaki kodu da soran iki adımlı doğrulamayı açın veya kapatın
+Exec=bacakonay-ayar
+Icon=tr.org.anadolupanteri.BacakOnay
+Terminal=false
+Categories=Settings;Security;System;
+Keywords=2FA;TOTP;iki adımlı;doğrulama;güvenlik;QR;
+StartupWMClass=tr.org.anadolupanteri.BacakOnay

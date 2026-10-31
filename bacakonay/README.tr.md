@@ -48,6 +48,7 @@ linux/                           Rust workspace
   crates/bacakonay-core/         OTP, base32, otpauth URI, kayıt deposu
   crates/bacakonay-cli/          `bacakonay` komutu (+ deb paketi)
   crates/pam-bacakonay/          pam_bacakonay.so (+ gerçek libpam ile uçtan uca test)
+  crates/bacakonay-ayar/         masaüstü penceresi: eşleme QR'ı, aç/kapat (GTK4, `bacakonay-ayar` paketi)
   pam/                           diğer PAM servisleri için örnek satırlar
 ```
 
@@ -156,9 +157,19 @@ Android imzalama uzakel-android ile aynı düzendedir: git'e girmeyen
 | Uygulama "Kasa anahtarı geçersiz" diyor | Ekran kilidi kaldırılmış; yeni kasa oluşturup `sudo bacakonay kur --zorla` ile yeniden eşleyin. |
 | Çok sayıda hatalı deneme sonrası giriş yok | `pam_faillock` kilidi: `sudo faillock --user <kullanıcı> --reset`. |
 
+## Masaüstünden kayıt (`bacakonay-ayar`)
+
+Kontrol Merkezi'ndeki **Bacak Onay** kısayolu (ya da uygulamalar menüsü)
+`bacakonay-ayar` penceresini açar: yönetici parolası → durum → **Telefonu
+eşle** ile QR ekranda büyük çıkar, telefondaki kod ekran klavyesiyle onaylanır;
+yeniden eşleme ve kapatma da buradan. Pencere depoya hiç dokunmaz; her adımda
+`sudo -S -k bacakonay arayuz durum|kur|kaldir` çalıştırır ve satır satır
+konuşur (protokol: `crates/bacakonay-cli/src/main.rs`). Arayüz kipi yalnız
+`$SUDO_USER` üzerinde işler — masadaki kişi yalnız kendini kaydedebilir.
+`-k` sayesinde sudo parola satırını her zaman okur; parola hiçbir koşulda
+onay kodu olarak bacakonay'a düşmez.
+
 ## Sonraki adımlar
 
-- Kayıt arayüzünü Kontrol Merkezi'ne taşımak (compositor'daki mevcut QR
-  çizicisiyle), böylece terminal gerekmez.
 - Ekran kilidi (oturum kilitleme) için aynı PAM satırı.
 - Şifreli dışa/içe aktarma (telefon değişimi).
