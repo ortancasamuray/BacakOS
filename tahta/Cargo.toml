@@ -35,7 +35,7 @@ codegen-units = 1
 panic = "abort"
 
 [package.metadata.deb]
-revision = "4"
+revision = "5"
 maintainer = "Bacak Desktop Project <bilgi@anadolupanteri.org.tr>"
 copyright  = "2026, Bacak Desktop Project"
 section    = "graphics"
