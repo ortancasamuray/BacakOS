@@ -461,7 +461,7 @@ impl App {
         };
         let web_bounds = self.input.browser_visible.then(|| self.browser_content_bounds());
 
-        let (mut normal_v, mut normal_i, highlight_v, highlight_i, page_image, content_index_count, glyph_v, glyph_i) = self.input.collect_geometry(now);
+        let (mut normal_v, mut normal_i, highlight_v, highlight_i, page_image, content_index_count, mut glyph_v, mut glyph_i) = self.input.collect_geometry(now);
 
         if self.input.browser_visible {
             // Passive sync: the field only pulled `panel.url()` on tap
@@ -471,16 +471,26 @@ impl App {
             // `editing` so it doesn't clobber what the user is typing.
             if !self.url_bar.editing {
                 if let Some(url) = self.web_panel.as_ref().and_then(|p| p.url()) {
-                    let upper = url.to_uppercase();
-                    if self.url_bar.text != upper {
-                        self.url_bar.text = upper;
+                    if self.url_bar.text != url {
+                        self.url_bar.text = url;
                     }
                 }
             }
             let (panel_top_left, panel_size) = self.input.browser_bounds();
             let can_back = self.web_panel.as_ref().map(|p| p.can_go_back()).unwrap_or(false);
             let can_forward = self.web_panel.as_ref().map(|p| p.can_go_forward()).unwrap_or(false);
-            self.url_bar.render(panel_top_left, panel_size.x, can_back, can_forward, self.browser_draw_mode, &mut normal_v, &mut normal_i);
+            self.url_bar.render(
+                panel_top_left,
+                panel_size.x,
+                can_back,
+                can_forward,
+                self.browser_draw_mode,
+                self.input.font_atlas(),
+                &mut normal_v,
+                &mut normal_i,
+                &mut glyph_v,
+                &mut glyph_i,
+            );
         }
 
         match self.renderer.render(
@@ -509,19 +519,32 @@ impl App {
 /// navigate to: passes through anything that already has a scheme,
 /// treats a single dotted word as a bare domain, and otherwise treats it
 /// as a search query (matches what every desktop browser's combined
-/// address/search bar does).
+/// address/search bar does). Case is kept — paths and queries are
+/// case-sensitive (host names aren't, and Servo normalizes those).
 fn resolve_input(text: &str) -> String {
     let t = text.trim();
     if t.is_empty() {
         return BROWSER_HOME.to_string();
     }
-    let lower = t.to_lowercase();
-    if lower.contains("://") {
-        return lower;
+    if t.contains("://") {
+        return t.to_string();
     }
-    if !lower.contains(' ') && lower.contains('.') {
-        return format!("https://{lower}");
+    if !t.contains(' ') && t.contains('.') {
+        return format!("https://{t}");
     }
     let q: String = url::form_urlencoded::byte_serialize(t.as_bytes()).collect();
     format!("https://www.google.com/search?q={q}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_input;
+
+    #[test]
+    fn address_bar_input_keeps_case() {
+        assert_eq!(resolve_input("https://example.com/Ders/Konu?id=AbC"), "https://example.com/Ders/Konu?id=AbC");
+        assert_eq!(resolve_input("eba.gov.tr/Video"), "https://eba.gov.tr/Video");
+        assert_eq!(resolve_input("  "), super::BROWSER_HOME);
+        assert_eq!(resolve_input("Fotosentez nedir"), "https://www.google.com/search?q=Fotosentez+nedir");
+    }
 }

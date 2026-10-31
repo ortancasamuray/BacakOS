@@ -15,7 +15,6 @@
 
 use glam::Vec2;
 
-use crate::font5x7::to_lower_tr;
 use crate::font_atlas::{FontAtlas, GlyphVertex};
 use crate::stroke::{push_circle, push_line, push_rect, Vertex};
 
@@ -276,4 +275,20 @@ fn draw_key_glyph(
 
 fn rect_contains((top_left, size): (Vec2, Vec2), point: Vec2) -> bool {
     point.x >= top_left.x && point.x <= top_left.x + size.x && point.y >= top_left.y && point.y <= top_left.y + size.y
+}
+
+/// Turkish-aware lowercasing — `char::to_lowercase` gets `I`/`İ` wrong for
+/// Turkish (maps both to a dotted `i`), so the Shift key uses this instead
+/// of the standard library conversion when switching case.
+fn to_lower_tr(ch: char) -> char {
+    match ch {
+        'I' => 'ı',
+        'İ' => 'i',
+        'Ç' => 'ç',
+        'Ğ' => 'ğ',
+        'Ö' => 'ö',
+        'Ş' => 'ş',
+        'Ü' => 'ü',
+        c => c.to_ascii_lowercase(),
+    }
 }
