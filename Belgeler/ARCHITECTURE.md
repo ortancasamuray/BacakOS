@@ -2,35 +2,25 @@
 
 🌐 [Türkçe özet](ARCHITECTURE.tr.md) · **English**
 
-Four independent Rust + Slint binaries, not a shared library with four thin
-frontends — each crate owns its full render pipeline. What they share is a
-common `[workspace.dependencies]` block (mainly the `slint` version/features)
-declared in the root `Cargo.toml`, and, for `bacak-belge`, an in-crate module
-that does everything the other three do combined.
+One Rust + Slint application, `bacak-belge`: the BacakOS viewer for PDF,
+EPUB and pictures, with pen/highlighter notes.
 
 ---
 
-## 1. Crate layout
+## 1. Layout
 
 ```
 Belgeler/
 ├─ Cargo.toml                       # [workspace] members = ["crates/bacak-belge"]
-│                                   # (bacak-pdf/epub/resim opt out with their own [workspace])
-├─ crates/
-│  ├─ bacak-belge/                  # the shipping unified viewer
-│  │  ├─ src/main.rs                # PDF (MuPDF) + EPUB (epub crate) + image (image crate)
-│  │  │                             # + pen/marker annotation compositing
-│  │  └─ ui/main.slint
-│  ├─ bacak-pdf/                    # standalone PDF-only viewer (MuPDF)
-│  ├─ bacak-epub/                   # standalone EPUB-only viewer
-│  └─ bacak-resim/                  # standalone image-only viewer
-├─ desktop/                         # *.desktop entries, one per binary
-└─ icons/hicolor/scalable/apps/     # one SVG icon per binary
+├─ crates/bacak-belge/
+│  ├─ src/main.rs                   # the three viewing modes (PDF, EPUB, picture)
+│  ├─ src/cizim.rs                  # notes: vector strokes, undo, saving
+│  ├─ src/metin.rs                  # EPUB (X)HTML → text
+│  ├─ src/yerlesim.rs               # fit / zoom / pan arithmetic
+│  └─ ui/main.slint
+├─ desktop/bacak-belge.desktop
+└─ icons/hicolor/scalable/apps/bacak-belge.svg
 ```
-
-`bacak-belge` is the only workspace member and the only one `build-debs.sh`
-builds and packages; the other three declare their own `[workspace]` and
-have not had `bacak-belge`'s fixes (see §3).
 
 ---
 
@@ -79,38 +69,16 @@ come back when the document is opened again.
 
 ---
 
-## 3. The three standalone viewers
+## 3. Packaging
 
-Each is a small, single-purpose Slint app with no shared code beyond the
-workspace's pinned `slint` dependency version:
-
-| Crate | Renderer | Notes |
-|---|---|---|
-| `bacak-pdf` | Same MuPDF pixmap path as `bacak-belge`'s PDF renderer, duplicated rather than shared — no internal `bacak-belge`-core library exists to depend on. |
-| `bacak-epub` | Same `epub` + `html_to_text` approach as `bacak-belge`. |
-| `bacak-resim` | `image::open` → `DynamicImage::into_rgba8` → `SharedPixelBuffer`; supports every format the `image` crate does (JPEG, PNG, GIF, WebP, BMP, TIFF, ICO, QOI, HDR, PNM). |
-
-Because none of the three import from `bacak-belge` (or vice versa), a
-change to the PDF/EPUB/image rendering logic has to be made in both places
-if it should apply to the standalone viewer and the unified one — there is
-currently no shared rendering library extracted from the duplication.
+`cargo-deb` through `[package.metadata.deb]` in the crate's `Cargo.toml`
+(binary + `.desktop` + icon); `build-debs.sh` builds it for amd64, arm64 and
+riscv64. It depends on `libmupdf25.1` and the Wayland/EGL runtime libraries.
 
 ---
 
-## 4. Packaging
-
-Each binary is packaged independently via `cargo-deb`'s
-`[package.metadata.deb]` block in its own `Cargo.toml`: its own `assets`
-list (binary + `.desktop` + icon), its own `depends` line, and its own
-version. `bacak-belge`'s is the most complete
-(`libmupdf25.1` + Wayland/EGL runtime libs); the standalone crates mirror the
-subset of that they actually need (e.g. `bacak-resim` never links MuPDF).
-
----
-
-## 5. Testing
+## 4. Testing
 
 `bacak-belge`'s window-free logic is unit-tested (`cargo test -p
 bacak-belge`: notes, EPUB text, fit/pan). Rendering and the UI are checked
-by opening real PDF/EPUB/image files. The three standalone viewers have no
-tests.
+by opening real PDF/EPUB/image files.

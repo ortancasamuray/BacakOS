@@ -2,29 +2,22 @@
 
 🌐 **Türkçe özet** · [English (full)](ARCHITECTURE.md)
 
-Bu, [ARCHITECTURE.md](ARCHITECTURE.md) dosyasının kısa Türkçe özetidir.
-Dört bağımsız Rust + Slint ikilisi — ortak bir kütüphaneyi paylaşan dört
-ince arayüz değil, her crate kendi tam render hattını sahiplenir. Paylaşılan
-tek şey kök `Cargo.toml`'daki ortak `[workspace.dependencies]` (esas olarak
-`slint` sürüm/özellikleri) ve `bacak-belge` için, diğer üçünün topluca
-yaptığını tek crate içinde yapan bir modül.
+Tek bir Rust + Slint uygulaması, `bacak-belge`: BacakOS'un PDF, EPUB ve resim
+görüntüleyicisi; kalem/fosforlu notlarla.
 
-## Crate yerleşimi
+## Yerleşim
 
 ```
 Belgeler/
 ├─ Cargo.toml                       # [workspace] members = ["crates/bacak-belge"]
-│                                   # (bacak-pdf/epub/resim kendi [workspace]'iyle ayrı durur)
-├─ crates/
-│  ├─ bacak-belge/                  # dağıtılan birleşik görüntüleyici
-│  │  ├─ src/main.rs                # PDF (MuPDF) + EPUB (epub crate) + resim (image crate)
-│  │  │                             # + kalem/marker not alma bindirmesi
-│  │  └─ ui/main.slint
-│  ├─ bacak-pdf/                    # bağımsız, sadece-PDF görüntüleyici (MuPDF)
-│  ├─ bacak-epub/                   # bağımsız, sadece-EPUB görüntüleyici
-│  └─ bacak-resim/                  # bağımsız, sadece-resim görüntüleyici
-├─ desktop/                         # ikili başına bir *.desktop girdisi
-└─ icons/hicolor/scalable/apps/     # ikili başına bir SVG ikon
+├─ crates/bacak-belge/
+│  ├─ src/main.rs                   # üç görüntüleme kipi (PDF, EPUB, resim)
+│  ├─ src/cizim.rs                  # notlar: vektör çizgiler, geri al, kayıt
+│  ├─ src/metin.rs                  # EPUB (X)HTML → metin
+│  ├─ src/yerlesim.rs               # sığdırma / yakınlaştırma / kaydırma hesabı
+│  └─ ui/main.slint
+├─ desktop/bacak-belge.desktop
+└─ icons/hicolor/scalable/apps/bacak-belge.svg
 ```
 
 ## `bacak-belge` — birleşik görüntüleyici
@@ -68,31 +61,14 @@ sil"i geri alır. Notlar her değişiklikte
 `$XDG_DATA_HOME/bacak-belge/notlar/<belge yolunun özeti>.json` dosyasına
 yazılır ve belge yeniden açılınca geri gelir.
 
-## Üç bağımsız görüntüleyici
-
-Her biri, workspace'in sabitlenmiş `slint` bağımlılık sürümü dışında hiçbir
-kod paylaşmayan, küçük, tek amaçlı bir Slint uygulamasıdır: `bacak-pdf`
-aynı MuPDF pixmap yolunu tekrar eder (paylaşılan bir çekirdek kütüphane
-yoktur), `bacak-epub` aynı `epub` + `html_to_text` yaklaşımını kullanır,
-`bacak-resim` `image` crate'in desteklediği her formatı (JPEG, PNG, GIF,
-WebP, BMP, TIFF, ICO, QOI, HDR, PNM) destekler. Hiçbiri `bacak-belge`'den
-(veya tersi) import etmediği için, render mantığındaki bir değişikliğin
-hem bağımsız görüntüleyiciye hem birleşik olana uygulanması gerekiyorsa iki
-yerde de yapılmalıdır — şu an tekrardan çıkarılmış paylaşılan bir render
-kütüphanesi yoktur.
-
 ## Paketleme
 
-Her ikili, kendi `Cargo.toml`'undaki `[package.metadata.deb]` bloğu
-üzerinden bağımsız olarak `cargo-deb` ile paketlenir: kendi `assets`
-listesi, kendi `depends` satırı, kendi sürümü. En eksiksiz olanı
-`bacak-belge`'ninkidir (`libmupdf25.1` + Wayland/EGL kütüphaneleri);
-bağımsız crate'ler yalnızca gerçekten ihtiyaç duydukları alt kümeyi
-yansıtır (ör. `bacak-resim` hiçbir zaman MuPDF'e bağlanmaz).
+Crate'in `Cargo.toml`'undaki `[package.metadata.deb]` ile `cargo-deb`
+(ikili + `.desktop` + simge); `build-debs.sh` amd64, arm64 ve riscv64 için
+derler. `libmupdf25.1` ve Wayland/EGL çalışma zamanı kütüphanelerine bağlıdır.
 
 ## Test
 
 `bacak-belge`'nin pencere gerektirmeyen mantığı birim testlidir (`cargo
 test -p bacak-belge`: notlar, EPUB metni, sığdırma/kaydırma). Çizim ve arayüz
-gerçek PDF/EPUB/resim dosyaları açılarak denenir. Üç bağımsız görüntüleyicinin
-testi yoktur ve `build-debs.sh` onları derlemez.
+gerçek PDF/EPUB/resim dosyaları açılarak denenir.

@@ -1,51 +1,30 @@
-# Belgeler — Belge ve Resim Görüntüleyicileri
+# Belgeler — Belge ve Resim Görüntüleyici
 
 🌐 **Türkçe** · [English](README.md)
 
-BacakOS için dört küçük Rust + [Slint](https://slint.dev) görüntüleyici
-ikilisi (binary). Asıl *belge görüntüleyici* olarak dağıtılan
-`bacak-belge`'dir — kalem/fosforlu notlu, birleşik PDF + EPUB + resim
-görüntüleyicisi; diğer üçü (`bacak-pdf`, `bacak-epub`, `bacak-resim`)
-`build-debs.sh`'nin derlemediği eski, tek formatlı görüntüleyicilerdir. Modül/crate sınırı için
-[ARCHITECTURE.md](ARCHITECTURE.md) (İngilizce) /
-[ARCHITECTURE.tr.md](ARCHITECTURE.tr.md) (Türkçe özet) dosyalarına bakın.
-
-## İkili dosyalar
-
-| İkili | Formatlar | Render motoru |
-|---|---|---|
-| `bacak-belge` | PDF, EPUB, resim — **artı belge başına kaydedilen kalem/fosforlu notlar** | MuPDF (PDF) + `epub` crate + `image` crate |
-| `bacak-pdf` | Sadece PDF | MuPDF |
-| `bacak-epub` | Sadece EPUB | `epub` crate + basit, kendi yazdığımız HTML-metne çevirici |
-| `bacak-resim` | JPEG, PNG, GIF, WebP, BMP, TIFF, ICO, QOI, HDR, PNM | `image` crate |
+`bacak-belge`: BacakOS'un **PDF** (MuPDF, parolalı belgeler dahil), **EPUB**
+(metin olarak) ve **resim** (JPEG, PNG, GIF, WebP, BMP, TIFF, ICO, QOI, HDR,
+PNM) görüntüleyicisi; PDF sayfalarına ve resimlere alınan, belge başına
+kaydedilen **kalem/fosforlu notlarla**. Rust ve [Slint](https://slint.dev)
+ile yazıldı. Mimari için [ARCHITECTURE.tr.md](ARCHITECTURE.tr.md).
 
 ## Derleme ve çalıştırma
 
-`bacak-belge` tek workspace üyesidir (`Cargo.toml`'daki `[workspace]`
-yalnızca onu listeler); diğer üçü kendi bağımsız `[workspace]`'ini bildirir
-ve ayrı ayrı derlenir:
-
 ```sh
-cargo run -p bacak-belge          # Belgeler/ workspace kökünden
-cd crates/bacak-pdf   && cargo run   # bağımsız crate'ler: önce cd
-cd crates/bacak-epub  && cargo run
-cd crates/bacak-resim && cargo run
+cargo run -p bacak-belge -- belge.pdf     # Belgeler/ içinden
+cargo test -p bacak-belge
 ```
 
 ## Paketleme
 
-Her ikili, `cargo-deb` ile kendi `.deb`'ini üretir, kendi
-`desktop/*.desktop` girdisine ve `icons/hicolor/scalable/apps/*.svg`
-ikonuna bağlıdır:
-
 ```sh
 cargo deb -p bacak-belge --no-build
-sudo dpkg -i target/debian/bacak-belge_*.deb
+sudo apt install ./target/debian/bacak-belge_*.deb
 ```
 
-`bacak-belge`'nin paketi `libmupdf25.1` ile birlikte alışılagelmiş
-Wayland/EGL çalışma zamanı kütüphanelerine bağımlıdır (`$auto`, bunları
-`cargo-deb`'in ldd taramasıyla otomatik yakalar).
+Paket `libmupdf25.1` ile alışılagelmiş Wayland/EGL çalışma zamanı
+kütüphanelerine bağlıdır (`$auto`, `cargo-deb`'in ldd taramasıyla yakalar).
+Depo kökündeki `build-debs.sh` onu BacakOS'un geri kalanıyla birlikte derler.
 
 ## Lisans
 
