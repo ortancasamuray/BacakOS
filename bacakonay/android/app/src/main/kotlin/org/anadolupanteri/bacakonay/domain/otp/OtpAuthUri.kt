@@ -70,7 +70,7 @@ object OtpAuthUri {
         )
     }
 
-    private fun parseQuery(query: String): Map<String, String>? {
+    internal fun parseQuery(query: String): Map<String, String>? {
         val out = HashMap<String, String>()
         if (query.isEmpty()) return out
         for (pair in query.split('&')) {
@@ -83,7 +83,7 @@ object OtpAuthUri {
     }
 
     /** RFC 3986 percent-decoding (UTF-8). `+` stays a literal plus. */
-    private fun percentDecode(s: String): String? {
+    internal fun percentDecode(s: String): String? {
         val bytes = java.io.ByteArrayOutputStream(s.length)
         var i = 0
         while (i < s.length) {

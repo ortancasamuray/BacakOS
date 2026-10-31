@@ -71,7 +71,7 @@ private const val CLIPBOARD_CLEAR_MS = 30_000L
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun CodesScreen(viewModel: CodesViewModel, onScan: () -> Unit, onManual: () -> Unit) {
+fun CodesScreen(viewModel: CodesViewModel, onLogin: () -> Unit, onScan: () -> Unit, onManual: () -> Unit) {
     val codes by viewModel.codes.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -88,6 +88,9 @@ fun CodesScreen(viewModel: CodesViewModel, onScan: () -> Unit, onManual: () -> U
             TopAppBar(
                 title = { Text("Bacak Onay") },
                 actions = {
+                    IconButton(onClick = onScan) {
+                        Icon(painterResource(R.drawable.ic_qr), contentDescription = "QR ile hesap ekle")
+                    }
                     IconButton(onClick = onManual) {
                         Icon(painterResource(R.drawable.ic_keyboard), contentDescription = "Elle ekle")
                     }
@@ -95,10 +98,11 @@ fun CodesScreen(viewModel: CodesViewModel, onScan: () -> Unit, onManual: () -> U
             )
         },
         floatingActionButton = {
+            // Logging in happens daily, adding an account once: the big button logs in.
             ExtendedFloatingActionButton(
-                onClick = onScan,
+                onClick = onLogin,
                 icon = { Icon(painterResource(R.drawable.ic_qr), contentDescription = null) },
-                text = { Text("QR tara") },
+                text = { Text("QR ile giriş") },
             )
         },
         snackbarHost = { SnackbarHost(snackbar) },

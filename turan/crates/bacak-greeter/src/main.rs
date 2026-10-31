@@ -15,6 +15,8 @@
 
 #[cfg(feature = "gui")]
 mod gui;
+#[cfg(feature = "gui")]
+mod telefon_onayi;
 
 fn main() -> std::process::ExitCode {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
@@ -79,7 +81,10 @@ mod tty {
                     step = client.answer(answer)?;
                 }
                 AuthStep::Info { message } => {
-                    println!("{message}");
+                    // pam_bacakonay's hint that the GUI may show a phone QR.
+                    if message != "bacakonay:qr" {
+                        println!("{message}");
+                    }
                     step = client.next_step()?;
                 }
                 AuthStep::Done { success, message } => {
