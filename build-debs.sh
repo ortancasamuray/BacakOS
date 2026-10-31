@@ -49,6 +49,8 @@ ARCHES=("$@")
 
 TARGET_ARGS=()
 OUT=""
+# Çapraz derlemede hedefin pkg-config arama yolu (ana makinede boş).
+CROSS_PC_LIBDIR=""
 
 # setup_arch <deb-mimarisi>: TARGET_ARGS + OUT'u ayarlar, çapraz ortamı export eder.
 setup_arch() {
@@ -64,6 +66,7 @@ setup_arch() {
     unset LD MAKE LLVM_OBJDUMP
     if [ "$arch" = "$HOST_ARCH" ]; then
         TARGET_ARGS=()
+        CROSS_PC_LIBDIR=""
         return
     fi
     command -v "$gnu-gcc" >/dev/null \
@@ -75,7 +78,7 @@ setup_arch() {
     # tr + C yerel ayarı: ${t^^} Türkçe ortamda i → İ yapar.
     export "CARGO_TARGET_$(LC_ALL=C tr a-z A-Z <<<"$t")_LINKER=$gnu-gcc"
     export "CC_$t=$gnu-gcc" "CXX_$t=$gnu-g++" "AR_$t=$gnu-ar"
-    export "PKG_CONFIG_LIBDIR_$t=/usr/lib/$gnu/pkgconfig:/usr/share/pkgconfig"
+    CROSS_PC_LIBDIR="/usr/lib/$gnu/pkgconfig:/usr/share/pkgconfig"
     export "PKG_CONFIG_SYSROOT_DIR_$t=/"
     export "BINDGEN_EXTRA_CLANG_ARGS_$t=--target=$gnu"
     export PKG_CONFIG_ALLOW_CROSS=1
@@ -96,6 +99,27 @@ setup_arch() {
         ln -sfn "$h" "$ff/include/$(basename "$h")"
     done
     export FFMPEG_DIR="$ff"
+
+    # ruzgar: libwebkitgtk-6.0-dev Multi-Arch: same değil, ana makinenin amd64
+    # -dev'iyle birlikte kurulamaz. webkit6-sys C başlığı derlemez, bağlamak
+    # için .pc ve .so bağı yeter: hedefin kütüphanesine (setup-deps.sh --cross
+    # kurar) işaret eden küçük bir pkg-config dizini üretilir.
+    local wk="${XDG_CACHE_HOME:-$HOME/.cache}/bacak-cross/webkit-$arch" wkv
+    wkv="$(dpkg-query -W -f='${Version}' "libwebkitgtk-6.0-4:$arch" 2>/dev/null || true)"
+    if [ -n "$wkv" ]; then
+        mkdir -p "$wk"
+        ln -sfn "/usr/lib/$gnu/libwebkitgtk-6.0.so.4" "$wk/libwebkitgtk-6.0.so"
+        cat > "$wk/webkitgtk-6.0.pc" <<EOF
+Name: WebKitGTK
+Description: WebKitGTK $arch (build-debs.sh çapraz derleme için üretti)
+Version: ${wkv%%-*}
+Requires: glib-2.0 gtk4 libsoup-3.0 javascriptcoregtk-6.0
+Libs: -L$wk -lwebkitgtk-6.0
+Cflags:
+EOF
+        CROSS_PC_LIBDIR="$wk:$CROSS_PC_LIBDIR"
+    fi
+    export "PKG_CONFIG_LIBDIR_$t=$CROSS_PC_LIBDIR"
 
     # mozjs_sys (tahta → servo) makefile.cargo'su Rust üçlüsünü configure'a
     # --target olarak verir; aarch64'ü GNU adına çevirir ama riscv64gc'yi
@@ -139,6 +163,15 @@ use_cross_target_dir() {
     if [ -n "${BACAK_CROSS_TARGET_DIR:-}" ] && [ ${#TARGET_ARGS[@]} -gt 0 ]; then
         local ws="${PWD#"$HERE"/}"
         export CARGO_TARGET_DIR="$BACAK_CROSS_TARGET_DIR/${ws//\//_}"
+    fi
+}
+
+# Hedef mimarinin kütüphanelerini soran pkg-config (ana makinede düz pkg-config).
+hedef_pkg_config() {
+    if [ -n "$CROSS_PC_LIBDIR" ]; then
+        PKG_CONFIG_LIBDIR="$CROSS_PC_LIBDIR" PKG_CONFIG_SYSROOT_DIR=/ pkg-config "$@"
+    else
+        pkg-config "$@"
     fi
 }
 
@@ -223,10 +256,25 @@ BACAKONAY_SRC="$HERE/bacakonay/linux"
     cd "$BACAKONAY_SRC"
 
     log "bacakonay derleniyor (CLI + pam_bacakonay.so)…"
-    cbuild
+    cbuild -p bacakonay-cli -p pam-bacakonay
 
     log "bacakonay deb oluşturuluyor"
-    cdeb -p bacakonay-cli
+    # PAM modülünün dizini mimariye göre değişir (Cargo.toml'daki variant'lar).
+    if [ "$ARCH" = "$HOST_ARCH" ]; then
+        cdeb -p bacakonay-cli
+    else
+        cdeb -p bacakonay-cli --variant "$ARCH"
+    fi
+
+    # Masaüstü penceresi (GTK4) ayrı pakette: GTK -dev paketleri yoksa
+    # yalnız o atlanır, giriş için gereken CLI ve PAM modülü yine çıkar.
+    if hedef_pkg_config --exists gtk4; then
+        log "bacakonay-ayar derleniyor (masaüstü penceresi)…"
+        cbuild -p bacakonay-ayar
+        cdeb -p bacakonay-ayar
+    else
+        log "UYARI: bacakonay-ayar ATLANDI ($ARCH) — GTK4 geliştirme paketleri yok."
+    fi
 )
 
 # ---------------------------------------------------------------------------
@@ -305,6 +353,28 @@ TAHTA_SRC="$HERE/tahta"
     log "tahta deb oluşturuluyor"
     cdeb
 )
+
+# ---------------------------------------------------------------------------
+# ruzgar: web tarayıcısı (WebKitGTK; adres çubuğu altta, sayfaya çizim)
+# ---------------------------------------------------------------------------
+log "=== ruzgar derleniyor ==="
+# WebKitGTK/GTK4 -dev paketleri yoksa derleme pkg-config'te düşer ve betik
+# kur'a varamadan durur; atla, nedenini söyle (setup-deps.sh kurar).
+if hedef_pkg_config --exists webkitgtk-6.0 javascriptcoregtk-6.0 libsoup-3.0 gtk4; then
+(
+    cd "$HERE/ruzgar"
+    cbuild
+    log "ruzgar deb oluşturuluyor"
+    cdeb
+)
+else
+    log "UYARI: ruzgar ATLANDI ($ARCH) — WebKitGTK/GTK4 geliştirme paketleri yok."
+    if [ ${#TARGET_ARGS[@]} -gt 0 ]; then
+        log "       Kurmak için: sudo bash setup-deps.sh --cross"
+    else
+        log "       Kurmak için: sudo apt install libgtk-4-dev libwebkitgtk-6.0-dev  (ya da ./setup-deps.sh)"
+    fi
+fi
 
 # ---------------------------------------------------------------------------
 # kur: sistem yükleyici

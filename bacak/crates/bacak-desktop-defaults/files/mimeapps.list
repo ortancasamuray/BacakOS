@@ -1,0 +1,5 @@
+[Default Applications]
+x-scheme-handler/http=tr.org.anadolupanteri.Ruzgar.desktop
+x-scheme-handler/https=tr.org.anadolupanteri.Ruzgar.desktop
+text/html=tr.org.anadolupanteri.Ruzgar.desktop
+application/xhtml+xml=tr.org.anadolupanteri.Ruzgar.desktop

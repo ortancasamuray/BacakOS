@@ -28,7 +28,12 @@ if [ "${1:-}" = "--cross" ]; then
         libgbm-dev libdrm-dev libinput-dev libseat-dev libudev-dev \
         libxkbcommon-dev libwayland-dev libegl-dev libgl-dev libgles-dev \
         libdbus-1-dev libfontconfig-dev libfreetype-dev libharfbuzz-dev \
-        libbz2-dev liblzma-dev zlib1g-dev libpam0g-dev"
+        libbz2-dev liblzma-dev zlib1g-dev libpam0g-dev \
+        libgtk-4-dev libjavascriptcoregtk-6.0-dev libsoup-3.0-dev \
+        libwebkitgtk-6.0-4"
+    # ruzgar: libwebkitgtk-6.0-dev Multi-Arch: same olmadığı için amd64'üyle
+    # birlikte kurulamaz; yalnız kütüphanesi kurulur, pkg-config dosyasını
+    # build-debs.sh üretir.
     for a in $CROSS_ARCHES; do
         dpkg --add-architecture "$a"
     done
@@ -80,6 +85,7 @@ apt-get install -y \
     libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
     libfreetype-dev libharfbuzz-dev \
     libbz2-dev liblzma-dev zlib1g-dev \
+    libgtk-4-dev libwebkitgtk-6.0-dev \
     \
     weston dbus
 
