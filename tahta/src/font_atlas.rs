@@ -214,3 +214,41 @@ impl FontAtlas {
         width
     }
 }
+
+/// `text` cut to fit `max_w` (as measured by `measure`): while editing the
+/// end stays visible (where the cursor is), otherwise the start, with "…"
+/// marking the cut.
+pub fn fit_text(text: &str, max_w: f32, keep_end: bool, measure: impl Fn(&str) -> f32) -> String {
+    if measure(text) <= max_w {
+        return text.to_string();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    for n in (0..chars.len()).rev() {
+        let cut: String = if keep_end {
+            std::iter::once('…').chain(chars[chars.len() - n..].iter().copied()).collect()
+        } else {
+            chars[..n].iter().copied().chain(std::iter::once('…')).collect()
+        };
+        if measure(&cut) <= max_w {
+            return cut;
+        }
+    }
+    "…".to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fit_text;
+
+    // One unit per character.
+    fn w(t: &str) -> f32 {
+        t.chars().count() as f32
+    }
+
+    #[test]
+    fn long_text_is_cut_at_the_cursor_end_only_while_editing() {
+        assert_eq!(fit_text("eba.gov.tr", 20.0, true, w), "eba.gov.tr");
+        assert_eq!(fit_text("https://eba.gov.tr/ders", 10.0, false, w), "https://e…");
+        assert_eq!(fit_text("https://eba.gov.tr/ders", 10.0, true, w), "…v.tr/ders");
+    }
+}

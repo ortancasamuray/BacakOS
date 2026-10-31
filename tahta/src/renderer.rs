@@ -179,13 +179,6 @@ pub struct Renderer {
     page_quad_vertex: wgpu::Buffer,
     page_quad_index: wgpu::Buffer,
 
-    /// The embedded browser panel's texture — unlike `page_textures`,
-    /// there's only ever one, it's rewritten every time Servo paints a
-    /// new frame (see `webengine::WebPanel::tick`), and it's recreated
-    /// outright if the panel's pixel size changes (resize, not just pan).
-    web_texture: Option<(wgpu::Texture, wgpu::BindGroup, u32, u32)>,
-    web_quad_vertex: wgpu::Buffer,
-
     /// Offscreen render target the whole "page content" (background/page
     /// image/ink, not UI chrome) is re-rendered into every frame the
     /// magnifier is open, so its lens can sample real pixels — see
@@ -203,7 +196,7 @@ pub struct Renderer {
     /// Real-font text (currently just `textbox.rs`) — a single-channel
     /// coverage atlas uploaded once at startup from `font_atlas.rs`,
     /// sampled through its own alpha-blended pipeline since it's drawn
-    /// as arbitrary glyph quads, not the fixed page/web/magnifier quad.
+    /// as arbitrary glyph quads, not the fixed page/magnifier quad.
     glyph_pipeline: wgpu::RenderPipeline,
     glyph_batch: Batch,
     #[allow(dead_code)] // kept alive for `glyph_bind_group`'s view
@@ -438,13 +431,6 @@ impl Renderer {
             usage: wgpu::BufferUsages::INDEX,
         });
 
-        let web_quad_vertex = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tahta_web_quad_vertex"),
-            size: 4 * std::mem::size_of::<TexVertex>() as u64,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
         let (content_texture, content_view, content_bind_group) =
             Self::create_content_texture(&device, &page_texture_bgl, &page_sampler, surface_format, config.width, config.height);
 
@@ -580,8 +566,6 @@ impl Renderer {
             page_textures: HashMap::new(),
             page_quad_vertex,
             page_quad_index,
-            web_texture: None,
-            web_quad_vertex,
             content_texture,
             content_view,
             content_bind_group,
@@ -673,47 +657,6 @@ impl Renderer {
         &self.page_textures[&image.id].1
     }
 
-    /// Writes a freshly-painted Servo frame into the panel's texture,
-    /// recreating it if the pixel size changed since the last frame
-    /// (resize, or the panel just opened).
-    fn upload_web_texture(&mut self, rgba: &[u8], width: u32, height: u32) {
-        let needs_new = !matches!(&self.web_texture, Some((_, _, w, h)) if *w == width && *h == height);
-        if needs_new {
-            let size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
-            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("tahta_web_texture"),
-                size,
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            });
-            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-            let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("tahta_web_bind_group"),
-                layout: &self.page_texture_bgl,
-                entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.page_sampler) },
-                ],
-            });
-            self.web_texture = Some((texture, bind_group, width, height));
-        }
-        let (texture, ..) = self.web_texture.as_ref().unwrap();
-        self.queue.write_texture(
-            wgpu::ImageCopyTexture {
-                texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            rgba,
-            wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(4 * width), rows_per_image: Some(height) },
-            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
-        );
-    }
 
     /// Largest centered rect of `image`'s aspect ratio that fits within
     /// `screen_size` (letterboxed), in screen-space pixels.
@@ -768,8 +711,6 @@ impl Renderer {
         glyph: (&[GlyphVertex], &[u32]),
         content_index_count: usize,
         page_image: Option<&PdfImage>,
-        web_frame: Option<(&[u8], u32, u32)>,
-        web_bounds: Option<(Vec2, Vec2)>,
         magnifier_lens: Option<(Vec2, f32, f32)>,
     ) -> Result<(), wgpu::SurfaceError> {
         let output = self.surface.get_current_texture()?;
@@ -801,19 +742,6 @@ impl Renderer {
                 TexVertex { position: [top_left.x + size.x, top_left.y + size.y], uv: [1.0, 1.0] },
             ];
             self.queue.write_buffer(&self.page_quad_vertex, 0, bytemuck::cast_slice(&verts));
-        }
-
-        if let Some((rgba, w, h)) = web_frame {
-            self.upload_web_texture(rgba, w, h);
-        }
-        if let Some((top_left, size)) = web_bounds {
-            let verts = [
-                TexVertex { position: [top_left.x, top_left.y], uv: [0.0, 0.0] },
-                TexVertex { position: [top_left.x, top_left.y + size.y], uv: [0.0, 1.0] },
-                TexVertex { position: [top_left.x + size.x, top_left.y], uv: [1.0, 0.0] },
-                TexVertex { position: [top_left.x + size.x, top_left.y + size.y], uv: [1.0, 1.0] },
-            ];
-            self.queue.write_buffer(&self.web_quad_vertex, 0, bytemuck::cast_slice(&verts));
         }
 
         if let Some((center, radius, zoom)) = magnifier_lens {
@@ -931,21 +859,6 @@ impl Renderer {
                 pass.set_vertex_buffer(0, self.glyph_batch.vertex.buffer.slice(..));
                 pass.set_index_buffer(self.glyph_batch.index.buffer.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..glyph.1.len() as u32, 0, 0..1);
-            }
-
-            // Browser panel last: it's a floating overlay above the
-            // canvas/toolbar, not page content, so it draws on top of
-            // everything else — same spot other panels' own chrome would
-            // occupy if drawn as vertex geometry instead of a texture.
-            if web_bounds.is_some() {
-                if let Some((_, bind_group, ..)) = &self.web_texture {
-                    pass.set_pipeline(&self.page_pipeline);
-                    pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-                    pass.set_bind_group(1, bind_group, &[]);
-                    pass.set_vertex_buffer(0, self.web_quad_vertex.slice(..));
-                    pass.set_index_buffer(self.page_quad_index.slice(..), wgpu::IndexFormat::Uint32);
-                    pass.draw_indexed(0..6, 0, 0..1);
-                }
             }
         }
 

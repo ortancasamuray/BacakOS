@@ -50,8 +50,8 @@ pub fn data_dir() -> PathBuf {
     base.join("tahta")
 }
 
-/// Board saves live in their own subfolder: the embedded browser (Servo)
-/// keeps its storage directly in `data_dir()`.
+/// Board saves live in their own subfolder: the browser engine Tahta once
+/// embedded kept its storage directly in `data_dir()`.
 fn boards_dir() -> PathBuf {
     data_dir().join("tahtalar")
 }

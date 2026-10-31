@@ -16,9 +16,8 @@ use std::time::SystemTime;
 
 use glam::Vec2;
 
-use crate::font_atlas::{FontAtlas, GlyphVertex};
+use crate::font_atlas::{fit_text, FontAtlas, GlyphVertex};
 use crate::stroke::{push_line, push_rect, Vertex};
-use crate::urlbar::fit_text;
 
 const PANEL_W: f32 = 720.0;
 const HEADER_H: f32 = 56.0;
