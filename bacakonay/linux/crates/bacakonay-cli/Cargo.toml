@@ -19,7 +19,7 @@ zeroize.workspace = true
 
 [package.metadata.deb]
 name = "bacakonay"
-revision = "1"
+revision = "2"
 maintainer = "Anadolu Panteri <bilgi@anadolupanteri.org.tr>"
 copyright = "2026, Anadolu Panteri <bilgi@anadolupanteri.org.tr>"
 section = "admin"
