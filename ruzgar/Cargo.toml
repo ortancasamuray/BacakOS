@@ -1,0 +1,34 @@
+[package]
+name = "ruzgar"
+version = "0.1.0"
+edition = "2021"
+description = "Rüzgar — etkileşimli tahtalar için sekmeli, üzerine yazılıp çizilebilen web tarayıcısı"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+gtk = { package = "gtk4", version = "0.11", features = ["v4_18"] }
+webkit = { package = "webkit6", version = "0.6", features = ["v2_48", "gtk_v4_18"] }
+jsc = { package = "javascriptcore6", version = "0.6" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+
+[package.metadata.deb]
+revision = "1"
+maintainer = "Bacak Desktop Project <bilgi@anadolupanteri.org.tr>"
+copyright  = "2026, Bacak Desktop Project"
+section    = "web"
+priority   = "optional"
+extended-description = """\
+Etkileşimli tahtalar için WebKitGTK tabanlı web tarayıcısı. Adres çubuğu
+ve sekmeler ekranın altında, parmağın uzandığı yerde durur. Çizim
+araçlarıyla (kalem, fosforlu kalem, silgi) açık sayfanın üzerine
+yazılıp çizilebilir; çizimler sayfayla birlikte kayar ve her sayfada
+ayrı tutulur. Videolar GStreamer ile oynatılır."""
+depends = "$auto, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad, gstreamer1.0-libav, gstreamer1.0-gl"
+assets = [
+    ["target/release/ruzgar", "usr/bin/", "755"],
+    ["data/tr.org.anadolupanteri.Ruzgar.desktop", "usr/share/applications/", "644"],
+    ["data/tr.org.anadolupanteri.Ruzgar.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
+]

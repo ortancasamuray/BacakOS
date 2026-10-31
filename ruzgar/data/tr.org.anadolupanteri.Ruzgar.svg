@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <radialGradient id="g" cx="0.38" cy="0.32" r="0.75">
+      <stop offset="0" stop-color="#6db3ff"/>
+      <stop offset="0.6" stop-color="#2f7ae8"/>
+      <stop offset="1" stop-color="#1748b8"/>
+    </radialGradient>
+    <clipPath id="disk">
+      <circle cx="64" cy="64" r="56"/>
+    </clipPath>
+  </defs>
+  <circle cx="64" cy="64" r="56" fill="url(#g)"/>
+  <!-- A faint globe behind the wind: it reads as a browser at a glance. -->
+  <g clip-path="url(#disk)" fill="none" stroke="#ffffff" stroke-opacity="0.22" stroke-width="3">
+    <ellipse cx="64" cy="64" rx="24" ry="56"/>
+    <path d="M64 8 V120"/>
+    <path d="M14 44 H114"/>
+    <path d="M14 84 H114"/>
+  </g>
+  <g fill="none" stroke="#ffffff" stroke-width="8" stroke-linecap="round">
+    <path d="M26 52 H76 a12 12 0 1 0 -12 -12"/>
+    <path d="M22 70 H92 a12 12 0 1 1 -12 12"/>
+    <path d="M32 88 H58"/>
+  </g>
+  <circle cx="64" cy="64" r="55" fill="none" stroke="#0f3a99" stroke-opacity="0.5" stroke-width="2"/>
+</svg>

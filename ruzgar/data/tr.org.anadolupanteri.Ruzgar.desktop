@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Rüzgar
+GenericName=Web Tarayıcısı
+Comment=Sekmeli, üzerine yazılıp çizilebilen web tarayıcısı
+Exec=ruzgar %U
+Icon=tr.org.anadolupanteri.Ruzgar
+Terminal=false
+Categories=Network;WebBrowser;Education;
+MimeType=text/html;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;
+StartupNotify=true
+StartupWMClass=tr.org.anadolupanteri.Ruzgar
+Keywords=web;internet;tarayıcı;eba;
