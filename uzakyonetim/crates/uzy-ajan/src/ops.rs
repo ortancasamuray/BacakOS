@@ -126,7 +126,25 @@ async fn run(cmd: &str, args: &[&str], stdin: Option<&str>) -> Result<(), String
     }
 }
 
-pub async fn create_account(user: &str, full_name: &str, password: &str) -> Result<Payload, String> {
+/// First Turan release whose greeter changes an expired password at login
+/// (`pam_chauthtok`). Older ones refuse the login, which would lock out an
+/// account created with "change at first login".
+const DM_PASSWORD_CHANGE: &str = "0.1.0-8";
+
+/// Whether this machine's login screen can make a user change an expired
+/// password (`bacak-display-manager` >= [`DM_PASSWORD_CHANGE`]).
+async fn greeter_changes_expired_passwords() -> bool {
+    let Ok(out) = Command::new("dpkg-query").args(["-W", "-f=${Version}", "bacak-display-manager"]).output().await else {
+        return false;
+    };
+    let version = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if !out.status.success() || version.is_empty() {
+        return false;
+    }
+    run("dpkg", &["--compare-versions", &version, "ge", DM_PASSWORD_CHANGE], None).await.is_ok()
+}
+
+pub async fn create_account(user: &str, full_name: &str, password: &str, change_at_login: bool) -> Result<Payload, String> {
     if !valid_username(user) {
         return Err(format!("geçersiz kullanıcı adı: {user}"));
     }
@@ -135,6 +153,13 @@ pub async fn create_account(user: &str, full_name: &str, password: &str) -> Resu
     }
     if password.chars().count() < 8 {
         return Err("parola en az 8 karakter olmalı".into());
+    }
+    if change_at_login && !greeter_changes_expired_passwords().await {
+        return Err(format!(
+            "bu makinenin giriş ekranı ilk girişte parola değiştirmeyi desteklemiyor \
+             (bacak-display-manager {DM_PASSWORD_CHANGE} gerekli); makineyi güncelleyin \
+             ya da \"ilk girişte parolasını değiştirsin\" seçeneğini kaldırın"
+        ));
     }
     // GECOS: no ':' or ',' (field separators) and no control characters.
     let gecos: String = full_name.chars().filter(|c| !matches!(c, ':' | ',') && !c.is_control()).take(64).collect();
@@ -150,6 +175,15 @@ pub async fn create_account(user: &str, full_name: &str, password: &str) -> Resu
         // Don't leave a passwordless account behind.
         let _ = run("userdel", &["--remove", "--", user], None).await;
         return Err(e);
+    }
+    // Last change "day 0": PAM asks for a new password at the first login.
+    if change_at_login {
+        if let Err(e) = run("chage", &["--lastday", "0", "--", user], None).await {
+            // The admin asked for it; an account whose password they keep
+            // knowing is not what they get silently.
+            let _ = run("userdel", &["--remove", "--", user], None).await;
+            return Err(e);
+        }
     }
     log::info!("hesap açıldı: {user}");
     Ok(Payload::Tamam)

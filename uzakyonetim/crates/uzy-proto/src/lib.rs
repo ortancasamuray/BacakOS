@@ -92,8 +92,16 @@ pub enum ServerMsg {
 #[serde(tag = "islem", rename_all = "snake_case")]
 pub enum Command {
     KullanicilariListele,
-    /// Create a normal (non-admin) local account.
-    HesapAc { kullanici: String, tam_ad: String, parola: String },
+    /// Create a normal (non-admin) local account. `ilk_giriste_degistir`:
+    /// expire the password so the person sets their own at the first login
+    /// (the admin who typed it then no longer knows it).
+    HesapAc {
+        kullanici: String,
+        tam_ad: String,
+        parola: String,
+        #[serde(default)]
+        ilk_giriste_degistir: bool,
+    },
     /// Delete a normal (non-admin) local account with its home directory.
     HesapSil { kullanici: String },
     /// Start a Bacak Onay enrollment: a fresh secret is held **in the agent's

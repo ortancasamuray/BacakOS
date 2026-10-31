@@ -144,6 +144,11 @@ function screenImg(m, cls = "ekran") {
 
 function machineCard(m) {
   const users = el("button", { disabled: !m.cevrimici || m.iptal, onclick: (e) => { e.stopPropagation(); openUsers(m); } }, "Kullanıcılar");
+  const add = el("button", {
+    class: "birincil", disabled: !canAddUser(m),
+    title: canAddUser(m) ? "Bu bilgisayarda yeni oturum hesabı aç (Bacak Onay ile)" : "Makine çevrimdışı ya da yerel politikası hesap açmayı kapatıyor",
+    onclick: (e) => { e.stopPropagation(); openUsers(m, true); },
+  }, "+ Kullanıcı ekle");
   return el("div", { class: `makine${m.iptal ? " iptal" : ""}`, onclick: () => openScreen(m) },
     screenImg(m),
     el("div", { class: "makine-bilgi" },
@@ -152,8 +157,11 @@ function machineCard(m) {
         m.cevrimici ? "Çevrimiçi" : `Son görülme: ${ago(m.son_gorulme)}`,
         " · ", m.son_ekran ? (m.son_ekran_oturum ? `Oturum: ${m.son_ekran_oturum}` : "Giriş ekranı") : "—"),
       el("div", { class: "soluk kucuk" }, m.isletim_sistemi || ""),
-      el("div", { class: "satir" }, users)));
+      el("div", { class: "satir" }, add, users)));
 }
+
+/** A new account can be opened only on a reachable machine whose local policy allows it. */
+const canAddUser = (m) => m.cevrimici && !m.iptal && m.politika?.hesap_acma !== false;
 
 // ---- dialog ----------------------------------------------------------------
 
@@ -200,13 +208,18 @@ async function openScreen(m) {
 }
 
 /** Users window: accounts on the machine, Bacak Onay, new account. */
-function openUsers(m) {
+function openUsers(m, focusNew = false) {
   const box = el("div", {}, el("p", { class: "soluk" }, "Kullanıcılar yükleniyor…"));
+  const form = accountForm(m);
   openDialog(
     header(`${m.ad} — Kullanıcılar`, el("button", { onclick: () => openScreen(m) }, "Ekran")),
     policyLine(m.politika),
-    el("div", { class: "iki-sutun" }, box, accountForm(m)));
+    el("div", { class: "iki-sutun" }, box, form));
   loadUsers(m, box);
+  if (focusNew) {
+    form.scrollIntoView({ block: "nearest" });
+    form.querySelector("input[name=kullanici]").focus();
+  }
 }
 
 function policyLine(p) {
@@ -255,6 +268,8 @@ function accountForm(m) {
     el("label", {}, "Ad Soyad", el("input", { name: "tam_ad", placeholder: "Ayşe Yılmaz" })),
     el("label", {}, "İlk parola (en az 8 karakter)", el("input", { name: "parola", type: "password", required: true, minlength: 8, autocomplete: "new-password" })),
     el("label", { class: "satir" }, el("input", { name: "bacakonay", type: "checkbox", checked: true, style: undefined }), " Bacak Onay iki adımlı girişi kur"),
+    el("label", { class: "satir" }, el("input", { name: "ilk_giriste_degistir", type: "checkbox", checked: true }), " İlk girişte kendi parolasını belirlesin"),
+    el("p", { class: "soluk kucuk" }, "Önerilir: verdiğiniz ilk parola yalnız ilk giriş için geçerli olur, sonrasını siz de bilmezsiniz."),
     err, el("button", { class: "birincil", type: "submit" }, "Hesabı aç"));
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -264,6 +279,7 @@ function accountForm(m) {
     try {
       const r = await api("POST", `/api/makineler/${m.id}/hesap`, {
         kullanici: user, tam_ad: f.get("tam_ad").trim(), parola: f.get("parola"), bacakonay: f.get("bacakonay") === "on",
+        ilk_giriste_degistir: f.get("ilk_giriste_degistir") === "on",
       });
       form.reset();
       if (r.qr) showQr(m, user, r); else openUsers(m);
@@ -349,7 +365,7 @@ async function loadAdmins() {
 }
 
 async function removeAdmin(name) {
-  if (!confirm(`${name} yöneticiliği silinsin mi? Açık oturumu hemen kapanır.`)) return;
+  if (!confirm(`${name} panel yöneticiliğinden çıkarılsın mı? Panelde açık oturumu hemen kapanır; bilgisayarlardaki hesaplara dokunulmaz.`)) return;
   try { await api("POST", `/api/yoneticiler/${encodeURIComponent(name)}/sil`); loadAdmins(); }
   catch (e) { alert(e.message); }
 }
@@ -381,7 +397,7 @@ $("yonetici-formu").addEventListener("submit", async (e) => {
     const r = await api("POST", "/api/yoneticiler", { ad: name, parola: f.get("parola") });
     e.target.reset();
     const box = el("div");
-    openDialog(header(`${name} — yeni yönetici`), box);
+    openDialog(header(`${name} — yeni panel yöneticisi`), box);
     adminQr(box, name, r, async (kod) => {
       await api("POST", "/api/yoneticiler/onayla", { ad: name, kod });
       box.replaceChildren(el("p", {}, `✓ ${name} artık panele giriş yapabilir.`));

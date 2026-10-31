@@ -281,12 +281,12 @@ async fn execute(cmd: Command, policy: uzy_proto::Policy, pending: &ops::Pending
     let denied = |what: &str| Err(format!("bu makinenin yerel politikası {what} işlemine izin vermiyor"));
     match cmd {
         Command::KullanicilariListele => ops::list_users(),
-        Command::HesapAc { kullanici, tam_ad, parola } => {
+        Command::HesapAc { kullanici, tam_ad, parola, ilk_giriste_degistir } => {
             let parola = zeroize::Zeroizing::new(parola);
             if !policy.hesap_acma {
                 return denied("hesap açma");
             }
-            ops::create_account(&kullanici, &tam_ad, &parola).await
+            ops::create_account(&kullanici, &tam_ad, &parola, ilk_giriste_degistir).await
         }
         Command::HesapSil { kullanici } if policy.hesap_silme => ops::delete_account(pending, &kullanici).await,
         Command::HesapSil { .. } => denied("hesap silme"),
