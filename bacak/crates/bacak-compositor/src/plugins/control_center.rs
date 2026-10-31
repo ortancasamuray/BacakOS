@@ -41,7 +41,13 @@ pub enum CcAction {
     UzakelConnect,
     /// Open the "Uzak Masaüstü" (Remote Desktop) panel.
     RemoteDesktopConnect,
+    /// Launch the Bacak Onay window (two-step login on/off, pairing QR).
+    BacakOnay,
 }
+
+/// The Bacak Onay window's app id (`.desktop` name), from the
+/// `bacakonay-ayar` package; the shortcut shows only when it is installed.
+pub const BACAKONAY_APP: &str = "tr.org.anadolupanteri.BacakOnay";
 
 /// Visual flavour of a tile, read by the renderer. State (on/off, level) lives
 /// on `ControlCenter` so a click mutates it in place without re-rasterising.

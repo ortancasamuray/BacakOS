@@ -4852,6 +4852,11 @@ impl BacakState {
         let aud_on = std::path::Path::new("/usr/share/bacak/plugins/audio.plugin").exists();
         let ds_on = std::path::Path::new("/usr/share/bacak/plugins/desktop-settings.plugin").exists();
         let uzakel_on = std::path::Path::new(crate::plugins::uzakel::MANIFEST).exists();
+        let bacakonay_on = std::path::Path::new(&format!(
+            "/usr/share/applications/{}.desktop",
+            crate::plugins::control_center::BACAKONAY_APP
+        ))
+        .exists();
         // Unconditional for now (no packaging manifest yet — this ships as
         // part of bacak-compositor itself during development; gate it behind
         // a `/usr/share/bacak/plugins/*.plugin` file like the other optional
@@ -4876,6 +4881,9 @@ impl BacakState {
         }
         if remote_desktop_on {
             shortcuts.push(CcAction::RemoteDesktopConnect);
+        }
+        if bacakonay_on {
+            shortcuts.push(CcAction::BacakOnay);
         }
         // Height of `n` cells laid out two per row.
         let grid_h = |n: usize, h: f32| {
@@ -4986,6 +4994,7 @@ impl BacakState {
                 CcAction::Screenshot => "Ekran Görüntüsü",
                 CcAction::DesktopSettings => "Masaüstü Ayarları",
                 CcAction::UzakelConnect => "Uzakel",
+                CcAction::BacakOnay => "Bacak Onay",
                 _ => "Uzak Masaüstü",
             };
             CcTile {
@@ -7700,6 +7709,10 @@ impl BacakState {
                     self.control_center = None;
                     self.open_remote_desktop_panel(out);
                 }
+            }
+            CcAction::BacakOnay => {
+                self.control_center = None;
+                self.launch_app(crate::plugins::control_center::BACAKONAY_APP);
             }
             // A power button acts on the second tap only.
             _ if power && !confirmed => self.cc_set_armed(Some(action)),
