@@ -11,6 +11,7 @@ mod font_atlas;
 mod geom;
 mod input_handler;
 mod magnifier;
+mod opener;
 mod palm;
 mod pdf;
 mod pdf_export;
