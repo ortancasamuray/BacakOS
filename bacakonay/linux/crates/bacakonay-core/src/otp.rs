@@ -124,17 +124,32 @@ pub fn verify_totp(
     window: u64,
     last_step: Option<u64>,
 ) -> Option<u64> {
-    let code = code.trim();
-    if code.len() != params.digits as usize || !code.bytes().all(|b| b.is_ascii_digit()) {
+    // The app shows codes grouped ("123 456"), so people type the space (or
+    // paste "123-456"): only digits count. Collected into a stack buffer so
+    // the code isn't copied to the heap.
+    let mut buf = [0u8; 8];
+    let mut n = 0;
+    for c in code.chars() {
+        if c.is_whitespace() || c == '-' {
+            continue;
+        }
+        if !c.is_ascii_digit() || n == buf.len() {
+            return None;
+        }
+        buf[n] = c as u8;
+        n += 1;
+    }
+    if n != params.digits as usize {
         return None;
     }
+    let code = &buf[..n];
     let now = time_step(unix_time, params.period);
     let mut matched = None;
     // Check every candidate (no early exit) so timing doesn't reveal which
     // step, if any, matched.
     for step in now.saturating_sub(window)..=now.saturating_add(window) {
         let candidate = hotp(secret, step, params.algorithm, params.digits);
-        let eq: bool = candidate.as_bytes().ct_eq(code.as_bytes()).into();
+        let eq: bool = candidate.as_bytes().ct_eq(code).into();
         if eq && last_step.is_none_or(|l| step > l) && matched.is_none() {
             matched = Some(step);
         }
@@ -202,6 +217,19 @@ mod tests {
         // Malformed input.
         assert!(verify_totp(SEED20, &p, "12a456", t, 1, None).is_none());
         assert!(verify_totp(SEED20, &p, "1234567", t, 1, None).is_none());
+    }
+
+    #[test]
+    fn verify_accepts_the_code_as_the_app_groups_it() {
+        let p = OtpParams::default();
+        let t = 1_700_000_000;
+        let code = totp(SEED20, &p, t);
+        let (a, b) = code.split_at(3);
+        for typed in [format!("{a} {b}"), format!(" {a}-{b}\n"), format!("{a}\u{a0}{b}")] {
+            assert!(verify_totp(SEED20, &p, &typed, t, 1, None).is_some(), "{typed:?}");
+        }
+        assert!(verify_totp(SEED20, &p, &format!("{a}.{b}"), t, 1, None).is_none());
+        assert!(verify_totp(SEED20, &p, "", t, 1, None).is_none());
     }
 
     #[test]
