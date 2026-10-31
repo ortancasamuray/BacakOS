@@ -342,6 +342,7 @@ pub fn run() -> Result<()> {
             crate::render::process_pending_dmabuf(&mut state, renderer);
             crate::render::process_pending_screencopy(&mut state, renderer);
             crate::render::process_pending_screenshot(&mut state, renderer);
+            crate::render::process_ipc_screenshots(&mut state, renderer);
 
             // Z-ordered, alpha-differentiated, shadow + snap-preview list.
             let elements: Vec<BacakElements> =

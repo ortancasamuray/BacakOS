@@ -20,10 +20,12 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::Duration;
 
-use bacak_ipc::{Ekran, Gelen, Gorunum, Istek, Mesaj, Olay, Pencere, MAX_LINE};
+use bacak_ipc::{Alan, Ekran, Gelen, Gorunum, Istek, Mesaj, Olay, Pencere, MAX_LINE};
 
 /// How long a request waits for its reply.
 pub const ZAMAN_ASIMI: Duration = Duration::from_secs(2);
+/// How long [`Istemci::ekran_goruntusu`] waits.
+pub const EKRAN_ZAMAN_ASIMI: Duration = Duration::from_secs(10);
 
 pub struct Istemci {
     reader: BufReader<UnixStream>,
@@ -122,6 +124,18 @@ impl Istemci {
 
     pub fn ekranlar(&mut self) -> io::Result<Vec<Ekran>> {
         self.typed(Istek::Ekranlar)
+    }
+
+    /// Saves the screen as a PNG at `dosya` (absolute), leaving out window
+    /// `gizle` (e.g. the caller's own, from [`Istemci::pencereler`]) and
+    /// keeping only `alan`. May take longer than [`ZAMAN_ASIMI`]: finding a
+    /// web page's bounds asks the browser over accessibility.
+    pub fn ekran_goruntusu(&mut self, dosya: &Path, gizle: Option<u64>, alan: Alan) -> io::Result<()> {
+        let dosya = dosya.to_str().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "dosya yolu UTF-8 değil"))?;
+        self.writer.set_read_timeout(Some(EKRAN_ZAMAN_ASIMI))?;
+        let sonuc = self.iste(Istek::EkranGoruntusu { dosya: dosya.into(), gizle, alan }).map(|_| ());
+        self.writer.set_read_timeout(Some(ZAMAN_ASIMI))?;
+        sonuc
     }
 
     /// Turns this connection into an event stream. The iterator blocks

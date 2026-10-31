@@ -26,7 +26,7 @@ mod xdg;
 
 /// The raw protocol types, for applications that talk to the socket directly.
 pub use bacak_ipc as protokol;
-pub use bacak_ipc::{Ekran, Gorunum, Olay, Pencere};
+pub use bacak_ipc::{Alan, Ekran, Gorunum, Olay, Pencere};
 pub use ipc::{bildir, Istemci};
 pub use masaustu::Uygulama;
 pub use renk::{Palet, Renk};

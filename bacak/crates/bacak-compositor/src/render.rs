@@ -4288,6 +4288,71 @@ pub fn process_pending_screenshot(state: &mut BacakState, renderer: &mut GlesRen
     }
 }
 
+/// Answer the queued IPC `ekran_goruntusu` requests: each output rendered
+/// offscreen as content only (windows + wallpaper, no dock/OSK/cursor/
+/// dimming — `build_output_frame` without the final-frame overlays), with
+/// the asking window left out, written as a PNG where the client asked.
+pub fn process_ipc_screenshots(state: &mut BacakState, renderer: &mut GlesRenderer) {
+    if state.ipc_screenshots.is_empty() {
+        return;
+    }
+    for req in std::mem::take(&mut state.ipc_screenshots) {
+        state.capture_hidden = req.hide;
+        let img = capture_content_image(state, renderer, req.output);
+        state.capture_hidden = None;
+        let img = match (img, req.region, state.wm.output(req.output)) {
+            (Some(img), Some(r), Some(o)) => {
+                let scale = state.outputs.get(&req.output).map(|o| o.current_scale().integer_scale().max(1)).unwrap_or(1) as f32;
+                let x = (((r.x - o.bounds.x) * scale).max(0.0) as u32).min(img.width().saturating_sub(1));
+                let y = (((r.y - o.bounds.y) * scale).max(0.0) as u32).min(img.height().saturating_sub(1));
+                let w = ((r.w * scale) as u32).clamp(1, img.width() - x);
+                let h = ((r.h * scale) as u32).clamp(1, img.height() - y);
+                Some(image::imageops::crop_imm(&img, x, y, w, h).to_image())
+            }
+            (img, ..) => img,
+        };
+        let result = match img {
+            Some(img) => img.save_with_format(&req.path, image::ImageFormat::Png).map_err(|e| e.to_string()),
+            None => Err("ekran çizilemedi".to_string()),
+        };
+        let reply = match result {
+            Ok(()) => bacak_ipc::Yanit::ok(req.id, None),
+            Err(e) => {
+                tracing::warn!(path = %req.path.display(), error = %e, "IPC ekran görüntüsü alınamadı");
+                bacak_ipc::Yanit::err(req.id, e)
+            }
+        };
+        if let Some(ipc) = state.ipc.as_mut() {
+            ipc.reply(req.client, reply);
+            ipc.flush();
+        }
+    }
+}
+
+fn capture_content_image(state: &BacakState, renderer: &mut GlesRenderer, output_id: crate::wm::OutputId) -> Option<image::RgbaImage> {
+    use smithay::backend::renderer::{Bind, ExportMem};
+    let output = state.outputs.get(&output_id)?;
+    let scale = output.current_scale().integer_scale().max(1);
+    let mode = output.current_mode()?;
+    let (fw, fh) = (mode.size.w.max(1), mode.size.h.max(1));
+    let scene = build_output_frame(state, renderer, scale, output_id, false, None);
+    let mut tex = renderer.create_buffer(Fourcc::Argb8888, Size::<i32, BufferCoord>::from((fw, fh))).ok()?;
+    {
+        let mut fb = renderer.bind(&mut tex).ok()?;
+        let phys = Size::<i32, Physical>::from((fw, fh));
+        let mut dt = OutputDamageTracker::new(phys, Scale::from(scale as f64), Transform::Normal);
+        dt.render_output(renderer, &mut fb, 0, &scene, Color32F::new(0.024, 0.165, 0.239, 1.0)).ok()?;
+    }
+    let rect = Rectangle::<i32, BufferCoord>::new((0, 0).into(), (fw, fh).into());
+    let mapping = renderer.copy_texture(&tex, rect, Fourcc::Argb8888).ok()?;
+    let mut rgba = renderer.map_texture(&mapping).ok()?.to_vec();
+    // Argb8888 reads back as B,G,R,A bytes.
+    for px in rgba.chunks_exact_mut(4) {
+        px.swap(0, 2);
+    }
+    image::RgbaImage::from_raw(fw as u32, fh as u32, rgba)
+}
+
 /// Render `output_id` to an offscreen buffer, read back `region` (WM-global
 /// logical px; `None` = whole output), and save it as a PNG. Returns the
 /// written path on success. The readback path is identical to [`screencopy_one`];
@@ -4608,7 +4673,7 @@ fn render_workspace_windows(
         // the window is still `Floating` (we only flip the state on
         // settle), so it stays visible while it scales down and then
         // cleanly disappears the frame it lands.
-        if matches!(win.state, WinState::Minimized) {
+        if matches!(win.state, WinState::Minimized) || state.capture_hidden == Some(win.id) {
             continue;
         }
         // Translate the WM-global position into output-local pixels.
@@ -4641,7 +4706,10 @@ fn render_workspace_windows(
         // App menus / tooltips / dropdowns attached to this window. Pushed
         // first in this window's group so they sit above its content *and* its
         // title bar (and behind any higher window, which was drawn earlier).
-        let alpha = if win.focused { 1.0 } else { PASSIVE_WINDOW_ALPHA } * open_alpha;
+        // An IPC capture (`capture_hidden`) shows the windows as content,
+        // without the dimmed look of the ones not focused.
+        let passive = if state.capture_hidden.is_some() { 1.0 } else { PASSIVE_WINDOW_ALPHA };
+        let alpha = if win.focused { 1.0 } else { passive } * open_alpha;
         push_window_popups(renderer, &wl_surface, location, output_scale, alpha, out);
 
         // Server-side title bar, pushed before this window's content (so it's

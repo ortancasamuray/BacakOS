@@ -128,6 +128,59 @@ pub trait AtspiRegistry {
 pub trait AtspiAccessible {
     fn get_children(&self) -> zbus::Result<Vec<(String, OwnedObjectPath)>>;
     fn get_interfaces(&self) -> zbus::Result<Vec<String>>;
+    fn get_role_name(&self) -> zbus::Result<String>;
+    fn get_state(&self) -> zbus::Result<Vec<u32>>;
+}
+
+/// `ATSPI_STATE_SHOWING`: on screen (a browser's visible tab, not the others).
+const STATE_SHOWING: u32 = 25;
+
+/// WINDOW-relative extents of the web page the app with process `pid`
+/// shows: its largest *showing* `document web` (a browser's visible tab).
+/// Blocking D-Bus round trips — run it off the main loop. `None` when the
+/// app has no such document (not a browser) or isn't on the a11y bus.
+pub fn document_extents(conn: &Connection, pid: u32) -> Option<(i32, i32, i32, i32)> {
+    let dbus = zbus::blocking::fdo::DBusProxy::new(conn).ok()?;
+    let acc = |bus: &str, path: &OwnedObjectPath| -> Option<AtspiAccessibleProxy<'static>> {
+        AtspiAccessibleProxy::builder(conn).destination(bus.to_string()).ok()?.path(path.clone()).ok()?.build().ok()
+    };
+    let root = OwnedObjectPath::try_from("/org/a11y/atspi/accessible/root").ok()?;
+    let apps = acc("org.a11y.atspi.Registry", &root)?.get_children().ok()?;
+    let mut best: Option<(i32, i32, i32, i32)> = None;
+    for (bus, path) in apps {
+        let Ok(name) = zbus::names::BusName::try_from(bus.as_str()) else { continue };
+        if dbus.get_connection_unix_process_id(name).ok() != Some(pid) {
+            continue;
+        }
+        let mut queue = std::collections::VecDeque::from([path]);
+        let mut budget = 3000;
+        while let Some(path) = queue.pop_front() {
+            budget -= 1;
+            if budget == 0 {
+                break;
+            }
+            let Some(a) = acc(&bus, &path) else { continue };
+            if a.get_role_name().is_ok_and(|r| r == "document web") {
+                let showing = a.get_state().ok().and_then(|s| s.first().copied()).is_some_and(|b| b & (1 << STATE_SHOWING) != 0);
+                let extents = AtspiComponentProxy::builder(conn)
+                    .destination(bus.clone())
+                    .ok()
+                    .and_then(|b| b.path(path.clone()).ok())
+                    .and_then(|b| b.build().ok())
+                    .and_then(|c| c.get_extents(COORD_WINDOW).ok());
+                if let (true, Some(e)) = (showing, extents) {
+                    if e.2 > 0 && e.3 > 0 && best.map_or(true, |b| e.2 * e.3 > b.2 * b.3) {
+                        best = Some(e);
+                    }
+                }
+                continue; // the page's own tree can be huge and holds no other document we want
+            }
+            if let Ok(children) = a.get_children() {
+                queue.extend(children.into_iter().map(|(_, p)| p));
+            }
+        }
+    }
+    best
 }
 
 /// A reference to an accessible object: its owning bus name + object path.
@@ -218,6 +271,11 @@ impl AtspiBridge {
         }
 
         Some(Self { a11y, focused, sel_dirty })
+    }
+
+    /// The a11y bus connection, for lookups on another thread.
+    pub fn connection(&self) -> Connection {
+        self.a11y.clone()
     }
 
     /// The currently focused text accessible, if any.
