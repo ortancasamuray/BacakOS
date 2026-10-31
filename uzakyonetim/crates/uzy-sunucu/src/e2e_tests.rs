@@ -257,3 +257,27 @@ async fn re_enrollment_with_the_current_certificate_renews_the_same_machine() {
     assert_ne!(id3, makine_id);
     assert_eq!(f.app.db.machines().len(), 2);
 }
+
+#[tokio::test]
+async fn removing_a_machine_removes_its_screens() {
+    use base64::Engine;
+    let f = start().await;
+    f.app.db.add_machine("00000000000000aa", "lab-01", "fp1").unwrap();
+    let shot = uzy_proto::Screenshot {
+        zaman: crate::db::now() as u64,
+        oturum: Some("ayse".into()),
+        jpeg_b64: base64::engine::general_purpose::STANDARD.encode([0xFF, 0xD8, 0xFF, 0xE0, 0, 0]),
+    };
+    gateway::store_screenshot(&f.app, "00000000000000aa", &shot).unwrap();
+    let dir = f.app.screens_dir("00000000000000aa").unwrap();
+    assert!(dir.join("son.jpg").exists());
+
+    assert!(f.app.db.revoke("00000000000000aa"));
+    gateway::forget_screens(&f.app, "00000000000000aa");
+    assert!(!dir.exists(), "filodan çıkarılan makinenin ekranları silinmeli");
+    assert!(f.app.db.machines().iter().all(|m| m.son_ekran == 0));
+
+    // A frame that was still in flight doesn't bring the screen back.
+    assert!(gateway::store_screenshot(&f.app, "00000000000000aa", &shot).is_err());
+    assert!(!dir.exists());
+}

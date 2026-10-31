@@ -231,6 +231,23 @@ impl Db {
         );
     }
 
+    /// Whether `id` is a machine still in the fleet (known, not revoked).
+    pub fn active(&self, id: &str) -> bool {
+        self.c()
+            .query_row("SELECT 1 FROM makineler WHERE id=?1 AND iptal=0", params![id], |_| Ok(()))
+            .optional()
+            .ok()
+            .flatten()
+            .is_some()
+    }
+
+    /// Ids of machines taken out of the fleet.
+    pub fn revoked_ids(&self) -> Vec<String> {
+        let c = self.c();
+        let mut st = c.prepare("SELECT id FROM makineler WHERE iptal=1").unwrap();
+        st.query_map([], |r| r.get(0)).unwrap().filter_map(Result::ok).collect()
+    }
+
     pub fn revoke(&self, id: &str) -> bool {
         self.c().execute("UPDATE makineler SET iptal=1 WHERE id=?1", params![id]).map(|n| n == 1).unwrap_or(false)
     }
@@ -339,6 +356,8 @@ mod tests {
         assert!(db.revoke("m1"));
         assert!(db.machine_by_cert("fp1").is_none());
         assert!(!db.rekey_machine("m1", "lab-01", "fp2").unwrap(), "iptal edilen makine yeniden anahtarlanmamalı");
+        assert!(!db.active("m1"));
+        assert_eq!(db.revoked_ids(), vec!["m1".to_string()]);
     }
 
     #[test]

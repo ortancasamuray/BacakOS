@@ -16,7 +16,7 @@ use serde_json::json;
 use uzy_proto::{valid_username, Command, Payload};
 
 use crate::web::{bad, Admin, ApiError, ApiResult};
-use crate::App;
+use crate::{gateway, App};
 
 const CALL_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -68,6 +68,9 @@ async fn list(State(app): State<Arc<App>>, _a: Admin) -> ApiResult {
         .db
         .machines()
         .into_iter()
+        // Machines taken out of the fleet stay in the database only so the
+        // audit log can still name them; the panel no longer shows them.
+        .filter(|m| !m.iptal)
         .map(|m| {
             let mut v = serde_json::to_value(&m).unwrap();
             v["cevrimici"] = json!(app.agents.online(&m.id));
@@ -230,6 +233,7 @@ async fn revoke(State(app): State<Arc<App>>, admin: Admin, Path(id): Path<String
         return Err(bad("makine bulunamadı"));
     }
     app.agents.disconnect(&id);
+    gateway::forget_screens(&app, &id);
     app.db.audit(&admin.name, &id, "makine_iptal", "", "tamam");
     Ok(Json(json!({ "tamam": true })))
 }
