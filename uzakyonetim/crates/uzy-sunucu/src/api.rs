@@ -158,6 +158,8 @@ struct AccountReq {
     parola: String,
     #[serde(default)]
     bacakonay: bool,
+    #[serde(default)]
+    ilk_giriste_degistir: bool,
 }
 
 async fn create_account(
@@ -171,7 +173,12 @@ async fn create_account(
     if parola.chars().count() < 8 {
         return Err(bad("parola en az 8 karakter olmalı"));
     }
-    let cmd = Command::HesapAc { kullanici: req.kullanici.clone(), tam_ad: req.tam_ad.clone(), parola: parola.to_string() };
+    let cmd = Command::HesapAc {
+        kullanici: req.kullanici.clone(),
+        tam_ad: req.tam_ad.clone(),
+        parola: parola.to_string(),
+        ilk_giriste_degistir: req.ilk_giriste_degistir,
+    };
     call(&app, &admin.name, &id, "hesap_ac", &req.kullanici, cmd).await?;
     if !req.bacakonay {
         return Ok(Json(json!({ "tamam": true })));
