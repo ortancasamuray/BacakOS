@@ -54,7 +54,7 @@ impl AuthSlot {
 
         let mut authenticator = build_authenticator();
         let result = {
-            let mut conv = IpcConversation { conn };
+            let mut conv = IpcConversation { conn, language: self.language };
             authenticator.authenticate(username, &mut conv)
         };
 
@@ -137,6 +137,7 @@ impl AuthSlot {
 /// Conversation that relays prompts to / answers from the greeter over IPC.
 struct IpcConversation<'a> {
     conn: &'a mut Conn,
+    language: Language,
 }
 
 impl<'a> Conversation for IpcConversation<'a> {
@@ -147,7 +148,7 @@ impl<'a> Conversation for IpcConversation<'a> {
                 let echo = matches!(prompt, Prompt::VisibleInput(_));
                 self.conn
                     .write_response(&Response::AuthPrompt {
-                        message: msg.clone(),
+                        message: pam_text(msg, self.language),
                         echo,
                     })
                     .map_err(|_| AuthError::Aborted)?;
@@ -159,20 +160,51 @@ impl<'a> Conversation for IpcConversation<'a> {
                     Some(_) => Err(AuthError::Aborted),
                 }
             }
-            Prompt::Info(msg) => {
-                let _ = self.conn.write_response(&Response::AuthInfo {
-                    message: msg.clone(),
-                });
-                Ok(None)
-            }
-            Prompt::Error(msg) => {
-                let _ = self.conn.write_response(&Response::AuthInfo {
-                    message: msg.clone(),
-                });
+            Prompt::Info(msg) | Prompt::Error(msg) => {
+                // pam_unix's "Changing password for <user>." would replace the
+                // line that says *why* (the greeter shows the latest info only).
+                if !msg.starts_with("Changing password for") {
+                    let _ = self.conn.write_response(&Response::AuthInfo {
+                        message: pam_text(msg, self.language),
+                    });
+                }
                 Ok(None)
             }
         }
     }
+}
+
+/// pam_unix speaks English unless the daemon runs under a Turkish locale; its
+/// password-change dialogue (`pam_chauthtok`, first login after an
+/// administrator set the password) is shown in the greeter's language. Text
+/// that isn't recognised (other modules, Bacak Onay) is passed through.
+fn pam_text(msg: &str, lang: Language) -> String {
+    if lang != Language::Tr {
+        return msg.to_string();
+    }
+    let m = msg.trim().trim_end_matches(':').trim_end_matches('.').trim();
+    let tr = match m {
+        "Current password" | "(current) UNIX password" => "Şu anki parolanız (yöneticinin verdiği ilk parola)",
+        "New password" | "Enter new UNIX password" => "Yeni parola",
+        "Retype new password" | "Retype new UNIX password" => "Yeni parolayı tekrar girin",
+        "You are required to change your password immediately (administrator enforced)" => {
+            "İlk girişiniz: yöneticinin verdiği parolayı kendi parolanızla değiştirin."
+        }
+        "You are required to change your password immediately (password expired)"
+        | "You are required to change your password immediately (password aged)" => {
+            "Parolanızın süresi doldu; yeni bir parola belirleyin."
+        }
+        "Sorry, passwords do not match" => "Parolalar eşleşmiyor.",
+        "Password unchanged" => "Yeni parola eskisiyle aynı olamaz.",
+        "No password has been supplied" | "No password supplied" => "Parola girilmedi.",
+        "You must choose a longer password" | "You must choose a shorter password" => {
+            "Bu uzunlukta parola kabul edilmiyor."
+        }
+        "Password has been already used. Choose another" => "Bu parola daha önce kullanılmış; başka bir parola seçin.",
+        "Authentication token manipulation error" => "Parola değiştirilemedi.",
+        _ => return msg.to_string(),
+    };
+    tr.to_string()
 }
 
 /// Failure messages are deliberately generic to avoid a user-enumeration or
@@ -181,6 +213,7 @@ fn display_auth_error(e: &AuthError, lang: Language) -> String {
     let t = lang.ui();
     match e {
         AuthError::CredentialsExpired => t.password_expired.into(),
+        AuthError::PasswordChangeFailed(_) => t.password_change_failed.into(),
         AuthError::AccountUnavailable(_) => t.account_unavailable.into(),
         _ => t.auth_failed.into(),
     }
@@ -232,4 +265,24 @@ fn build_authenticator() -> Box<dyn Authenticator> {
         .map(|n| format!("tty{n}"))
         .unwrap_or_else(|_| "tty1".into());
     Box::new(bacak_pam::system::SystemAuthenticator::new(tty))
+}
+
+#[cfg(test)]
+mod pam_text_tests {
+    use super::*;
+
+    #[test]
+    fn password_change_dialogue_is_turkish() {
+        assert_eq!(pam_text("New password: ", Language::Tr), "Yeni parola");
+        assert_eq!(pam_text("Retype new password: ", Language::Tr), "Yeni parolayı tekrar girin");
+        assert!(pam_text("Current password: ", Language::Tr).starts_with("Şu anki parolanız"));
+        assert!(pam_text(
+            "You are required to change your password immediately (administrator enforced).",
+            Language::Tr
+        )
+        .starts_with("İlk girişiniz"));
+        // Unknown text (Bacak Onay's own prompt) and English stay as they are.
+        assert_eq!(pam_text("Bacak Onay kodu: ", Language::Tr), "Bacak Onay kodu: ");
+        assert_eq!(pam_text("New password: ", Language::En), "New password: ");
+    }
 }

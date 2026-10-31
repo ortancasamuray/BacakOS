@@ -36,6 +36,10 @@ pub enum AuthError {
     AccountUnavailable(String),
     #[error("credentials expired")]
     CredentialsExpired,
+    /// The password had to be changed at login (e.g. a first password set by
+    /// an administrator) and the change did not go through.
+    #[error("password change failed: {0}")]
+    PasswordChangeFailed(String),
     #[error("the conversation was aborted")]
     Aborted,
     #[error("pam error ({code}): {message}")]
@@ -84,7 +88,8 @@ pub struct AuthedUser {
 /// * `system::SystemAuthenticator` — real libpam, behind `--features system-pam`.
 pub trait Authenticator {
     /// Run the full `authenticate` + `acct_mgmt` flow for `username`, using
-    /// `conv` to obtain secrets. On success the session is *not* yet opened;
+    /// `conv` to obtain secrets. A password that must be changed first
+    /// (`PAM_NEW_AUTHTOK_REQD`) is changed through the same conversation. On success the session is *not* yet opened;
     /// call [`Authenticator::open_session`].
     fn authenticate(
         &mut self,
