@@ -60,12 +60,13 @@ import java.util.concurrent.atomic.AtomicBoolean
 /**
  * Camera QR scanner (CameraX preview + ZXing on the luminance plane, the same
  * approach as uzakel-android). Hands the raw text of the first `otpauth://`
+ * (account) or `bacakonay://` (login approval)
  * QR it sees to [onScanned]; the caller parses and stores it.
  * [error] shows a parse failure from a previous attempt.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun QrScanScreen(error: String?, onScanned: (String) -> Unit, onBack: () -> Unit) {
+fun QrScanScreen(error: String?, hint: String, onScanned: (String) -> Unit, onBack: () -> Unit) {
     val context = LocalContext.current
     var hasPermission by remember {
         mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
@@ -97,7 +98,7 @@ fun QrScanScreen(error: String?, onScanned: (String) -> Unit, onBack: () -> Unit
                         Spacer(Modifier.height(8.dp))
                     }
                     Text(
-                        "BacakOS'ta `sudo bacakonay kur` komutunun gösterdiği QR'ı çerçeveye alın",
+                        hint,
                         color = Color.White,
                         textAlign = TextAlign.Center,
                     )
@@ -148,7 +149,7 @@ private fun CameraPreview(onScanned: (String) -> Unit) {
                 analysis.setAnalyzer(executor) { image ->
                     val text = if (handled.get()) null else decode(reader, image)
                     image.close()
-                    if (text != null && text.startsWith("otpauth://", ignoreCase = true) && handled.compareAndSet(false, true)) {
+                    if (text != null && (text.startsWith("otpauth://", ignoreCase = true) || text.startsWith("bacakonay://", ignoreCase = true)) && handled.compareAndSet(false, true)) {
                         mainHandler.post {
                             runCatching { provider.unbindAll() }
                             onScanned(text)

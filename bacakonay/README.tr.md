@@ -18,9 +18,18 @@ ekranında kod soran `pam_bacakonay.so` modülü.
                                             └──────────────────────────────┘
 ```
 
-Ağ bağlantısı yok: telefon ile bilgisayar yalnızca eşleme QR'ı üzerinden bir kez
-"konuşur", kodlar iki tarafta da saatten hesaplanır. Uygulamanın internet izni
-bile yoktur.
+Kodlar iki tarafta da saatten hesaplanır; gizli anahtar telefona yalnızca
+eşleme QR'ıyla bir kez geçer ve oradan hiç çıkmaz.
+
+**QR ile giriş (isteğe bağlı):** giriş ekranı kod sorarken bir QR da gösterir.
+Uygulamada **QR ile giriş** → okut → **Onayla**: telefon o anın kodunu, QR'daki
+tek kullanımlık AES-256-GCM anahtarıyla şifreleyip yerel ağdaki bilgisayara
+gönderir; giriş ekranı kodu yazılmış gibi PAM'e iletir ve doğrulama yine
+`pam_bacakonay`'dadır (kod tüketilir, tekrar oynatılamaz). Uygulamanın yaptığı
+tek ağ trafiği budur: yalnız özel IPv4 adreslerine, yalnız o tek kod. Ek
+biyometri istenmez — uygulama zaten telefonun ekran kilidiyle açılmıştır, parmak
+izi hiçbir zaman uygulamaya ya da ağa gitmez. PAM satırına `qrsiz` eklenirse QR
+gösterilmez. Protokol: `turan/crates/bacak-greeter/src/telefon_onayi.rs`.
 
 ## Dizin yapısı
 

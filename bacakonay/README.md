@@ -18,9 +18,18 @@ screen of **Turan** (the Bacak Display Manager, `bacak-display-manager`).
                                             └──────────────────────────────┘
 ```
 
-No network: the phone and the computer "talk" once, through the enrollment QR;
-afterwards both sides derive codes from the clock. The app has no internet
-permission at all.
+Both sides derive codes from the clock; the secret reaches the phone once,
+through the enrollment QR, and never leaves it.
+
+**QR login (optional):** while the login screen asks for the code it also shows
+a QR. In the app, **QR ile giriş** → scan → **Onayla**: the phone seals that
+moment's code with the QR's one-time AES-256-GCM key and sends it to the
+computer on the local network; the greeter hands it to PAM as if typed and
+`pam_bacakonay` still verifies (and consumes) it. That is the app's only
+network traffic: private IPv4 addresses only, that one code only. No extra
+biometric is asked — the app is already unlocked with the phone's screen lock,
+and fingerprints never reach the app or the network. Add `qrsiz` to the PAM
+line to hide the QR. Protocol: `turan/crates/bacak-greeter/src/telefon_onayi.rs`.
 
 ## Layout
 

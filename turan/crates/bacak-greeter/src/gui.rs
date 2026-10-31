@@ -21,6 +21,7 @@ use bacak_common::ipc::{GreeterPolicy, Secret};
 use bacak_common::power::PowerAction;
 use bacak_common::sessions::Session;
 use bacak_common::users::User;
+use crate::telefon_onayi;
 use bacak_greeter::{AuthStep, GreeterClient, Welcome};
 use eframe::egui;
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -269,6 +270,10 @@ struct GreeterApp {
     osk_target: Field,
     osk_open: bool,
     osk_shift: bool,
+    /// pam_bacakonay said its next prompt may be answered from the phone.
+    qr_istegi: bool,
+    /// The phone QR shown beside the Bacak Onay code prompt.
+    telefon: Option<(telefon_onayi::Oturum, egui::TextureHandle)>,
 }
 
 impl GreeterApp {
@@ -292,6 +297,8 @@ impl GreeterApp {
             osk_target: Field::Secret,
             osk_open: false,
             osk_shift: false,
+            qr_istegi: false,
+            telefon: None,
         }
     }
 
@@ -327,6 +334,8 @@ impl GreeterApp {
                     self.sessions = sessions;
                 }
                 Evt::Prompt { message, echo } => {
+                    self.telefon = None;
+                    let qr = std::mem::take(&mut self.qr_istegi);
                     // If we already have a typed secret, answer immediately.
                     if let Some(secret) = self.pending_secret.take() {
                         let _ = self.cmd_tx.send(Cmd::Secret(secret));
@@ -336,8 +345,16 @@ impl GreeterApp {
                         self.secret_mask = !echo;
                         self.secret.clear();
                         self.phase = Phase::Prompting;
+                        if qr {
+                            self.telefon = telefon_onayi::Oturum::baslat(&self.selected_user).and_then(|o| {
+                                let resim = telefon_onayi::qr_resmi(&o.uri, 5)?;
+                                let doku = ctx.load_texture("bacakonay-qr", resim, egui::TextureOptions::NEAREST);
+                                Some((o, doku))
+                            });
+                        }
                     }
                 }
+                Evt::Info(msg) if msg == telefon_onayi::ISARET => self.qr_istegi = true,
                 Evt::Info(msg) => self.info = msg,
                 Evt::AuthOk => {
                     // Authenticated: launch the selected session.
@@ -355,6 +372,8 @@ impl GreeterApp {
                     };
                     self.secret.clear();
                     self.pending_secret = None;
+                    self.telefon = None;
+                    self.qr_istegi = false;
                     self.phase = Phase::Login;
                 }
                 Evt::SessionStarting => {
@@ -599,6 +618,7 @@ impl GreeterApp {
     }
 
     fn submit_prompt(&mut self) {
+        self.telefon = None;
         let secret = Secret::new(std::mem::take(&mut self.secret));
         self.osk_open = false;
         self.osk_shift = false;
@@ -610,6 +630,14 @@ impl GreeterApp {
 impl eframe::App for GreeterApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.drain_events(ctx);
+        // The phone sent the code: answer the prompt with it, as if typed.
+        let telefondan = self.telefon.as_ref().and_then(|(o, _)| o.kod.try_recv().ok());
+        if let Some(kod) = telefondan {
+            if self.phase == Phase::Prompting {
+                self.secret = kod;
+                self.submit_prompt();
+            }
+        }
 
         let t = self.t();
         egui::TopBottomPanel::bottom("power").show(ctx, |ui| {
@@ -884,8 +912,19 @@ impl GreeterApp {
                 self.phase = Phase::Login;
                 self.secret.clear();
                 self.osk_open = false;
+                self.telefon = None;
             }
         });
+
+        if let Some((_, doku)) = &self.telefon {
+            ui.add_space(16.0);
+            ui.vertical_centered(|ui| {
+                ui.label("ya da telefondaki Bacak Onay'da \"QR ile giriş\" ile okutun:");
+                ui.add_space(6.0);
+                let kenar = (w * 0.62).min(240.0);
+                ui.add(egui::Image::new(egui::load::SizedTexture::new(doku.id(), [kenar, kenar])));
+            });
+        }
 
         // Never let egui retain a plaintext secret in its undo history.
         Self::wipe_undoer(ui.ctx(), secret_id);

@@ -18,6 +18,12 @@
 //! * `pencere=N` — accept ±N time steps of clock drift (default 1, max 10).
 //! * `dizin=/yol` — store directory (default `/var/lib/bacakonay`; tests).
 //! * `istem=Metin` — prompt text (`_` is shown as a space).
+//! * `qrsiz` — don't offer the greeter's phone QR (see below).
+//!
+//! Right before the code prompt the module sends the `PAM_TEXT_INFO`
+//! `bacakonay:qr`: Turan's greeter then also shows a QR the phone app can
+//! scan to send the code itself ("QR ile giriş"). The answer still comes back
+//! through this prompt and is verified here like a typed one.
 
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -34,6 +40,9 @@ pub const PAM_AUTHINFO_UNAVAIL: c_int = 9;
 pub const PAM_IGNORE: c_int = 25;
 const PAM_PROMPT_ECHO_ON: c_int = 2;
 const PAM_ERROR_MSG: c_int = 3;
+const PAM_TEXT_INFO: c_int = 4;
+/// Greeter hint: the next prompt may be answered from the phone.
+const QR_ISARETI: &str = "bacakonay:qr";
 const PAM_SILENT: c_int = 0x8000;
 
 const LOG_ERR: c_int = 3;
@@ -63,6 +72,7 @@ extern "C" {
 
 struct Options {
     required: bool,
+    qr: bool,
     window: u64,
     dir: String,
     prompt: String,
@@ -72,6 +82,7 @@ impl Options {
     unsafe fn parse(argc: c_int, argv: *const *const c_char) -> Options {
         let mut o = Options {
             required: false,
+            qr: true,
             window: 1,
             dir: DEFAULT_DIR.to_string(),
             prompt: DEFAULT_PROMPT.to_string(),
@@ -87,6 +98,8 @@ impl Options {
             let arg = CStr::from_ptr(p).to_string_lossy();
             if arg == "zorunlu" {
                 o.required = true;
+            } else if arg == "qrsiz" {
+                o.qr = false;
             } else if let Some(v) = arg.strip_prefix("pencere=") {
                 if let Ok(n) = v.parse::<u64>() {
                     o.window = n.min(10);
@@ -167,6 +180,11 @@ unsafe fn authenticate(pamh: *mut PamHandle, flags: c_int, argc: c_int, argv: *c
         return PAM_IGNORE;
     }
 
+    if opts.qr {
+        if let Ok(c) = CString::new(QR_ISARETI) {
+            pam_prompt(pamh, PAM_TEXT_INFO, std::ptr::null_mut(), c"%s".as_ptr(), c.as_ptr());
+        }
+    }
     let Some(mut code) = ask_code(pamh, &opts.prompt) else {
         return PAM_AUTH_ERR;
     };

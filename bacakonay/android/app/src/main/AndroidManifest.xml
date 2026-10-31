@@ -6,8 +6,12 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
-    <!-- Deliberately NO internet permission: codes are computed offline and
-         secrets can never leave the phone through this app. -->
+    <!-- "QR ile giriş" only: one short TCP exchange with the computer on the
+         local network whose login screen was just scanned, carrying nothing
+         but that moment's code, sealed with the QR's one-time key
+         (domain/otp/LoginApproval.kt). Secrets never leave the phone; the
+         app talks to nothing else, and only to private IPv4 addresses. -->
+    <uses-permission android:name="android.permission.INTERNET" />
 
     <!-- Backups off: the vault key is wrapped by a non-exportable Keystore key,
          so a restored vault could never be opened anyway — and secrets must
