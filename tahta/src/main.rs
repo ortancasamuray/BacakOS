@@ -11,6 +11,7 @@ mod font_atlas;
 mod geom;
 mod input_handler;
 mod magnifier;
+mod masaustu;
 mod opener;
 mod palm;
 mod pdf;
@@ -27,8 +28,6 @@ mod stroke;
 mod textbox;
 mod toolbar;
 mod ui;
-mod urlbar;
-mod webengine;
 
 use std::sync::Arc;
 
@@ -47,7 +46,7 @@ fn main() {
     // Frames are drawn on demand: on input, and continuously (Poll) only
     // while something moves — a finger drawing, with the renderer's
     // Mailbox/Immediate present mode for touch-to-photon latency, a fading
-    // laser mark, the browser. An idle board sleeps (see `AboutToWait`).
+    // laser mark. An idle board sleeps (see `AboutToWait`).
     event_loop.set_control_flow(ControlFlow::Wait);
 
     let window = Arc::new(
@@ -126,7 +125,6 @@ fn main() {
                         TouchPhase::Moved => app.touch_moved(id, location),
                         TouchPhase::Ended | TouchPhase::Cancelled => app.touch_ended(id),
                     },
-                    WindowEvent::ModifiersChanged(modifiers) => app.modifiers_changed(modifiers.state()),
                     WindowEvent::KeyboardInput { event, .. } => app.key_input(&event),
                     WindowEvent::RedrawRequested => app.render(),
                     _ => {}

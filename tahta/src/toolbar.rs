@@ -62,9 +62,11 @@ pub enum ToolbarAction {
     ToggleMagnifier,
     /// Shows/hides the draggable text box panel (on-screen keyboard + live text).
     ToggleTextBox,
-    /// Shows/hides the embedded web browser panel (a real Servo webview,
-    /// not our own drawn geometry — see `webengine` module docs).
-    ToggleBrowser,
+    /// Opens EBA in the system browser (see `masaustu.rs`).
+    OpenBrowser,
+    /// Adds what's on screen behind the board (the browser, a video, any
+    /// app) as a new page to write on.
+    CaptureScreen,
     /// Steps through the curated background+grid presets.
     CycleBackground,
     PrevPage,
@@ -104,7 +106,6 @@ pub struct ToolbarState {
     pub spotlight_visible: bool,
     pub magnifier_visible: bool,
     pub textbox_visible: bool,
-    pub browser_visible: bool,
     /// Undo/Redo glyphs dim when the page has nothing to take back/redo.
     pub can_undo: bool,
     pub can_redo: bool,
@@ -167,7 +168,8 @@ const ENTRIES: &[Entry] = &[
     Entry::Group(&[ToolbarAction::ToggleCalculator, ToolbarAction::ToggleStopwatch, ToolbarAction::ToggleDice]),
     Entry::Group(&[ToolbarAction::ToggleSpotlight, ToolbarAction::ToggleMagnifier]),
     Entry::Direct(ToolbarAction::ToggleTextBox),
-    Entry::Direct(ToolbarAction::ToggleBrowser),
+    Entry::Direct(ToolbarAction::OpenBrowser),
+    Entry::Direct(ToolbarAction::CaptureScreen),
     Entry::Group(&[
         ToolbarAction::ToggleZone,
         ToolbarAction::CycleBackground,
@@ -182,8 +184,8 @@ const ENTRIES: &[Entry] = &[
 
 /// Local index right before which a thin separator is drawn: tool-select
 /// (0-3) | brush/color/undo/redo/clear (4-8) | drafting/widget/view groups
-/// (9-11) | text/browser (12-13) | page group (14) | minimize (15).
-const SEPARATOR_BEFORE: [usize; 5] = [4, 9, 12, 14, 15];
+/// (9-11) | text/browser/screen grab (12-14) | page group (15) | minimize (16).
+const SEPARATOR_BEFORE: [usize; 5] = [4, 9, 12, 15, 16];
 
 /// Bottom-center floating toolbar. Screen-space, never affected by canvas
 /// pan/zoom, recomputed each frame from the current window size (though
@@ -383,7 +385,6 @@ fn is_active(action: ToolbarAction, state: &ToolbarState) -> bool {
         ToolbarAction::ToggleSpotlight => state.spotlight_visible,
         ToolbarAction::ToggleMagnifier => state.magnifier_visible,
         ToolbarAction::ToggleTextBox => state.textbox_visible,
-        ToolbarAction::ToggleBrowser => state.browser_visible,
         ToolbarAction::NewBoard => state.new_board_armed,
         ToolbarAction::OpenFile => state.opener_visible,
         _ => false,
@@ -625,7 +626,7 @@ fn draw_glyph(
             push_line(center + Vec2::new(0.0, -r), center + Vec2::new(r * 0.8, r), 3.0, COLOR_GLYPH, out_vertices, out_indices);
             push_line(center + Vec2::new(-r * 0.4, r * 0.15), center + Vec2::new(r * 0.4, r * 0.15), 2.5, COLOR_GLYPH, out_vertices, out_indices);
         }
-        ToolbarAction::ToggleBrowser => {
+        ToolbarAction::OpenBrowser => {
             // A globe: circle outline + one vertical + two horizontal
             // "meridian/parallel" lines, the universal browser glyph.
             const STEPS: usize = 20;
@@ -639,6 +640,21 @@ fn draw_glyph(
             push_line(center + Vec2::new(0.0, -r), center + Vec2::new(0.0, r), 2.0, COLOR_GLYPH, out_vertices, out_indices);
             push_line(center + Vec2::new(-r * 0.7, -r * 0.4), center + Vec2::new(r * 0.7, -r * 0.4), 1.5, COLOR_GLYPH, out_vertices, out_indices);
             push_line(center + Vec2::new(-r * 0.7, r * 0.4), center + Vec2::new(r * 0.7, r * 0.4), 1.5, COLOR_GLYPH, out_vertices, out_indices);
+        }
+        ToolbarAction::CaptureScreen => {
+            // Viewfinder corners around a dot — "take what's on screen".
+            let (w, h, l) = (r * 1.9, r * 1.5, r * 0.5);
+            let tl = center - Vec2::new(w / 2.0, h / 2.0);
+            for (corner, dx, dy) in [
+                (tl, 1.0, 1.0),
+                (tl + Vec2::new(w, 0.0), -1.0, 1.0),
+                (tl + Vec2::new(0.0, h), 1.0, -1.0),
+                (tl + Vec2::new(w, h), -1.0, -1.0),
+            ] {
+                push_line(corner, corner + Vec2::new(dx * l, 0.0), 3.0, COLOR_GLYPH, out_vertices, out_indices);
+                push_line(corner, corner + Vec2::new(0.0, dy * l), 3.0, COLOR_GLYPH, out_vertices, out_indices);
+            }
+            push_circle(center, r * 0.3, COLOR_GLYPH, 14, out_vertices, out_indices);
         }
         ToolbarAction::ExportPdf => {
             // A little page outline with a downward export arrow.

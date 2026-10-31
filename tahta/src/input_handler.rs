@@ -145,6 +145,13 @@ enum PointerRole {
     Palm,
 }
 
+/// What `InputHandler::loading` will do with its page images.
+#[derive(Clone, Copy)]
+enum Loading {
+    Pdf,
+    Screen,
+}
+
 struct PointerSession {
     role: PointerRole,
     start_pos: Vec2,
@@ -180,14 +187,10 @@ pub struct InputHandler {
     textbox: Option<crate::textbox::TextBox>,
     /// The "Aç" panel, while open (modal, see `opener.rs`).
     opener: Option<crate::opener::Opener>,
-    /// A PDF picked in the "Aç" panel, being decoded on its own thread
-    /// (a long document takes seconds) — picked up by `tick`.
-    pdf_loading: Option<std::sync::mpsc::Receiver<anyhow::Result<Vec<Arc<board::PdfImage>>>>>,
-    /// Whether the embedded browser panel should be shown. The real
-    /// `webengine::WebPanel` lives in `app.rs` (it needs to hand its
-    /// frames to the wgpu renderer directly) — this is just the on/off
-    /// state and fixed bounds for it.
-    pub browser_visible: bool,
+    /// Page images being made on their own thread — a PDF picked in the
+    /// "Aç" panel (a long document takes seconds) or the screen grab —
+    /// picked up by `tick`.
+    loading: Option<(Loading, std::sync::mpsc::Receiver<anyhow::Result<Vec<Arc<board::PdfImage>>>>)>,
 
     zone_enabled: bool,
     zone_pens: [PenSettings; 2],
@@ -262,8 +265,7 @@ impl InputHandler {
             magnifier: None,
             textbox: None,
             opener: None,
-            pdf_loading: None,
-            browser_visible: false,
+            loading: None,
             zone_enabled: false,
             zone_pens: [
                 PenSettings::ballpoint([0.92, 0.92, 0.95, 1.0]),
@@ -296,21 +298,6 @@ impl InputHandler {
     pub fn resize(&mut self, screen_size: Vec2) {
         self.screen_size = screen_size;
         self.toolbar = Toolbar::layout(screen_size);
-    }
-
-    /// Fixed (not yet draggable — matches this app's other panels'
-    /// starting scope) on-screen rect for the embedded browser panel:
-    /// centered, leaving room above the toolbar.
-    pub fn browser_bounds(&self) -> (Vec2, Vec2) {
-        let margin_top = 40.0;
-        let margin_bottom = 210.0; // clears the two-row toolbar + margin
-        let margin_side = 60.0;
-        let top_left = Vec2::new(margin_side, margin_top);
-        let size = Vec2::new(
-            (self.screen_size.x - margin_side * 2.0).max(200.0),
-            (self.screen_size.y - margin_top - margin_bottom).max(200.0),
-        );
-        (top_left, size)
     }
 
     /// Replaces the whole board with one page per page of the PDF at
@@ -415,7 +402,7 @@ impl InputHandler {
         if self.new_board_armed_until.is_some_and(|t| now > t) {
             self.new_board_armed_until = None;
         }
-        self.poll_pdf_loading(now);
+        self.poll_loading(now);
     }
 
     // --- Opening a PDF / the backup ("Aç" panel) ----------------------------
@@ -445,36 +432,56 @@ impl InputHandler {
                 self.toast = Some((message.to_string(), now + 2.5));
             }
             crate::opener::Choice::Pdf(path) => {
-                let (tx, rx) = std::sync::mpsc::channel();
-                std::thread::spawn(move || {
-                    let _ = tx.send(crate::pdf::load_pdf_pages(&path.to_string_lossy()));
-                });
-                self.pdf_loading = Some(rx);
+                self.start_loading(Loading::Pdf, move || crate::pdf::load_pdf_pages(&path.to_string_lossy()));
                 self.toast = Some(("PDF açılıyor…".to_string(), now + 120.0));
             }
         }
     }
 
-    /// The PDF picked in the "Aç" panel replaces the board once decoded;
-    /// the board it replaces is kept as the backup.
-    fn poll_pdf_loading(&mut self, now: f64) {
-        let Some(rx) = &self.pdf_loading else { return };
+    fn start_loading(&mut self, kind: Loading, job: impl FnOnce() -> anyhow::Result<Vec<Arc<board::PdfImage>>> + Send + 'static) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(job());
+        });
+        self.loading = Some((kind, rx));
+    }
+
+    /// A decoded PDF replaces the board (the board it replaces is kept as
+    /// the backup); a screen grab becomes a new page after the current one.
+    fn poll_loading(&mut self, now: f64) {
+        let Some((kind, rx)) = &self.loading else { return };
+        let kind = *kind;
         let result = match rx.try_recv() {
             Ok(result) => result,
             Err(std::sync::mpsc::TryRecvError::Empty) => return,
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(anyhow::anyhow!("PDF okuyucu durdu")),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(anyhow::anyhow!("yükleyici durdu")),
         };
-        self.pdf_loading = None;
-        let message = match result {
-            Ok(images) => {
+        self.loading = None;
+        let message = match (kind, result) {
+            (Loading::Pdf, Ok(images)) => {
                 self.keep_as_backup();
                 self.set_pdf_pages(images);
                 self.save_now = true;
                 "PDF açıldı"
             }
-            Err(e) => {
+            (Loading::Pdf, Err(e)) => {
                 log::error!("PDF açılamadı: {e:#}");
                 "PDF açılamadı"
+            }
+            (Loading::Screen, Ok(images)) => {
+                self.release_drawing_pointers();
+                for (i, image) in images.into_iter().enumerate() {
+                    self.pages.insert(self.current_page + 1 + i, Page::from_pdf_image(image));
+                }
+                self.current_page = (self.current_page + 1).min(self.pages.len() - 1);
+                self.view_offset = Vec2::ZERO;
+                self.view_scale = 1.0;
+                self.mark_dirty();
+                "Ekran yeni sayfaya alındı"
+            }
+            (Loading::Screen, Err(e)) => {
+                log::error!("ekran alınamadı: {e:#}");
+                "Ekran alınamadı"
             }
         };
         self.toast = Some((message.to_string(), now + 2.5));
@@ -595,7 +602,7 @@ impl InputHandler {
         !self.sessions.is_empty()
             || self.toast.as_ref().is_some_and(|(_, until)| now < *until)
             || self.stopwatch.as_ref().is_some_and(|s| s.is_running())
-            || self.pdf_loading.is_some()
+            || self.loading.is_some()
             || self.pages[self.current_page]
                 .strokes
                 .iter()
@@ -610,11 +617,6 @@ impl InputHandler {
     /// Whether the board has changes not yet handed to `take_save_request`.
     pub fn is_dirty(&self) -> bool {
         self.dirty
-    }
-
-    /// The real-font glyph atlas, for `app.rs`'s address bar.
-    pub fn font_atlas(&self) -> &crate::font_atlas::FontAtlas {
-        &self.font_atlas
     }
 
     pub fn take_replaced_board(&mut self) -> Option<crate::persist::BoardData> {
@@ -713,8 +715,23 @@ impl InputHandler {
                     None => Some(crate::textbox::TextBox::new(self.screen_size / 2.0 - Vec2::new(310.0, 240.0))),
                 };
             }
-            ToolbarAction::ToggleBrowser => {
-                self.browser_visible = !self.browser_visible;
+            ToolbarAction::OpenBrowser => match crate::masaustu::open_browser(crate::masaustu::BROWSER_HOME) {
+                // The fullscreen board would cover the browser window: step
+                // aside like "return to desktop" (back via the dock).
+                Ok(()) => {
+                    self.minimize_requested = true;
+                    self.save_now = true;
+                }
+                Err(e) => {
+                    log::error!("tarayıcı açılamadı: {e:#}");
+                    let now = self.last_input_at.unwrap_or(0.0);
+                    self.toast = Some(("Tarayıcı açılamadı".to_string(), now + 2.5));
+                }
+            },
+            ToolbarAction::CaptureScreen => {
+                if self.loading.is_none() {
+                    self.start_loading(Loading::Screen, crate::masaustu::capture_screen);
+                }
             }
             ToolbarAction::CycleBackground => {
                 self.checkpoint();
@@ -1608,7 +1625,6 @@ impl InputHandler {
             spotlight_visible: self.spotlight.is_some(),
             magnifier_visible: self.magnifier.is_some(),
             textbox_visible: self.textbox.is_some(),
-            browser_visible: self.browser_visible,
             can_undo: page.can_undo(),
             can_redo: page.can_redo(),
             new_board_armed: self.new_board_armed_until.is_some(),
