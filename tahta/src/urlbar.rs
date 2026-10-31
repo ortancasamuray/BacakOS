@@ -19,6 +19,7 @@
 
 use glam::Vec2;
 
+use crate::font_atlas::{FontAtlas, GlyphVertex};
 use crate::stroke::{push_line, push_rect, Vertex};
 
 pub const BAR_H: f32 = 48.0;
@@ -121,14 +122,11 @@ impl UrlBar {
     }
 
     /// Types one character from a real (or the compositor's on-screen)
-    /// keyboard. Only called while `editing` — see `App::key_input`.
-    /// Upper-cased because `font5x7` (this field's display font) only
-    /// has uppercase glyphs — lowercase would just render as a blank
-    /// gap. URLs and search terms are case-insensitive in practice, so
-    /// nothing is lost by normalizing on the way in.
+    /// keyboard. Only called while `editing` — see `App::key_input`. Kept
+    /// as typed: URL paths and queries are case-sensitive.
     pub fn type_char(&mut self, c: char) {
         if self.text.chars().count() < MAX_CHARS {
-            self.text.push(c.to_ascii_uppercase());
+            self.text.push(c);
         }
     }
 
@@ -156,8 +154,11 @@ impl UrlBar {
         can_go_back: bool,
         can_go_forward: bool,
         draw_mode: bool,
+        font: &FontAtlas,
         out_v: &mut Vec<Vertex>,
         out_i: &mut Vec<u32>,
+        glyph_v: &mut Vec<GlyphVertex>,
+        glyph_i: &mut Vec<u32>,
     ) {
         push_rect(bar_top_left, Vec2::new(bar_width, BAR_H), COLOR_BAR_BG, out_v, out_i);
 
@@ -175,13 +176,14 @@ impl UrlBar {
 
         let (field_pos, field_size) = Self::field_rect(bar_top_left, bar_width);
         push_rect(field_pos, field_size, if self.editing { COLOR_FIELD_EDITING } else { COLOR_FIELD_BG }, out_v, out_i);
-        let cell = Vec2::new(field_size.y * 0.30, field_size.y * 0.55);
-        let text_pos = field_pos + Vec2::new(10.0, field_size.y * 0.22);
-        let width = crate::font5x7::push_text(&self.text, text_pos, cell, COLOR_TEXT, out_v, out_i);
+        let text_h = field_size.y * 0.42;
+        let text_pos = field_pos + Vec2::new(10.0, (field_size.y - text_h) / 2.0 - text_h * 0.15);
+        let shown = fit_text(&self.text, field_size.x - 24.0, self.editing, |t| font.measure(t, text_h));
+        let width = font.push_text(&shown, text_pos, text_h, COLOR_TEXT, glyph_v, glyph_i);
         if self.editing {
             push_line(
-                text_pos + Vec2::new(width + 2.0, -2.0),
-                text_pos + Vec2::new(width + 2.0, cell.y + 2.0),
+                text_pos + Vec2::new(width + 3.0, -text_h * 0.15),
+                text_pos + Vec2::new(width + 3.0, text_h * 1.25),
                 2.0,
                 COLOR_TEXT,
                 out_v,
@@ -189,6 +191,27 @@ impl UrlBar {
             );
         }
     }
+}
+
+/// `text` cut to fit `max_w` (as measured by `measure`): while editing the
+/// end stays visible (where the cursor is), otherwise the start, with "…"
+/// marking the cut.
+fn fit_text(text: &str, max_w: f32, keep_end: bool, measure: impl Fn(&str) -> f32) -> String {
+    if measure(text) <= max_w {
+        return text.to_string();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    for n in (0..chars.len()).rev() {
+        let cut: String = if keep_end {
+            std::iter::once('…').chain(chars[chars.len() - n..].iter().copied()).collect()
+        } else {
+            chars[..n].iter().copied().chain(std::iter::once('…')).collect()
+        };
+        if measure(&cut) <= max_w {
+            return cut;
+        }
+    }
+    "…".to_string()
 }
 
 fn draw_arrow(center: Vec2, dir: f32, out_v: &mut Vec<Vertex>, out_i: &mut Vec<u32>) {
@@ -208,4 +231,21 @@ fn draw_pen_icon(center: Vec2, out_v: &mut Vec<Vertex>, out_i: &mut Vec<u32>) {
 
 fn rect_contains((top_left, size): (Vec2, Vec2), point: Vec2) -> bool {
     point.x >= top_left.x && point.x <= top_left.x + size.x && point.y >= top_left.y && point.y <= top_left.y + size.y
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fit_text;
+
+    // One unit per character.
+    fn w(t: &str) -> f32 {
+        t.chars().count() as f32
+    }
+
+    #[test]
+    fn long_text_is_cut_at_the_cursor_end_only_while_editing() {
+        assert_eq!(fit_text("eba.gov.tr", 20.0, true, w), "eba.gov.tr");
+        assert_eq!(fit_text("https://eba.gov.tr/ders", 10.0, false, w), "https://e…");
+        assert_eq!(fit_text("https://eba.gov.tr/ders", 10.0, true, w), "…v.tr/ders");
+    }
 }

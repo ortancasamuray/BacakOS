@@ -1,14 +1,12 @@
-//! CPU-rasterized real-font atlas — used by `textbox.rs` in place of the
-//! hand-rolled 5x7 dot-matrix font (`font5x7.rs` stays as-is for the
-//! toast/address-bar labels, which are out of scope here).
+//! CPU-rasterized real-font atlas — all of tahta's text: the text box,
+//! the address bar and toasts (it replaced a hand-rolled 5x7 dot-matrix
+//! font that only had uppercase-looking letters and no punctuation).
 //!
 //! Built once at startup (`FontAtlas::new`): rasterizes every character
-//! the text box's virtual keyboard can produce via `fontdue` into a
-//! single R8 coverage bitmap, shelf-packed into one atlas. `renderer.rs`
-//! uploads that bitmap to the GPU once and never touches it again;
-//! `push_text` (CPU-side, no GPU access) is called every frame to lay
-//! out glyph quads, mirroring `font5x7::push_text`'s call shape so
-//! textbox.rs barely changes.
+//! in `CHARSET` via `fontdue` into a single R8 coverage bitmap,
+//! shelf-packed into one atlas. `renderer.rs` uploads that bitmap to the
+//! GPU once and never touches it again; `push_text` (CPU-side, no GPU
+//! access) is called every frame to lay out glyph quads.
 //!
 //! Font choice: DejaVu Sans, not Noto Sans (tahta's other embedded font
 //! choice, e.g. `bacak-belge`) — `fontdue::Font::horizontal_kern` only
@@ -33,8 +31,9 @@ const FONT_BYTES: &[u8] = include_bytes!("../assets/fonts/DejaVuSans.ttf");
 const RASTER_PX: f32 = 64.0;
 
 /// Every character `textbox.rs`'s virtual keyboard can produce (see its
-/// `ROWS` and `font5x7::to_lower_tr`).
-const CHARSET: &str = " 0123456789ABCÇDEFGĞHIİJKLMNOÖPQRSŞTUÜVWXYZabcçdefgğhıijklmnoöpqrsştuüvwxyz";
+/// `ROWS` and `to_lower_tr`), plus the punctuation URLs, search
+/// terms and UI messages use (the address bar and toasts draw with this).
+const CHARSET: &str = " 0123456789ABCÇDEFGĞHIİJKLMNOÖPQRSŞTUÜVWXYZabcçdefgğhıijklmnoöpqrsştuüvwxyz.,:;/\\?=&%#-_+~@!'\"()[]{}*<>|$…";
 
 const ATLAS_WIDTH: u32 = 512;
 
@@ -162,10 +161,8 @@ impl FontAtlas {
 
     /// Draws `text` left-to-right so its rasterized cap-height maps onto
     /// `pixel_height`, with `top_left.y + pixel_height` as the baseline —
-    /// same `(text, top_left, size, color, out_vertices, out_indices) ->
-    /// advance` call shape as `font5x7::push_text` so call sites read the
-    /// same way. Unsupported characters (not in `CHARSET`) advance by
-    /// half `pixel_height` as a blank gap, matching `font5x7`'s fallback.
+    /// returning the horizontal advance. Unsupported characters (not in
+    /// `CHARSET`) advance by half `pixel_height` as a blank gap.
     pub fn push_text(&self, text: &str, top_left: Vec2, pixel_height: f32, color: [f32; 4], out_vertices: &mut Vec<GlyphVertex>, out_indices: &mut Vec<u32>) -> f32 {
         let scale = pixel_height / RASTER_PX;
         let mut cursor_x = top_left.x;

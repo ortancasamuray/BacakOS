@@ -7,7 +7,6 @@ mod brush;
 mod calculator;
 mod dice;
 mod digits;
-mod font5x7;
 mod font_atlas;
 mod geom;
 mod input_handler;

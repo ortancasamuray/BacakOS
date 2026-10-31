@@ -9,7 +9,7 @@
 //! this needs — PDF is a plain-text container format for exactly this
 //! (background fill, straight line segments, an embedded image, one draw
 //! color at a time), so it's written directly, the same "just enough, by
-//! hand" spirit as `digits.rs` and `font5x7.rs`. Image data is
+//! hand" spirit as `digits.rs`. Image data is
 //! Flate-compressed (`flate2`, already a transitive dependency of the
 //! rest of the stack) so a full-page scan doesn't bloat the file — PDF's
 //! `/FlateDecode` filter is exactly a zlib stream.
