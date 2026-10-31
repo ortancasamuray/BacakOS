@@ -21,12 +21,13 @@ extended-description = """\
 bir bağımlılık listesiyle kurdurur. `sudo apt install ./bacakos_*.deb`
 tek komutuyla derleyici, giriş ekranı (Bacak Onay iki adımlı doğrulama
 desteğiyle), dosya yöneticisi, belge
-görüntüleyici, dijital tahta, Uzakel telefonla kontrol, masaüstü eklentileri, marka temaları ve
+görüntüleyici, dijital tahta, Rüzgar web tarayıcısı, Uzakel telefonla kontrol, masaüstü eklentileri, marka temaları ve
 varsayılan ayarların tamamı kurulur."""
 depends = """\
 bacak-compositor (>= 0.1.0), \
 bacak-display-manager (>= 0.1.0), \
-bacakonay (>= 0.1.0), \
+bacakonay (>= 0.1.0-2), \
+bacakonay-ayar (>= 0.1.0), \
 uzakyonetim-ajan (>= 0.1.0), \
 uzakel-daemon (>= 0.1.0), \
 bacak-cli (>= 0.1.0), \
@@ -40,7 +41,8 @@ bacak-grub-theme (>= 0.1.0), \
 bacak-plymouth-theme (>= 0.1.0), \
 altay (>= 0.1.0), \
 bacak-belge (>= 0.1.0), \
-tahta (>= 0.1.0)\
+tahta (>= 0.1.0), \
+ruzgar (>= 0.1.0)\
 """
 assets = [
     ["files/README", "usr/share/doc/bacakos/README", "644"],
