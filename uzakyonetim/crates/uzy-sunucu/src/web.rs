@@ -122,6 +122,8 @@ async fn login(
     Json(req): Json<LoginReq>,
 ) -> Response {
     let ip = peer.ip();
+    // The name is whatever the client typed: keep the audit log readable.
+    let kim: String = req.kullanici.chars().filter(|c| !c.is_control()).take(64).collect();
     if app.login_limit.blocked(ip, &req.kullanici) {
         return ApiError(StatusCode::TOO_MANY_REQUESTS, "Çok fazla hatalı deneme. 15 dakika sonra tekrar deneyin.".into())
             .into_response();
@@ -133,7 +135,7 @@ async fn login(
     };
     if !ok {
         app.login_limit.fail(ip, &req.kullanici);
-        app.db.audit(&req.kullanici, "-", "giris", &ip.to_string(), "red");
+        app.db.audit(&kim, "-", "giris", &ip.to_string(), "red");
         return ApiError(StatusCode::UNAUTHORIZED, "Kullanıcı adı, parola ya da Bacak Onay kodu hatalı.".into())
             .into_response();
     }
@@ -159,6 +161,7 @@ async fn recover(
     Json(req): Json<RecoverReq>,
 ) -> Response {
     let ip = peer.ip();
+    let kim: String = req.kullanici.chars().filter(|c| !c.is_control()).take(64).collect();
     if app.recover_limit.blocked(ip, &req.kullanici) {
         return ApiError(StatusCode::TOO_MANY_REQUESTS, "Çok fazla hatalı deneme. 15 dakika sonra tekrar deneyin.".into())
             .into_response();
@@ -170,7 +173,7 @@ async fn recover(
     }
     if !auth::verify_code_only(&app.db, &req.kullanici, req.kod.trim()) {
         app.recover_limit.fail(ip, &req.kullanici);
-        app.db.audit(&req.kullanici, "-", "parola_kurtarma", &ip.to_string(), "red");
+        app.db.audit(&kim, "-", "parola_kurtarma", &ip.to_string(), "red");
         return ApiError(StatusCode::UNAUTHORIZED, "Kullanıcı adı ya da Bacak Onay kodu hatalı.".into()).into_response();
     }
     let hash = match tokio::task::spawn_blocking(move || auth::hash_password(&new_pw)).await {

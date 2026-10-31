@@ -67,6 +67,20 @@ fn admin_members() -> Vec<String> {
         .collect()
 }
 
+/// Bacak Onay of an admin (sudo & co.) is theirs to manage at their own
+/// desk: otherwise whoever controls the server could remove an admin's second
+/// factor, or replace it with a secret it knows (it sees the enrollment QR
+/// and can confirm the code itself). Same line as account deletion.
+fn not_admin(user: &str) -> Result<(), String> {
+    if admin_members().iter().any(|m| m == user) {
+        return Err(format!(
+            "{user} bu makinede yönetici; Bacak Onay kaydını panelden değil, kendi masaüstünden \
+             (Kontrol Merkezi → Bacak Onay) yönetir"
+        ));
+    }
+    Ok(())
+}
+
 fn human_user(name: &str) -> Result<Passwd, String> {
     if !valid_username(name) {
         return Err(format!("geçersiz kullanıcı adı: {name}"));
@@ -167,6 +181,7 @@ fn now() -> u64 {
 
 pub fn totp_begin(pending: &PendingTotp, user: &str) -> Result<Payload, String> {
     human_user(user)?;
+    not_admin(user)?;
     let params = OtpParams::default();
     let secret = Zeroizing::new(otp::generate_secret(params.algorithm.recommended_secret_len()).map_err(|e| e.to_string())?);
     let link = uri::totp_uri(user, &hostname(), &secret, &params);
@@ -179,6 +194,7 @@ pub fn totp_begin(pending: &PendingTotp, user: &str) -> Result<Payload, String> 
 /// Only a code from the phone activates 2FA, so a bad scan can't lock the user out.
 pub fn totp_confirm(pending: &PendingTotp, user: &str, code: &str) -> Result<Payload, String> {
     human_user(user)?;
+    not_admin(user)?;
     let mut map = pending.map.lock().unwrap();
     let Some((secret, started)) = map.get(user) else {
         return Err("bekleyen kayıt yok — QR'ı yeniden oluşturun".into());
@@ -200,6 +216,7 @@ pub fn totp_confirm(pending: &PendingTotp, user: &str, code: &str) -> Result<Pay
 
 pub fn totp_remove(user: &str) -> Result<Payload, String> {
     human_user(user)?;
+    not_admin(user)?;
     Store::system().remove(user).map_err(|e| e.to_string())?;
     log::info!("Bacak Onay kaldırıldı: {user}");
     Ok(Payload::Tamam)

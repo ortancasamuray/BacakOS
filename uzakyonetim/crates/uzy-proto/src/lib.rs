@@ -18,6 +18,10 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 pub const AGENT_PORT: u16 = 8444;
 /// Largest frame accepted (a scaled JPEG screenshot fits comfortably).
 pub const MAX_FRAME: usize = 8 * 1024 * 1024;
+/// Largest first frame on the gateway, before the peer is known: a `Kayit`
+/// (token + CSR) or a `Merhaba` is a few KiB. Without this cap anyone who
+/// can reach the port could make the server allocate 8 MiB per connection.
+pub const MAX_FIRST_FRAME: usize = 64 * 1024;
 pub const PROTOCOL_VERSION: u32 = 1;
 
 /// Agent → server.
@@ -141,6 +145,14 @@ pub async fn write_frame<W: AsyncWrite + Unpin, T: Serialize>(w: &mut W, msg: &T
 
 /// `Ok(None)` on clean EOF.
 pub async fn read_frame<R: AsyncRead + Unpin, T: for<'de> Deserialize<'de>>(r: &mut R) -> std::io::Result<Option<T>> {
+    read_frame_max(r, MAX_FRAME).await
+}
+
+/// [`read_frame`] with a tighter size limit (see [`MAX_FIRST_FRAME`]).
+pub async fn read_frame_max<R: AsyncRead + Unpin, T: for<'de> Deserialize<'de>>(
+    r: &mut R,
+    max: usize,
+) -> std::io::Result<Option<T>> {
     let mut len = [0u8; 4];
     match r.read_exact(&mut len).await {
         Ok(_) => {}
@@ -148,7 +160,7 @@ pub async fn read_frame<R: AsyncRead + Unpin, T: for<'de> Deserialize<'de>>(r: &
         Err(e) => return Err(e),
     }
     let len = u32::from_be_bytes(len) as usize;
-    if len > MAX_FRAME {
+    if len > max {
         return Err(std::io::Error::other("çerçeve sınırı aşıldı"));
     }
     let mut body = vec![0u8; len];
@@ -186,5 +198,13 @@ mod tests {
         assert!(matches!(got, ServerMsg::Komut { id: 7, komut: Command::BacakonayBaslat { .. } }));
         drop(a);
         assert!(read_frame::<_, ServerMsg>(&mut b).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn oversized_first_frame_is_refused_before_allocating() {
+        let (mut a, mut b) = tokio::io::duplex(64);
+        // Only the length prefix is sent: an 8 MiB claim must fail at once.
+        a.write_all(&(MAX_FRAME as u32).to_be_bytes()).await.unwrap();
+        assert!(read_frame_max::<_, ServerMsg>(&mut b, MAX_FIRST_FRAME).await.is_err());
     }
 }

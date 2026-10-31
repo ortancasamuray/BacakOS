@@ -17,9 +17,9 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::server::WebPkiClientVerifier;
 use rustls::{RootCertStore, ServerConfig};
 use tokio::net::TcpListener;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Notify};
 use tokio_rustls::TlsAcceptor;
-use uzy_proto::{read_frame, write_frame, AgentMsg, Command, Payload, ServerMsg};
+use uzy_proto::{read_frame, read_frame_max, write_frame, AgentMsg, Command, Payload, ServerMsg, MAX_FIRST_FRAME};
 
 use crate::ca::fingerprint_der;
 use crate::files;
@@ -32,6 +32,8 @@ struct Conn {
     pending: Pending,
     /// Distinguishes a replaced connection from the current one on cleanup.
     epoch: u64,
+    /// Ends the session's connection (revocation, or a newer connection).
+    kill: Arc<Notify>,
 }
 
 #[derive(Default)]
@@ -76,8 +78,13 @@ impl Agents {
         }
     }
 
+    /// Drop the machine's live connection now (revocation): dropping the map
+    /// entry alone left the session task reading, so a revoked agent kept
+    /// sending screenshots until it disconnected on its own.
     pub fn disconnect(&self, id: &str) {
-        self.map.lock().unwrap().remove(id);
+        if let Some(c) = self.map.lock().unwrap().remove(id) {
+            c.kill.notify_one();
+        }
     }
 }
 
@@ -153,7 +160,7 @@ pub async fn serve(app: Arc<App>, listener: TcpListener, cfg: Arc<ServerConfig>)
 async fn handle(app: Arc<App>, tls: tokio_rustls::server::TlsStream<tokio::net::TcpStream>, peer: SocketAddr) -> Result<(), String> {
     let cert_fp = tls.get_ref().1.peer_certificates().and_then(|c| c.first()).map(|c| fingerprint_der(c));
     let (mut rd, mut wr) = tokio::io::split(tls);
-    let first: AgentMsg = tokio::time::timeout(Duration::from_secs(30), read_frame(&mut rd))
+    let first: AgentMsg = tokio::time::timeout(Duration::from_secs(30), read_frame_max(&mut rd, MAX_FIRST_FRAME))
         .await
         .map_err(|_| "ilk çerçeve gelmedi")?
         .map_err(|e| e.to_string())?
@@ -202,7 +209,15 @@ where
     let (tx, mut rx) = mpsc::channel::<ServerMsg>(32);
     let pending: Pending = Arc::default();
     let epoch = app.agents.epoch.fetch_add(1, Ordering::Relaxed);
-    app.agents.map.lock().unwrap().insert(id.clone(), Conn { tx: tx.clone(), pending: pending.clone(), epoch });
+    let kill = Arc::new(Notify::new());
+    let old = app.agents.map.lock().unwrap().insert(
+        id.clone(),
+        Conn { tx: tx.clone(), pending: pending.clone(), epoch, kill: kill.clone() },
+    );
+    // The machine reconnected: its previous connection is stale.
+    if let Some(old) = old {
+        old.kill.notify_one();
+    }
 
     let writer = tokio::spawn(async move {
         while let Some(m) = rx.recv().await {
@@ -225,7 +240,11 @@ where
     });
 
     let result = loop {
-        let msg: AgentMsg = match tokio::time::timeout(Duration::from_secs(180), read_frame(&mut rd)).await {
+        let read = tokio::select! {
+            _ = kill.notified() => break Err("bağlantı sunucu tarafından kesildi".to_string()),
+            r = tokio::time::timeout(Duration::from_secs(180), read_frame(&mut rd)) => r,
+        };
+        let msg: AgentMsg = match read {
             Err(_) => break Err("ajan sessiz kaldı".to_string()),
             Ok(Err(e)) => break Err(e.to_string()),
             Ok(Ok(None)) => break Ok(()),
@@ -237,6 +256,11 @@ where
                 if let Some(t) = pending.lock().unwrap().remove(&req) {
                     let _ = t.send(sonuc);
                 }
+            }
+            // Pushed shots are the periodic ones: with monitoring off there
+            // must be none, whatever the agent does.
+            AgentMsg::Ekran(_) if app.db.screenshot_interval() == 0 => {
+                log::warn!("{id}: izleme kapalıyken gelen ekran görüntüsü atıldı");
             }
             AgentMsg::Ekran(shot) => {
                 if let Err(e) = store_screenshot(&app, &id, &shot) {

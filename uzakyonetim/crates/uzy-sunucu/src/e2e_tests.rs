@@ -144,6 +144,16 @@ async fn enrollment_mtls_commands_and_revocation() {
     // Revoke → existing session dropped, reconnect refused.
     assert!(f.app.db.revoke(&makine_id));
     f.app.agents.disconnect(&makine_id);
+    let ended = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match read_frame::<_, ServerMsg>(&mut c).await {
+                Ok(Some(_)) => continue, // settings already in flight
+                _ => break,
+            }
+        }
+    })
+    .await;
+    assert!(ended.is_ok(), "iptal edilen makinenin açık bağlantısı hemen kapanmalı");
     let mut c2 = ajan_tls::connect_mtls(&f.addr, ca_pem.as_bytes(), sertifika_pem.as_bytes(), key.serialize_pem().as_bytes())
         .await
         .unwrap();

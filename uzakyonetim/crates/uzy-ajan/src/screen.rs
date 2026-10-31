@@ -3,7 +3,9 @@
 //! screen — via `grim` (bacak-compositor implements `zwlr_screencopy_v1`).
 
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use tokio::process::Command;
@@ -12,7 +14,20 @@ use uzy_proto::Screenshot;
 /// While this file exists, bacak-compositor draws the "İzleniyor" badge.
 pub const INDICATOR: &str = "/run/uzakyonetim/izleniyor";
 
-pub fn set_indicator(on: bool) {
+/// Periodic monitoring is on.
+static PERIODIC: AtomicBool = AtomicBool::new(false);
+/// A screenshot the panel asked for keeps the badge up until then.
+static ON_DEMAND_UNTIL: Mutex<Option<Instant>> = Mutex::new(None);
+/// How long the badge stays after an on-demand screenshot, so the person at
+/// the machine notices it even if they looked away for the instant it ran.
+const ON_DEMAND_SHOWN: Duration = Duration::from_secs(60);
+/// bacak-compositor polls the flag every 2 s: wait that long after raising
+/// it, so the badge is on screen — and in the screenshot — before grim runs.
+pub const BADGE_DELAY: Duration = Duration::from_millis(2500);
+
+fn apply() {
+    let on = PERIODIC.load(Ordering::Relaxed)
+        || ON_DEMAND_UNTIL.lock().unwrap().is_some_and(|t| Instant::now() < t);
     let p = Path::new(INDICATOR);
     if on {
         let _ = std::fs::create_dir_all(p.parent().unwrap());
@@ -20,6 +35,39 @@ pub fn set_indicator(on: bool) {
     } else {
         let _ = std::fs::remove_file(p);
     }
+}
+
+pub fn badge_shown() -> bool {
+    Path::new(INDICATOR).exists()
+}
+
+pub fn set_periodic(on: bool) {
+    PERIODIC.store(on, Ordering::Relaxed);
+    apply();
+}
+
+/// Connection gone: nothing may claim the screen is being watched any more.
+pub fn clear() {
+    PERIODIC.store(false, Ordering::Relaxed);
+    *ON_DEMAND_UNTIL.lock().unwrap() = None;
+    apply();
+}
+
+/// A screenshot the panel asked for outside periodic monitoring. Never a
+/// silent one: the "İzleniyor" badge goes up first (and so shows in the
+/// picture) and stays for [`ON_DEMAND_SHOWN`].
+pub async fn capture_on_demand() -> Result<Screenshot, String> {
+    let shown = badge_shown();
+    *ON_DEMAND_UNTIL.lock().unwrap() = Some(Instant::now() + ON_DEMAND_SHOWN);
+    apply();
+    if !shown {
+        tokio::time::sleep(BADGE_DELAY).await;
+    }
+    tokio::spawn(async {
+        tokio::time::sleep(ON_DEMAND_SHOWN + Duration::from_secs(1)).await;
+        apply();
+    });
+    capture().await
 }
 
 struct Target {
