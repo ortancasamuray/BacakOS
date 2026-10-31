@@ -703,6 +703,9 @@ pub fn run() -> Result<()> {
 
         // Uzak Yönetim monitoring badge: appear/disappear without waiting
         // for unrelated damage.
+        // The on-screen keyboard opened or closed: refit maximised windows.
+        loop_data.state.refit_maximized();
+
         if loop_data.state.poll_ipc() {
             for t in loop_data.targets.iter_mut() {
                 t.needs_redraw = true;
@@ -3349,6 +3352,9 @@ fn forward_libinput_event(
                 crate::input::TouchRoute::Client => {
                     let loc =
                         Point::<f64, smithay::utils::Logical>::from((tx as f64, ty as f64));
+                    if data.state.touch_aggregator.fingers() == 1 {
+                        data.state.focus_window_at_touch(tx, ty);
+                    }
                     // X11 (XWayland) apps get `wl_touch` only as XI2 touch,
                     // which core-pointer apps (OpenBoard) ignore. Emulate a
                     // left-button pointer drag from the first finger so they

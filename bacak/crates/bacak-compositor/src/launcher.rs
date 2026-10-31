@@ -173,12 +173,17 @@ pub fn spawn_detached(argv: &[String]) -> bool {
             cmd.stdout(Stdio::null()).stderr(Stdio::null());
         }
     }
-    // SAFETY: `setsid` is async-signal-safe and the only call made
-    // between fork and exec; it just moves the child into a new
-    // session so it outlives the compositor.
+    // SAFETY: `setsid` and `signal` are async-signal-safe and the only
+    // calls made between fork and exec. `setsid` moves the child into a
+    // new session so it outlives the compositor. Our `SIGCHLD = SIG_IGN`
+    // (see [`init`]) survives exec, and an app inheriting it can never
+    // learn how its own children exited: waitpid fails with ECHILD, so
+    // e.g. Bacak Onay saw every successful `sudo` as a refused password.
+    // Hand the app the default disposition back.
     unsafe {
         cmd.pre_exec(|| {
             libc::setsid();
+            libc::signal(libc::SIGCHLD, libc::SIG_DFL);
             Ok(())
         });
     }
