@@ -254,6 +254,12 @@ async fn serve() -> Result<(), String> {
         data: dir.clone(),
     });
 
+    // Screens of machines removed before this cleanup existed (or while a
+    // frame raced the removal).
+    for id in app.db.revoked_ids() {
+        gateway::forget_screens(&app, &id);
+    }
+
     let agent_addr: SocketAddr = format!("0.0.0.0:{}", cfg.ajan_portu).parse().map_err(|e| format!("{e}"))?;
     let listener = tokio::net::TcpListener::bind(agent_addr).await.map_err(|e| format!("{agent_addr}: {e}"))?;
     let gw = tokio::spawn(gateway::serve(app.clone(), listener, gw_cfg));

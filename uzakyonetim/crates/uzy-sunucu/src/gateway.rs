@@ -304,10 +304,28 @@ where
     result
 }
 
+/// A machine leaving the fleet takes its screenshots with it: they are
+/// personal data with no purpose once the machine is no longer managed.
+pub fn forget_screens(app: &App, id: &str) {
+    if let Some(dir) = app.screens_dir(id) {
+        if let Err(e) = std::fs::remove_dir_all(&dir) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                log::warn!("{}: {e}", dir.display());
+            }
+        }
+    }
+    app.db.set_screenshot(id, 0, None);
+}
+
 /// Keep the newest screenshot plus a short history per machine.
 const HISTORY: usize = 30;
 
 pub fn store_screenshot(app: &App, id: &str, shot: &uzy_proto::Screenshot) -> Result<(), String> {
+    // A frame still in flight when the machine was taken out of the fleet
+    // must not bring its screen back.
+    if !app.db.active(id) {
+        return Err("makine filoda değil".into());
+    }
     let jpeg = base64::engine::general_purpose::STANDARD.decode(&shot.jpeg_b64).map_err(|e| e.to_string())?;
     if !jpeg.starts_with(&[0xFF, 0xD8, 0xFF]) {
         return Err("JPEG değil".into());
