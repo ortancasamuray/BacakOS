@@ -45,6 +45,7 @@ pub struct Ui {
     pub choose_user: &'static str,
     pub auth_failed: &'static str,
     pub password_expired: &'static str,
+    pub password_change_failed: &'static str,
     pub account_unavailable: &'static str,
 }
 
@@ -83,6 +84,7 @@ static TR: Ui = Ui {
     choose_user: "Bir kullanıcı seçin.",
     auth_failed: "Kimlik doğrulama başarısız.",
     password_expired: "Parolanızın süresi dolmuş.",
+    password_change_failed: "Parola değiştirilemedi; yeniden giriş yapıp tekrar deneyin.",
     account_unavailable: "Bu hesap şu anda kullanılamıyor.",
 };
 
@@ -111,5 +113,6 @@ static EN: Ui = Ui {
     choose_user: "Choose a user.",
     auth_failed: "Authentication failed.",
     password_expired: "Your password has expired.",
+    password_change_failed: "The password could not be changed; log in again and retry.",
     account_unavailable: "This account is currently unavailable.",
 };

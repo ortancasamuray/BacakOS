@@ -10,7 +10,7 @@
 //!
 //! | BDM call         | libpam                                              |
 //! |------------------|-----------------------------------------------------|
-//! | `authenticate`   | `pam_start` → `pam_authenticate` → `pam_acct_mgmt`  |
+//! | `authenticate`   | `pam_start` → `pam_authenticate` → `pam_acct_mgmt` (→ `pam_chauthtok` if the password must change) |
 //! | `open_session`   | `pam_setcred(ESTABLISH)` → `pam_open_session` → `pam_getenvlist` |
 //! | `close_session`  | `pam_close_session` → `pam_setcred(DELETE)` → `pam_end` |
 //!
@@ -69,6 +69,7 @@ mod ffi {
         pub fn pam_end(pamh: *mut PamHandle, pam_status: c_int) -> c_int;
         pub fn pam_authenticate(pamh: *mut PamHandle, flags: c_int) -> c_int;
         pub fn pam_acct_mgmt(pamh: *mut PamHandle, flags: c_int) -> c_int;
+        pub fn pam_chauthtok(pamh: *mut PamHandle, flags: c_int) -> c_int;
         pub fn pam_setcred(pamh: *mut PamHandle, flags: c_int) -> c_int;
         pub fn pam_open_session(pamh: *mut PamHandle, flags: c_int) -> c_int;
         pub fn pam_close_session(pamh: *mut PamHandle, flags: c_int) -> c_int;
@@ -110,6 +111,9 @@ const PAM_TEXT_INFO: c_int = 4;
 
 // Item types.
 const PAM_TTY: c_int = 3;
+
+// chauthtok flags.
+const PAM_CHANGE_EXPIRED_AUTHTOK: c_int = 0x0020;
 
 // setcred flags.
 const PAM_ESTABLISH_CRED: c_int = 0x0002;
@@ -304,7 +308,24 @@ impl Authenticator for SystemAuthenticator {
             return Err(e);
         }
 
-        let rc = unsafe { ffi::pam_acct_mgmt(handle, 0) };
+        let mut rc = unsafe { ffi::pam_acct_mgmt(handle, 0) };
+        if rc == PAM_NEW_AUTHTOK_REQD {
+            // The password must be changed before this login (an expired one,
+            // or a first password set by an administrator with `chage -d 0`).
+            // The `password` stack asks for the current and the new password
+            // through the same conversation, so the greeter just shows those
+            // prompts; then the account is checked again.
+            let ch = unsafe { ffi::pam_chauthtok(handle, PAM_CHANGE_EXPIRED_AUTHTOK) };
+            if ch != PAM_SUCCESS {
+                let e = match ch {
+                    PAM_ABORT | PAM_CONV_ERR => AuthError::Aborted,
+                    other => AuthError::PasswordChangeFailed(self.strerror(other)),
+                };
+                self.end(ch);
+                return Err(e);
+            }
+            rc = unsafe { ffi::pam_acct_mgmt(handle, 0) };
+        }
         if rc != PAM_SUCCESS {
             let e = self.map_err(rc);
             self.end(rc);
