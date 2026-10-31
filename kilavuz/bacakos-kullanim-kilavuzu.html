@@ -316,6 +316,7 @@
       <a href="#dosya-yoneticisi">Dosya Yöneticisi — altay</a>
       <a href="#belge-goruntuleyici">Belge Görüntüleyici</a>
       <a href="#tahta">Dijital Tahta — tahta</a>
+      <a href="#ruzgar">Web Tarayıcı — Rüzgar</a>
       <a href="#varsayilan-uygulamalar">Varsayılan Uygulamalar</a>
     </div>
     <div class="group">
@@ -441,6 +442,21 @@
         veya <kbd>Super</kbd>+<kbd>1-9,0</kbd> ile doğrudan numarayla geçebilirsiniz.
         Dokunmatikte üç parmakla yatay kaydırma aynı işi yapar.
       </p>
+
+      <h3>Dokunuşla pencere seçme</h3>
+      <p>
+        Dokunmatik ekranda bir pencereye parmakla dokunmak onu etkin pencere yapar:
+        klavye girdisi ve sonraki dokunuşlar o pencereye gider. Bir uygulama kendini
+        küçülttüğünde (ör. Tahta tarayıcıyı açarken) etkinlik arkadaki pencereye geçer.
+      </p>
+
+      <h3>Ekran klavyesi</h3>
+      <p>
+        Dokunmatik ekranda bir yazı alanına dokununca ekran klavyesi alttan açılır,
+        alandan çıkınca kapanır. Klavye açıkken büyütülmüş (tam ekran kaplayan) pencereler
+        klavyenin üstüne kadar küçülür, klavye kapanınca eski boyuna döner — böylece
+        ekranın altındaki alanlar (ör. Rüzgar'ın adres çubuğu) klavyenin arkasında kalmaz.
+      </p>
     </section>
 
     <section id="klavye-kisayollari">
@@ -475,12 +491,15 @@
       <div class="card-grid">
         <div class="card"><h4>1 parmak, çift dokunma</h4><p>Kelime seçer (üçlü dokunma: paragraf seçer)</p></div>
         <div class="card"><h4>1 parmak, basılı tut (~0.5 sn)</h4><p>Seçim menüsünü açar</p></div>
-        <div class="card"><h4>2 parmak sürükleme</h4><p>Pencereyi taşır</p></div>
+        <div class="card"><h4>2 parmak basılı tut (~¼ sn) + sürükle</h4><p>Pencereyi taşır. Başlık çubuğunda beklemeden hemen taşır; hemen hareket eden iki parmak ise uygulamaya gider (kaydırma, yakınlaştırma).</p></div>
         <div class="card"><h4>2 parmak çift dokunma</h4><p>Pencereyi tam ekran yapar / eski haline döndürür</p></div>
         <div class="card"><h4>2 parmak, art arda 4 hızlı dokunma</h4><p>Terminal açar (fare jestinin dokunmatik karşılığı)</p></div>
         <div class="card"><h4>3 parmak yatay kaydırma</h4><p>Önceki/sonraki çalışma alanına geçer</p></div>
         <div class="card"><h4>3 parmak yukarı kaydırma</h4><p>Son kullanılan uygulamalar görünümünü açar</p></div>
         <div class="card"><h4>Sıkıştırma (pinch)</h4><p>Uygulamaya iletilir — desteklenen uygulamalarda yakınlaştırır (ör. altay, bacak-belge)</p></div>
+      </div>
+      <div class="note">
+        <strong>Çizim uygulamalarında jest yok:</strong> ilk parmak Tahta (veya OpenBoard) penceresine değerse, o dokunuş boyunca masaüstü jestleri çalışmaz ve bütün parmaklar uygulamaya gider — çizerken üç parmak çalışma alanını değiştirmez, parmağı bekletmek seçim menüsü açmaz. Masaüstünün geri kalanında jestler aynen çalışır.
       </div>
     </section>
 
@@ -518,16 +537,16 @@
         <li><strong>Saat / tarih:</strong> panelin üst kısmında "SS:DD · Gün, GG Ay" biçiminde, Türkçe gün ve ay adlarıyla gösterilir.</li>
         <li><strong>Wi-Fi:</strong> aç/kapat anahtarı + ağ listesi; şifre girme, statik IP/DHCP ayarı, otomatik yeniden bağlanma, MAC/IPv4/IPv6 bilgisi.</li>
         <li><strong>Bluetooth:</strong> aç/kapat anahtarı (cihaz eşleştirme ve dosya gönderme için genişletilmiş panel).</li>
-        <li><strong>Kablolu ağ:</strong> bağlantıyı aç/kapat, DHCP veya statik IP.</li>
+        <li><strong>Kablolu ağ:</strong> bağlantıyı aç/kapat, DHCP veya statik IP. Ayar reddedilirse (ör. geçersiz adres) nedeni panelde gösterilir. Dolu bir kutuya ilk tuş basışı eski değeri silip yeniden yazdırır.</li>
         <li><strong>Ses:</strong> çıkış seviyesi kaydırıcısı + çıkış cihazı seçimi, mikrofon seviyesi + giriş cihazı seçimi.</li>
-        <li><strong>Parlaklık</strong> kaydırıcısı.</li>
+        <li><strong>Parlaklık</strong> kaydırıcısı: arka ışığı olan ekranlarda (dizüstü) arka ışığı ayarlar, en düşük %5'tir, ekran hiç sönmez. Arka ışığı olmayan tahta ve monitörlerde görüntüyü karartır; seçilen düzey hatırlanır ve yeniden başlatınca geri gelir.</li>
         <li><strong>Koyu mod</strong> anahtarı.</li>
         <li><strong>Uzakel'e Bağlan:</strong> telefonu fare/klavye olarak kullanmak için eşleşme QR'ını gösterir (Uzakel kuruluysa).</li>
         <li><strong>Uzak Masaüstü:</strong> ekran (monitör) simgeli düğme — bkz. <a href="#uzak-masaustu">Uzak Masaüstü</a>.</li>
-        <li>Ekran görüntüsü alma, ve <strong>Kapat / Yeniden Başlat / Oturumu Kapat</strong> düğmeleri.</li>
+        <li>Ekran görüntüsü alma, ve <strong>Kapat / Yeniden Başlat / Oturumu Kapat</strong> düğmeleri. Yanlışlıkla dokunulup ders bitmesin diye bu düğmeler ilk dokunuşta kırmızıya dönüp <em>"Emin misiniz?"</em> diye sorar; işlem 4 saniye içindeki ikinci dokunuşla yapılır.</li>
         <li>"Masaüstü Ayarları" bağlantısı — aşağıdaki genişletilmiş panele götürür.</li>
       </ul>
-      <p>Panel ekranın sağ üst köşesinde açılır ve boyutunu ekrana göre ayarlar: yüksek çözünürlüklü büyük ekranlarda (ör. 4K tahta) orantılı olarak büyür, 1366×768 gibi alçak ekranlarda ise tamamı — en alttaki Kapat / Yeniden / Çıkış düğmeleri dahil — ekrana sığacak kadar küçülür.</p>
+      <p>Sürgüler parmağı izler ve değerini gösterir. Panel ve alt panelleri (Wi-Fi, Bluetooth, ses…) ekranın sağ alt köşesinde, dock'un yanında açılır ve boyutunu ekrana göre ayarlar: yüksek çözünürlüklü büyük ekranlarda (ör. 4K tahta) orantılı olarak büyür, 1366×768 gibi alçak ekranlarda ise tamamı — en alttaki Kapat / Yeniden / Çıkış düğmeleri dahil — ekrana sığacak kadar küçülür.</p>
     </section>
 
     <section id="masaustu-ayarlari">
@@ -607,12 +626,29 @@
       <ul>
         <li>Android için <strong>Bacak Onay</strong> uygulamasını kurun. İlk açılışta kasa, parmak izi veya ekran kilidi PIN'iyle oluşturulur; kodlar telefonun güvenli donanımında şifreli saklanır.</li>
         <li>Telefonda ekran kilidi tanımlı olmalıdır. Ekran kilidini kaldırırsanız Android kasa anahtarını siler ve hesapları yeniden eklemeniz gerekir.</li>
-        <li>Uygulama internete bağlanmaz; kodlar yalnızca saatten hesaplanır. Ekran görüntüsü alınamaz, uygulama arka plana geçince kilitlenir.</li>
+        <li>Kodlar yalnızca saatten hesaplanır; gizli anahtar telefondan hiç çıkmaz. Ekran görüntüsü alınamaz, uygulama arka plana geçince kilitlenir.</li>
         <li>Kodlar 30 saniyede bir değişir. Halka son 5 saniyede turuncuya döner — o zaman bir sonraki kodu bekleyin. Koda dokunmak kopyalar (pano 30 sn sonra temizlenir).</li>
         <li>Standart <code>otpauth://</code> QR'larını okuduğu için başka servislerin (e-posta, GitHub…) iki adımlı doğrulaması için de kullanılabilir.</li>
       </ul>
 
-      <h3>Bilgisayarda kayıt</h3>
+      <h3>QR ile giriş — kod yazmadan</h3>
+      <p>Giriş ekranında parolanızı yazdıktan sonra kod kutusunun altında bir QR çıkar. Telefonda Bacak Onay'ı açıp <b>QR ile giriş</b>'e basın, QR'ı okutun; telefonda hangi bilgisayar ve kullanıcı için olduğu görünür. <b>Onayla</b>'ya basınca kod kendiliğinden gider ve oturum açılır.</p>
+      <ul>
+        <li>Telefon ile bilgisayar <strong>aynı ağda</strong> olmalıdır. Telefon yalnızca o anın 6 haneli kodunu, ekrandaki QR'a özel tek kullanımlık bir anahtarla şifreleyip gönderir; gizli anahtar telefondan çıkmaz, kodu bilgisayar yine kendisi doğrular.</li>
+        <li><strong>Parmak izi gerekmez:</strong> onay için uygulamanın açık olması yeterlidir (uygulama telefonun ekran kilidiyle açılır). Parmak izi verisi hiçbir zaman uygulamaya ya da bilgisayara gitmez.</li>
+        <li>Girişi siz başlatmadıysanız onaylamayın: başkasının size okuttuğu bir QR'ı onaylamak, ona o anki kodu vermek demektir.</li>
+        <li>Ağ yoksa ya da QR görünmüyorsa kodu her zamanki gibi yazabilirsiniz.</li>
+      </ul>
+
+      <h3>Bilgisayarda kayıt — masaüstünden</h3>
+      <ol class="steps">
+        <li><strong>Pencereyi açın</strong><p>Kontrol Merkezi &rarr; <b>Bacak Onay</b> (ya da uygulamalar menüsünden Bacak Onay). Yönetici parolanızı girin; pencere iki adımlı girişin açık mı kapalı mı olduğunu gösterir.</p></li>
+        <li><strong>Telefonu eşleyin</strong><p><b>Telefonu eşle ve aç</b>'a basın. Ekranda büyük bir QR çıkar; telefonda Bacak Onay &rarr; <b>QR tara</b> ile okutun (kamera yoksa QR'ın altındaki anahtarı "Elle ekle" ile girin).</p></li>
+        <li><strong>Kodu onaylayın</strong><p>Uygulamada beliren 6 haneli kodu ekran klavyesiyle yazıp <b>Onayla</b>'ya basın. Kod tutarsa iki adımlı giriş açılır; tutmazsa ya da <b>Vazgeç</b>'e basarsanız hiçbir şey değişmez.</p></li>
+      </ol>
+      <p>Aynı pencereden <b>Yeni telefonla yeniden eşle</b> (eski telefondaki kayıt geçersiz olur) ve <b>İki adımlı girişi kapat</b> (iki dokunuşla) yapılabilir. Pencere yalnızca oturumu açık olan kullanıcının kaydını değiştirir.</p>
+
+      <h3>Bilgisayarda kayıt — terminalden</h3>
       <ol class="steps">
         <li><strong>Terminali açın</strong><p>Kendi oturumunuzda <code>sudo bacakonay kur</code> komutunu çalıştırın (yönetici parolası istenir).</p></li>
         <li><strong>QR'ı okutun</strong><p>Terminalde çıkan QR kodunu telefonda Bacak Onay &rarr; <b>QR tara</b> ile okutun. Kamera yoksa altında yazan anahtarı "Elle ekle" ile girin.</p></li>
@@ -626,7 +662,7 @@
         <tr><td class="k"><code>sudo bacakonay kur ayse</code></td><td class="d">Başka bir kullanıcı için kayıt (yönetici)</td></tr>
       </table>
       <div class="note">
-        <strong>Güvenlik:</strong> Aynı kod iki kez kullanılamaz. Yanlış kodlar yanlış parola gibi sayılır ve çok sayıda hatalı denemede hesap geçici olarak kilitlenir. Kayıtları yalnızca yönetici (root) görebilir. Telefonunuzu kaybederseniz başka bir yönetici hesabıyla <code>sudo bacakonay kaldir &lt;kullanıcı&gt;</code> çalıştırın.
+        <strong>Kodu yazarken</strong> uygulamadaki gibi boşluklu (<code>123 456</code>) ya da boşluksuz yazabilirsiniz. <strong>Güvenlik:</strong> Aynı kod iki kez kullanılamaz. Yanlış kodlar yanlış parola gibi sayılır ve çok sayıda hatalı denemede hesap geçici olarak kilitlenir. Kayıtları yalnızca yönetici (root) görebilir. Telefonunuzu kaybederseniz başka bir yönetici hesabıyla <code>sudo bacakonay kaldir &lt;kullanıcı&gt;</code> çalıştırın.
       </div>
     </section>
 
@@ -637,10 +673,10 @@
       <h3>Kullanıcı olarak bilmeniz gerekenler</h3>
       <div class="card">
         <h4>"İzleniyor" göstergesi</h4>
-        <p>Ekranın sağ üst köşesinde kırmızı noktalı <strong>"İzleniyor"</strong> etiketi görüyorsanız, bu bilgisayar bir Uzak Yönetim sunucusuna bağlıdır ve ekran görüntüsü belirli aralıklarla yöneticiye iletilmektedir. Gösterge izleme açık olduğu sürece her zaman görünür ve ekran görüntülerinde de yer alır; izleme kapanınca veya ajan durunca kendiliğinden kaybolur.</p>
+        <p>Ekranın sağ üst köşesinde kırmızı noktalı <strong>"İzleniyor"</strong> etiketi görüyorsanız, bu bilgisayar bir Uzak Yönetim sunucusuna bağlıdır ve ekran görüntüsü belirli aralıklarla yöneticiye iletilmektedir. Gösterge izleme açık olduğu sürece her zaman görünür ve ekran görüntülerinde de yer alır; izleme kapanınca veya ajan durunca kendiliğinden kaybolur. Yönetici panelden <strong>anlık</strong> bir görüntü isterse de gösterge görüntü alınmadan önce belirir ve 1 dakika ekranda kalır — habersiz ekran görüntüsü alınamaz.</p>
       </div>
       <ul>
-        <li>Uzak Yönetim ajanı uzaktan <strong>komut çalıştıramaz</strong>; yalnızca kullanıcı listeleme, (yönetici olmayan) hesap açma ve silme, Bacak Onay kaydı ve ekran görüntüsü alma işlemlerini yapabilir. Yönetici (sudo) ve sistem hesapları ile o anda oturumu açık olan hesap silinemez; silinen hesabın ev dizini de silinir.</li>
+        <li>Uzak Yönetim ajanı uzaktan <strong>komut çalıştıramaz</strong>; yalnızca kullanıcı listeleme, (yönetici olmayan) hesap açma ve silme, Bacak Onay kaydı ve ekran görüntüsü alma işlemlerini yapabilir. Yönetici (sudo) ve sistem hesapları ile o anda oturumu açık olan hesap silinemez; silinen hesabın ev dizini de silinir. Yönetici hesaplarının Bacak Onay kaydı da panelden değiştirilemez; onu kişi kendi masaüstünden yönetir.</li>
         <li>Her bilgisayarın yöneticisi bu işlemleri <code>/etc/uzakyonetim/politika.toml</code> dosyasından tek tek kapatabilir (örn. <code>ekran_izleme = false</code>, <code>hesap_silme = false</code>); sunucu ne isterse istesin kapalı işlem yapılmaz.</li>
         <li>Yöneticinin yaptığı her işlem sunucudaki denetim kaydına yazılır.</li>
       </ul>
@@ -659,6 +695,18 @@
       <div class="note">
         <strong>Telefonu da kaybettiyseniz</strong> bu yol kullanılamaz: başka bir panel yöneticisi sizi <b>Ayarlar &rarr; Yöneticiler</b>'den kaldırıp yeniden ekleyebilir; tek yönetici sizseniz sunucuda <code>sudo -u uzakyonetim uzakyonetim-sunucu yonetici-ekle &lt;ad&gt;</code> ile parolanızı ve Bacak Onay kaydınızı yenileyin.
       </div>
+      <h3>Sunucuyu yeniden kurdum ya da başka makineye taşıdım</h3>
+      <p>Yöneticiler, makine kayıtları ve sertifikalar yalnızca sunucunun kendi veri dizininde (<code>/var/lib/uzakyonetim-sunucu</code>) durur. Sunucuyu yeni bir makineye kurduğunuzda bunların hiçbiri gelmez: eski kurulum jetonu, eski panel hesabınız ve telefondaki eski "uzakyonetim" Bacak Onay kaydı yeni sunucuda <strong>geçmez</strong>. Kayıtlı bilgisayarlar da yeni sunucuyu tanımaz (eski sunucunun sertifikasına güvenirler). Şu sırayla ilerleyin:</p>
+      <ol class="steps">
+        <li><strong>Yeni sunucunun jetonunu alın</strong><p>Jeton her kurulumda yeniden üretilir; başka bir makinedeki ya da eski kurulumdaki jeton kullanılamaz. Yeni sunucuda <code>sudo cat /var/lib/uzakyonetim-sunucu/kurulum-jetonu</code> çalıştırın. Dosya yoksa o sunucuda zaten bir yönetici vardır — giriş ekranını kullanın. <code>sudo systemctl status uzakyonetim-sunucu</code> günlüğünde "hiç yönetici yok" yazıyorsa jeton dosyası yerindedir.</p></li>
+        <li><strong>Kurulum bağlantısını yeni sayfada açın</strong><p><code>https://&lt;sunucu&gt;:8443/#kurulum=&lt;jeton&gt;</code> adresini yazıp <b>F5 ile sayfayı yenileyin</b> ya da yeni sekmede açın. Açık sayfada yalnızca <code>#</code> sonrasını değiştirmek sayfayı yeniden yüklemez; panel önceki jetonu göndermeye devam eder ve <em>"Kurulum bağlantısı geçersiz"</em> hatası alırsınız.</p></li>
+        <li><strong>İlk yöneticiyi yeniden oluşturun</strong><p>Eski kullanıcı adınızı kullanabilirsiniz. Parola <strong>en az 12 karakter</strong> olmalıdır. Ekrana gelen QR'ı Bacak Onay ile okutup kodu girin. Telefondaki eski "uzakyonetim" kaydı artık hiçbir sunucuyla eşleşmez; karışmaması için silin.</p></li>
+        <li><strong>Bilgisayarları yeniden kaydedin</strong><p>Panelde <b>+ Makine ekle</b> ile yeni bir kod alın ve her bilgisayarda <code>sudo uzakyonetim-ajan kaydol uzy1.… --zorla</code> ardından <code>sudo systemctl restart uzakyonetim-ajan</code> çalıştırın. <code>--zorla</code> olmadan ajan "bu makine zaten kayıtlı" der. Yeniden kayıttan önce ajan günlüğünde (<code>journalctl -u uzakyonetim-ajan</code>) sertifika hatası (<code>BadSignature</code>) görmeniz bu durumda beklenir.</p></li>
+        <li><strong>Eski sunucunun artıklarını temizleyin</strong><p>Eski makinede paket kaldırılmış ama veri dizini kalmış olabilir (<code>dpkg -l uzakyonetim-sunucu</code> çıktısında <code>rc</code>). Yeni sunucu çalıştığından emin olduktan sonra <code>sudo apt purge uzakyonetim-sunucu</code> ile kaldırın.</p></li>
+      </ol>
+      <div class="note">
+        <strong>"Çok fazla hatalı deneme" yazısı:</strong> Yanlış jetonla yapılan art arda denemeler o bilgisayarı kurulum sayfasından 15 dakika uzak tutar. Doğru jetonu aldıktan sonra bekleyip tekrar deneyin.
+      </div>
       <div class="note">
         <strong>Kişisel veriler:</strong> Ekran izleme kişisel veri işler. Kullanıcıları önceden bilgilendirin (KVKK); ekrandaki gösterge bu bilgilendirmenin yerini tutmaz, onu tamamlar. Kaybolan veya çalınan bir bilgisayarı panelde <strong>Filodan çıkar</strong> ile anında devre dışı bırakın.
       </div>
@@ -672,10 +720,23 @@
       <p>ZIP/JAR/APK, TAR (.gz/.bz2/.xz/.zst), 7z (okuma+yazma), RAR (çok parçalılar dahil), DEB, RPM ve bölünmüş <code>.001/.002…</code> dosyalarını doğrudan klasör gibi açar; şifreli arşivleri şifre sorarak açar.</p>
 
       <h3>Sürücüler ve ağ</h3>
-      <p>USB/harici disk taktığınızda otomatik listelenir, tek tıkla bağlanır/çıkarılır. Ayarlar &rarr; "Ağ Konumu Ekle" ile SMB, SFTP, FTP, WebDAV veya NFS paylaşımlarına bağlanabilirsiniz; kimlik bilgileri sistem anahtarlığında saklanır.</p>
+      <p>USB/harici disk taktığınızda otomatik listelenir, tek tıkla bağlanır/çıkarılır. Ayarlar &rarr; "Ağ Konumu Ekle" ile SMB, SFTP, FTP/FTPS, WebDAV veya NFS paylaşımlarına bağlanabilirsiniz; kimlik bilgileri sistem anahtarlığında saklanır.</p>
+      <ul>
+        <li><strong>SMB</strong> (Windows paylaşımları), <strong>SFTP</strong>, <strong>FTP/FTPS</strong> ve <strong>WebDAV</strong> altay'ın kendi istemcileriyle açılır; okuma ve yazma desteklenir. <code>smb://sunucu/</code> sunucudaki paylaşımları listeler; <code>ALAN;kullanıcı</code> ve misafir girişi çalışır.</li>
+        <li>Bağlantı koparsa altay yeniden bağlanıp işlemi tekrarlar; yarıda kopan bir yazma ise hata olarak bildirilir.</li>
+        <li>FTPS ve şifreli WebDAV sunucusu kendinden imzalı bir sertifika sunarsa altay parmak izini gösterip sorar; onaylarsanız hatırlanır. Sertifika sonradan değişirse bağlantı reddedilir. TLS sunmayan bir FTPS sunucusuna parola gönderilmez.</li>
+        <li>NFS paylaşımları için <code>gvfs</code> paketi gerekir (önerilen paket olarak gelir).</li>
+      </ul>
 
-      <h3>Çöp kutusu</h3>
-      <p>Sil işlemi dosyayı çöp kutusuna taşır; sağ tık menüsünden geri yükleyebilir veya çöp kutusunu boşaltabilirsiniz.</p>
+      <h3>Son kullanılanlar</h3>
+      <p>Kenar çubuğundaki <b>Son kullanılanlar</b>, ev dizininizde son 30 günde değiştirilen ya da açılan dosyaları en yeniden eskiye listeler.</p>
+
+      <h3>Çöp kutusu ve silme</h3>
+      <p>Sil işlemi (<kbd>Delete</kbd>, alt çubuktaki Sil veya "Çöpe taşı") önce onay sorar, ardından dosyayı çöp kutusuna taşır. Taşıdıktan sonra durum satırında 20 saniye <b>Geri al</b> düğmesi görünür (<kbd>Ctrl</kbd>+<kbd>Z</kbd> de çalışır). Çöp kutusundan sağ tık menüsüyle geri yükleyebilir veya çöpü boşaltabilirsiniz (boşaltma da onay ister).</p>
+      <p>Açık klasör canlı izlenir: başka bir uygulamada eklenen veya silinen dosyalar listeye kendiliğinden yansır.</p>
+
+      <h3>Sıkıştırma</h3>
+      <p>Sağ tık &rarr; <b>Sıkıştır</b> bir pencere açar: arşivin adını verir, isterseniz derleme çıktılarını ve önbellekleri (<code>target</code>, <code>node_modules</code>, <code>__pycache__</code>, <code>.cache</code>…) ya da virgülle yazdığınız kalıplara uyan dosyaları (ör. <code>*.img, .git</code>) arşiv dışında bırakırsınız. 4 GB'tan büyük dosyalar da sıkıştırılabilir.</p>
 
       <h3>Kısayollar</h3>
       <table class="kv">
@@ -713,11 +774,26 @@
         <li>Çok dokunuşlu çizim ve iki parmakla sıkıştırarak yakınlaştırma/uzaklaştırma (pinch-zoom).</li>
       </ul>
 
-      <h3>PDF ve sayfalar</h3>
-      <p>Bir PDF dosyasını (dosya yöneticisinden "Birlikte Aç" &rarr; tahta ile, veya <code>tahta dosya.pdf</code> ile) sayfa sayfa açıp üzerine anotasyon ekleyebilirsiniz. Çalışmanızı PDF olarak dışa aktarabilirsiniz.</p>
+      <h3>Otomatik kayıt ve geri al</h3>
+      <ul>
+        <li>Tahta (tüm sayfalar, arka planlar, çizimler) her değişiklikten birkaç saniye sonra kendiliğinden kaydedilir; masaüstüne dönerken ve kapanırken hemen. Tahta kapansa veya bilgisayar kapansa bile bir sonraki açılışta kaldığınız yerden devam edersiniz.</li>
+        <li>Her sayfada 50 adımlık <b>Geri al</b> / <b>Yinele</b>: çizgi, silgi, pergel, Temizle, arka plan değişikliği ve avuçla silme geri alınabilir. Klavyede <kbd>Backspace</kbd> geri alır, <kbd>Y</kbd> yineler.</li>
+        <li>Sayfa grubundaki <b>Yeni tahta</b> boş bir tahta açar (yanlışlıkla basılmasın diye iki dokunuş ister); eski tahta "Önceki tahta" olarak saklanır.</li>
+      </ul>
 
-      <h3>Gömülü tarayıcı ve EBA</h3>
-      <p>Araç çubuğundaki adres çubuğu bir web sayfası açar; varsayılan anasayfa <strong>www.eba.gov.tr</strong>'dir (Eğitim Bilişim Ağı). Adres çubuğundaki kalem simgesiyle "çizim modu"na geçip, açık olan web sayfasının üzerine doğrudan not alabilirsiniz.</p>
+      <h3>PDF ve sayfalar</h3>
+      <p>Bir PDF dosyasını sayfa sayfa açıp üzerine not ekleyebilir, çalışmanızı PDF olarak dışa aktarabilirsiniz. PDF açmanın yolları:</p>
+      <ul>
+        <li>Sayfa grubundaki klasör simgeli <b>Aç</b> düğmesi: Belgeler, İndirilenler ve Masaüstü klasörlerindeki (bir alt klasör derinliğine kadar) ve takılı USB belleklerdeki PDF'leri yeniden eskiye listeler. Listenin başındaki <b>Önceki tahta</b>, bir önceki tahtayı geri getirir (şu anki tahta onun yerine saklanır, yani ikisi arasında gidip gelebilirsiniz).</li>
+        <li>Dosya yöneticisinden "Birlikte Aç" &rarr; tahta, veya <code>tahta dosya.pdf</code>.</li>
+      </ul>
+      <p>PDF açıldığında o anki tahta kaybolmaz, "Önceki tahta" olarak saklanır.</p>
+
+      <h3>Web sayfaları ve EBA</h3>
+      <ul>
+        <li>Araç çubuğundaki <b>küre</b> düğmesi <a href="#ruzgar">Rüzgar</a> tarayıcısında <strong>www.eba.gov.tr</strong>'yi (Eğitim Bilişim Ağı) açar ve tahta'yı küçültür. Web sayfasının üzerine Rüzgar'ın kendi çizim araçlarıyla yazıp çizebilirsiniz.</li>
+        <li>Kürenin yanındaki <b>vizör</b> düğmesi (<b>Ekranı tahtaya al</b>), tahta'nın arkasındaki pencerenin — örneğin Rüzgar'da açık sayfanın — görüntüsünü alıp bulunduğunuz sayfadan sonra yeni bir tahta sayfası olarak ekler. Böylece web'deki bir soruyu ya da şekli tahtaya alıp üzerinde rahatça çalışabilirsiniz.</li>
+      </ul>
 
       <h3>Fatih akıllı tahtalarında dokunmatik</h3>
       <p>Fatih projesi etkileşimli tahtalarının (2 kameralı optik ve 4 kameralı OTD algılayıcılar) sürücüsü <strong>eta-touchdrv</strong> BacakOS'la birlikte gelir: tahta USB'den takıldığında sürücü kendiliğinden yüklenir, ek kurulum gerekmez. Sürücü bilgisayara kurulurken ve çekirdek her güncellendiğinde yeniden derlenir.</p>
@@ -731,12 +807,59 @@
       <p>Araç çubuğunun sonundaki aşağı-ok simgesi tahta'yı küçültüp masaüstüne döner (uygulama kapanmaz, arka planda açık kalır). Pencereyi tamamen kapattığınızda dock otomatik olarak geri gelir.</p>
     </section>
 
+    <section id="ruzgar">
+      <h2><span class="num">15</span> Web Tarayıcı — Rüzgar</h2>
+      <p class="lede">
+        Etkileşimli tahtalar için yapılmış, BacakOS'un kendi web tarayıcısı. Adres çubuğu ve
+        sekmeler ekranın <strong>altında</strong>, elin uzandığı yerdedir; açık sayfanın üzerine
+        kalemle yazıp çizebilirsiniz. Dock'ta sabitli gelir ve sistemin varsayılan tarayıcısıdır:
+        başka uygulamalardan açılan bağlantılar da Rüzgar'da açılır. Ana sayfası
+        <strong>www.eba.gov.tr</strong>'dir.
+      </p>
+
+      <h3>Alt çubuk</h3>
+      <ul>
+        <li><strong>Sekme şeridi:</strong> açık sekmeler; birine dokunmak ona geçer, <b>×</b> kapatır, <b>+</b> yeni sekme açar. Yeni pencerede açılmak istenen bağlantılar da yeni sekme olur.</li>
+        <li><strong>Geri, İleri, Yenile, Ana sayfa</strong> düğmeleri. Sayfa yüklenirken Yenile düğmesi yüklemeyi durdurur.</li>
+        <li><strong>Adres kutusu:</strong> bir adres (<code>eba.gov.tr</code>) ya da aranacak kelimeler yazın; adres olmayan metin Google'da aranır. Dokununca ekran klavyesi açılır ve pencere klavyenin üstüne kadar küçülür.</li>
+        <li><strong>✎ Çiz</strong> düğmesi çizim araçlarını açar.</li>
+      </ul>
+
+      <h3>Sayfanın üzerine çizim</h3>
+      <p>✎ Çiz'e basınca sağda araç kutusu açılır; bu sırada parmak ve fare sayfaya değil kaleme gider:</p>
+      <table class="kv">
+        <tr><th>Araç</th><th>İşlev</th></tr>
+        <tr><td class="k">Kalem</td><td class="d">Seçilen renk ve kalınlıkta yazar</td></tr>
+        <tr><td class="k">Fosforlu</td><td class="d">Yarı saydam, geniş vurgulayıcı — altındaki metin okunur kalır</td></tr>
+        <tr><td class="k">Silgi</td><td class="d">Dokunduğu çizgiyi bütünüyle siler</td></tr>
+        <tr><td class="k">Renkler</td><td class="d">Siyah, kırmızı, mavi, yeşil, turuncu</td></tr>
+        <tr><td class="k">İnce / Orta / Kalın</td><td class="d">Kalem kalınlığı</td></tr>
+        <tr><td class="k">Geri al / Temizle</td><td class="d">Son işlemi geri alır / sayfadaki bütün çizimleri siler</td></tr>
+        <tr><td class="k">Bitir</td><td class="d">Çizimden çıkar; çizimler ekranda kalır, sayfa yeniden dokunuşa açılır (bağlantılara dokunabilir, kaydırabilirsiniz)</td></tr>
+      </table>
+      <ul>
+        <li>Çizimler sayfaya yapışıktır: sayfayı kaydırınca işaretlediğiniz yerle birlikte kayar.</li>
+        <li>Her sayfanın çizimi ayrı tutulur; başka sayfaya gidip geri geldiğinizde o sayfanın çizimi geri gelir.</li>
+        <li>Çizimler sekme açık olduğu sürece saklanır; sekmeyi veya Rüzgar'ı kapatınca silinir. Kalıcı olsun istediğiniz bir sayfayı tahta'ya almak için tahta'daki <b>Ekranı tahtaya al</b> düğmesini kullanın.</li>
+      </ul>
+
+      <h3>Kısayollar</h3>
+      <table class="kv">
+        <tr><td class="k"><kbd>Ctrl</kbd>+<kbd>T</kbd></td><td class="d">Yeni sekme</td></tr>
+        <tr><td class="k"><kbd>Ctrl</kbd>+<kbd>W</kbd></td><td class="d">Sekmeyi kapat</td></tr>
+        <tr><td class="k"><kbd>Ctrl</kbd>+<kbd>L</kbd></td><td class="d">Adres kutusuna git</td></tr>
+        <tr><td class="k"><kbd>F5</kbd></td><td class="d">Yenile</td></tr>
+        <tr><td class="k"><kbd>Esc</kbd></td><td class="d">Çizimden çık</td></tr>
+      </table>
+      <p>Videolar tam ekrana geçebilir; tam ekranda alt çubuk gizlenir.</p>
+    </section>
+
     <section id="varsayilan-uygulamalar">
-      <h2><span class="num">15</span> Varsayılan Uygulamalar</h2>
+      <h2><span class="num">16</span> Varsayılan Uygulamalar</h2>
       <p class="lede">Dock'ta hazır sabitlenmiş gelen uygulamalar:</p>
       <div class="app-list">
         <div class="card"><span class="app-icon">A</span><div><h4>altay</h4><p>Dosya yöneticisi</p></div></div>
-        <div class="card"><span class="app-icon">F</span><div><h4>Firefox ESR</h4><p>Web tarayıcı — anasayfa varsayılanı www.eba.gov.tr</p></div></div>
+        <div class="card"><span class="app-icon">R</span><div><h4>Rüzgar</h4><p>Web tarayıcı — adres çubuğu altta, sayfaya çizim; ana sayfa www.eba.gov.tr</p></div></div>
         <div class="card"><span class="app-icon">L</span><div><h4>LibreOffice</h4><p>Ofis paketi başlangıç merkezi</p></div></div>
         <div class="card"><span class="app-icon">B</span><div><h4>bacak-belge</h4><p>PDF / EPUB / resim görüntüleyici</p></div></div>
         <div class="card"><span class="app-icon">T</span><div><h4>tahta</h4><p>Dokunmatik panel için dijital tahta</p></div></div>
@@ -744,13 +867,16 @@
     </section>
 
     <section id="sorun-giderme">
-      <h2><span class="num">16</span> Sorun Giderme</h2>
+      <h2><span class="num">17</span> Sorun Giderme</h2>
 
       <h3>Açılışta ekran siyah kalıyor / sürekli yanıp sönen imleç</h3>
       <p>Ctrl+Alt+F2 ile bir metin konsoluna geçip <code>systemctl status bacak-display-manager</code> ve <code>journalctl -u bacak-display-manager</code> ile hata mesajına bakın. Genellikle giriş ekranı servisinin bir önceki oturumu düzgün kapatamamasından kaynaklanır; <code>sudo systemctl restart bacak-display-manager</code> çoğu zaman yeterlidir.</p>
 
       <h3>Bir jest veya kısayol beklediğim gibi çalışmıyor</h3>
       <p>Jest eşikleri (dokunma süresi, sürükleme mesafesi) şu an kullanıcı ayarlarından değiştirilemiyor — sabit değerlerdir. Beklenmedik davranış görüyorsanız dokunmatik yüzeyinizin sürücü ayarlarını (varsa) kontrol edin.</p>
+
+      <h3>Tahta'da önceki çalışmam kayboldu</h3>
+      <p>Yeni tahta açtıysanız ya da bir PDF açtıysanız eski tahta silinmez: tahta'da <b>Aç</b> &rarr; <b>Önceki tahta</b> ile geri getirin. Tahta'nın kayıtları <code>~/.local/share/tahta/tahtalar/</code> altındadır (<code>son</code>: şu anki, <code>onceki</code>: bir önceki).</p>
 
       <h3>Uzakel bilgisayarı bulamıyor ya da bağlanmıyor</h3>
       <p>Telefon ile bilgisayarın aynı Wi-Fi ağında olduğundan emin olun (misafir ağları cihazları birbirinden ayırabilir). Bilgisayarda Uzakel servisinin çalıştığını <code>systemctl --user status uzakel-daemon</code> ile kontrol edin; kapalıysa <code>systemctl --user restart uzakel-daemon</code>. Uygulama "bu bilgisayar eşleşmeyi tanımıyor" diyorsa (30 gün kullanılmamış olabilir) Kontrol Merkezi &rarr; Uzakel'e Bağlan ile yeniden eşleştirin.</p>
@@ -766,6 +892,12 @@
 
       <h3>Uzak Yönetim paneline giremiyorum, parolamı unuttum</h3>
       <p>Giriş ekranında <b>Parolamı unuttum</b>'u kullanın; Bacak Onay koduyla yeni parola belirlersiniz — bkz. <a href="#uzak-yonetim">Uzak Yönetim</a>. "Çok fazla hatalı deneme" diyorsa 15 dakika bekleyin.</p>
+
+      <h3>Uzak Yönetim: "Kurulum bağlantısı geçersiz"</h3>
+      <p>Jeton o sunucuya ait değil (başka makinenin ya da eski kurulumun jetonu) ya da sayfa yenilenmeden yalnızca <code>#kurulum=</code> kısmı değiştirildi. Jetonu panelin çalıştığı sunucuda <code>sudo cat /var/lib/uzakyonetim-sunucu/kurulum-jetonu</code> ile alın, adresi yazıp <b>F5</b>'e basın — bkz. <a href="#uzak-yonetim">Sunucuyu yeniden kurdum ya da başka makineye taşıdım</a>.</p>
+
+      <h3>Uzak Yönetim: eski kullanıcı adım/parolam ve Bacak Onay kodum yeni sunucuda çalışmıyor</h3>
+      <p>Panel hesapları sunucuya özeldir ve taşınmaz. Yeni sunucuda ilk yöneticiyi yeniden oluşturun, telefonda yeni QR'ı okutun, eski kaydı silin; bilgisayarları <code>kaydol … --zorla</code> ile yeniden kaydedin.</p>
 
       <h3>Ekranda "İzleniyor" yazıyor</h3>
       <p>Bilgisayar bir Uzak Yönetim sunucusuna bağlı ve ekran izleme açık — bkz. <a href="#uzak-yonetim">Uzak Yönetim</a>. Durumu <code>sudo uzakyonetim-ajan durum</code> ile görebilirsiniz; yerel olarak kapatmak için <code>/etc/uzakyonetim/politika.toml</code>'da <code>ekran_izleme = false</code> yapıp <code>sudo systemctl restart uzakyonetim-ajan</code> çalıştırın.</p>
