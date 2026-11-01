@@ -2338,10 +2338,12 @@ fn show_recent(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
 
 fn make_new_folder(ui: &MainWindow, state: &Rc<RefCell<AppState>>) {
     let dir = state.borrow().current.clone();
-    let mut name = "New Folder".to_string();
+    // Named in the interface language, like the button that creates it.
+    let base = sx(ui, "New Folder", "Yeni Klasör", "Nueva carpeta").to_string();
+    let mut name = base.clone();
     let mut n = 2;
     while dir.join(&name).exists() {
-        name = format!("New Folder {n}");
+        name = format!("{base} {n}");
         n += 1;
     }
     let created = filesystem::create_dir(&state.borrow().sandbox, dir.join(&name));
