@@ -16,6 +16,19 @@ use yerlesim::Sigdir;
 
 slint::include_modules!();
 
+/// Pencere başlığını (dosya adı) değiştir. Wayland'da yeni başlık bir sonraki
+/// çizimle birlikte uygulanır; görüntü zaten çizildiği için o çizim gelmeyebilir
+/// ve başlık bir önceki resimde kalır. Kısa bir gecikmeyle bir çizim daha iste.
+fn baslik_degistir(ui: &AppWindow, ad: String) {
+    ui.set_filename(ad.into());
+    let w = ui.as_weak();
+    slint::Timer::single_shot(Duration::from_millis(60), move || {
+        if let Some(ui) = w.upgrade() {
+            ui.window().request_redraw();
+        }
+    });
+}
+
 const RESIM_UZANTILARI: &[&str] = &[
     "jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff", "tif", "ico", "qoi", "hdr", "pbm", "pgm", "ppm", "pnm",
 ];
@@ -564,7 +577,7 @@ fn resim_ac(ui: &AppWindow, path: PathBuf) -> Result<()> {
             let mut r = r.borrow_mut();
             let path = r.liste[r.sira].clone();
             let (sira, adet) = (r.sira, r.liste.len());
-            ui.set_filename(dosya_adi(&path).into());
+            baslik_degistir(&ui, dosya_adi(&path));
             ui.set_has_prev(sira > 0);
             ui.set_has_next(sira + 1 < adet);
             ui.set_pan_x(0.0);
