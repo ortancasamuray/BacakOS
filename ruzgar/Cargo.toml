@@ -15,7 +15,7 @@ opt-level = 3
 lto = "thin"
 
 [package.metadata.deb]
-revision = "1"
+revision = "2"
 maintainer = "Bacak Desktop Project <bilgi@anadolupanteri.org.tr>"
 copyright  = "2026, Bacak Desktop Project"
 section    = "web"
