@@ -52,6 +52,10 @@ pub enum DockMenuAction {
     Activate(WindowId),
     /// Ask the client to close the window via xdg-toplevel.close.
     CloseWindow(WindowId),
+    /// Minimise the window (animated into its dock tile).
+    Minimize(WindowId),
+    /// Send the window to the workspace at this zero-based index.
+    MoveToWorkspace(WindowId, usize),
     /// Spawn this app via its `.desktop` Exec (debounced).
     Launch(String),
     /// Add this app to `config.dock_pinned` (no-op if already pinned).
@@ -89,7 +93,13 @@ pub struct DockDrag {
     pub source_was_pinned: bool,
     /// App id at the press site — pinned (drop onto bar) or unpinned (drop off).
     pub source_app: String,
+    /// When the press landed: a touch held still this long opens the tile's
+    /// context menu (the finger's right-click) instead of activating it.
+    pub pressed_at: std::time::Instant,
 }
+
+/// Hold time that turns a touch on a dock tile into its context menu.
+pub const DOCK_LONG_PRESS: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// True when some window on `output` is currently fullscreen — used to hide
 /// the dock while e.g. tahta covers the whole panel, rather than drawing it
@@ -165,6 +175,18 @@ impl Plugin for DockPlugin {
     fn on_touch_up(&self, ctx: &mut PluginCtx, slot: i32) -> bool {
         let st = ctx.state();
         if st.dock_touch_slot == Some(slot) {
+            // Held without moving → the tile's context menu, as a right-click.
+            let long = st
+                .dock_drag
+                .as_ref()
+                .filter(|d| !d.started && d.pressed_at.elapsed() >= DOCK_LONG_PRESS)
+                .map(|d| (d.start_x, d.start_y));
+            if let Some((x, y)) = long {
+                st.dock_drag = None;
+                st.dock_touch_slot = None;
+                st.dock_right_press(x, y);
+                return true;
+            }
             let (px, py) = st
                 .dock_drag
                 .as_ref()

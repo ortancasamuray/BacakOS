@@ -721,21 +721,16 @@ fn forward_input(
             // client or the click-to-focus fallback.
             let (px, py) =
                 (state.pointer_position.0 as f32, state.pointer_position.1 as f32);
-            // Right-press opens (or dismisses) the dock context menu;
-            // left-press first consults an open menu, then falls
-            // through to the normal press/drag/release flow.
-            // Right-click → dock menu on a tile, else our text action menu
-            // (Copy/Paste/…) at the pointer. Both edges swallowed.
+            // Right-click → dock tile menu on a tile, else the app under the
+            // pointer gets it (parity with udev).
             if button == BTN_RIGHT {
-                if bstate == ButtonState::Pressed && !state.dock_right_press(px, py) {
-                    // Only (re)focus if there's a window under the cursor — never
-                    // clear focus, or synthesised Copy/Paste keys go nowhere.
-                    if let Some(target) = state.surface_under_pointer() {
-                        keyboard.set_focus(state, Some(target), serial);
-                    }
-                    state.open_text_context_menu(px, py);
+                let consumed = match bstate {
+                    ButtonState::Pressed => state.right_press_consumed(px, py),
+                    ButtonState::Released => state.right_release_consumed(),
+                };
+                if consumed {
+                    return;
                 }
-                return;
             }
             // Middle-click closes the hovered Overview card (parity with udev).
             if button == BTN_MIDDLE
@@ -808,6 +803,9 @@ fn forward_input(
             }
             // Core: a touch on a server-side title bar's close button (not a
             // plugin, mirrors the pointer path's `title_press` check).
+            if state.shot_touch_down(tx, ty, slot) {
+                return;
+            }
             if state.title_touch_close(tx, ty) {
                 return;
             }
@@ -834,6 +832,9 @@ fn forward_input(
             if crate::plugins::touch_motion(state, pos.x as f32, pos.y as f32, slot) {
                 return;
             }
+            if state.shot_touch_motion(pos.x as f32, pos.y as f32, slot) {
+                return;
+            }
             state
                 .touch_aggregator
                 .motion(slot, pos.x as f32, pos.y as f32);
@@ -844,6 +845,9 @@ fn forward_input(
             let slot = touch_slot_id(event.slot());
             // A plugin owning the drag finishes it + clears its slot.
             if crate::plugins::touch_up(state, slot) {
+                return;
+            }
+            if state.shot_touch_up(slot) {
                 return;
             }
             // Lifted finger is no longer a long-press candidate (mirrors the
@@ -910,6 +914,7 @@ fn forward_input(
         }
 
         InputEvent::TouchCancel { .. } => {
+            state.shot_touch_cancel();
             if state.dock_touch_slot.is_some() {
                 state.dock_touch_cancel();
             }

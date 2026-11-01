@@ -313,7 +313,7 @@ pub use crate::plugins::dock::{
     DockDrag, DockEntry, DockMenu, DockMenuAction, DockMenuItem, DockTooltip,
 };
 pub use crate::plugins::onboarding::{OnboardingDialog, TERM_W_FRAC};
-pub use crate::plugins::screenshot::{IpcScreenshot, PendingDocShot, RegionShot, ScreenshotReq, ShotDialog, Toast};
+pub use crate::plugins::screenshot::{IpcScreenshot, PendingDocShot, RegionShot, ScreenshotReq, ShotDialog, ShotScope, Toast};
 pub use crate::plugins::desktop_settings::{
     DsAction, DsMode, DsResult, DsRow, DesktopSettingsPanel, FbEntry, FileBrowserPanel,
 };
@@ -327,11 +327,18 @@ pub use crate::plugins::selection::{
 /// like [`DockDrag`] / [`OverviewDrag`] — not a Smithay pointer grab). The
 /// pointer-to-window offset is captured at press so the window tracks the
 /// cursor 1:1.
+/// How far a title-bar drag must travel before a snapped or maximised
+/// window leaves its zone — a click with a trembling hand shouldn't.
+const UNSNAP_DRAG_PX: f32 = 8.0;
+
 #[derive(Clone, Copy)]
 pub struct TitleDrag {
     pub id: WindowId,
     pub grab_dx: f32,
     pub grab_dy: f32,
+    /// Pointer position at press: a snapped/maximised window only lets go of
+    /// its zone (back to its earlier size) once the drag really moves.
+    pub start: (f32, f32),
 }
 
 
@@ -1023,6 +1030,9 @@ pub struct BacakState {
     /// foreign window. On touch-up we pop the Android-style Copy/Paste menu above
     /// the selection. Cleared on touch-up/cancel.
     pub mouse_select: bool,
+    /// The last right-press went to the client under the pointer, so its
+    /// release must follow it there (otherwise both edges are swallowed).
+    pub right_press_forwarded: bool,
     /// The window the floating menu was opened over (right-click / long-press
     /// target). Copy/Paste re-assert keyboard focus to this window's surface
     /// just before synthesising the clipboard chord — otherwise the synthesised
@@ -1148,6 +1158,12 @@ pub struct BacakState {
     /// making touch behave like the (working) mouse. Wayland clients keep
     /// native `wl_touch` so in-app multitouch / pinch still works.
     pub touch_pointer_slot: Option<i32>,
+    /// The finger dragging a window by its server-side title bar (the touch
+    /// twin of a pointer title drag: move, edge snapping, double-tap).
+    pub title_touch_slot: Option<i32>,
+    /// The finger drawing a region screenshot's rectangle (or the tap that
+    /// picked a window) — the touch twin of the pointer's left button there.
+    pub shot_touch_slot: Option<i32>,
     /// Whether the current touch sequence may start compositor gestures —
     /// decided when its first finger lands (`touch_gestures_at`) and kept
     /// until the last lifts, so every finger of one gesture agrees.
@@ -1332,7 +1348,7 @@ pub const TOAST_FADE_MS: u64 = 500;
 /// → fill) so the thumb lands exactly where it's drawn.
 pub const CC_SLIDER_INSET: f32 = 16.0;
 
-pub const DOCK_MENU_W: f32 = 184.0;
+pub const DOCK_MENU_W: f32 = 232.0;
 /// Per-item row height (px); the plaque grows in height with the
 /// number of items.
 pub const DOCK_MENU_ROW_H: f32 = 26.0;
@@ -1375,7 +1391,7 @@ pub const SEL_MENU_BTN_PAD: f32 = 16.0;
 /// Approximate label advance per character at [`SEL_MENU_LABEL_PX`]; used to
 /// size buttons in the pure layout so the hit-test needs no font. The renderer
 /// centres the rasterised label inside this rect, so small drift is invisible.
-pub const SEL_MENU_CHAR_W: f32 = 8.5;
+pub const SEL_MENU_CHAR_W: f32 = 10.0;
 /// Label point size for menu buttons.
 pub const SEL_MENU_LABEL_PX: f32 = 15.0;
 
@@ -1627,6 +1643,7 @@ impl BacakState {
             loupe: None,
             single_touch_slot: None,
             mouse_select: false,
+            right_press_forwarded: false,
             selection_menu_target: None,
             selection_recognizer: SelectionRecognizer::new(),
             text_panel: None,
@@ -1664,6 +1681,8 @@ impl BacakState {
             apps_menu_drag: None,
             apps_menu_touch_slot: None,
             touch_pointer_slot: None,
+            title_touch_slot: None,
+            shot_touch_slot: None,
             touch_seq_gestures: true,
             brightness: 1.0,
             brightness_out: BrightnessOut::Preview,
@@ -2860,6 +2879,7 @@ impl BacakState {
             started: false,
             source_was_pinned: entry.pinned,
             source_app: entry.app.clone(),
+            pressed_at: Instant::now(),
         });
         true
     }
@@ -3474,6 +3494,33 @@ impl BacakState {
     /// Clear the Tier C selection overlay.
     pub fn clear_atspi_selection(&mut self) {
         self.atspi_selection = None;
+    }
+
+    /// Route a right-button press. `true` = the compositor took it (dock tile
+    /// menu, or a click on compositor UI / the bare desktop); `false` = it
+    /// belongs to the app under the pointer, which gets its own context menu.
+    /// A right-press also dismisses an open floating text menu.
+    pub fn right_press_consumed(&mut self, px: f32, py: f32) -> bool {
+        self.right_press_forwarded = false;
+        if self.dock_right_press(px, py) {
+            return true;
+        }
+        if self.floating_menu.is_some() {
+            self.close_selection_menu();
+        }
+        if self.overview.is_some() || self.control_center.is_some() {
+            return true;
+        }
+        if self.surface_under_pointer().is_none() {
+            return true;
+        }
+        self.right_press_forwarded = true;
+        false
+    }
+
+    /// Route a right-button release: forwarded iff its press was.
+    pub fn right_release_consumed(&mut self) -> bool {
+        !std::mem::take(&mut self.right_press_forwarded)
     }
 
     /// Open the action menu as a **right-click context menu** at `(sx, sy)`,
@@ -4421,9 +4468,18 @@ impl BacakState {
                 (q.is_empty() || name.to_lowercase().contains(&q))
                     && (sel_mask == 0 || mask & sel_mask != 0)
             })
-            .map(|(app, name, _)| AppMenuItem {
-                app: app.clone(),
-                label: cc_rasterize(self.text.as_ref(), name, APPS_MENU_LABEL_PX, label_color, label_max_w),
+            .map(|(app, name, _)| {
+                let (l1, l2) = match self.text.as_ref() {
+                    Some(t) => t.wrap_two_lines(name, APPS_MENU_LABEL_PX, label_max_w as f32),
+                    None => (name.clone(), None),
+                };
+                AppMenuItem {
+                    app: app.clone(),
+                    label: cc_rasterize(self.text.as_ref(), &l1, APPS_MENU_LABEL_PX, label_color, label_max_w),
+                    label2: l2.and_then(|l| {
+                        cc_rasterize(self.text.as_ref(), &l, APPS_MENU_LABEL_PX, label_color, label_max_w)
+                    }),
+                }
             })
             .collect();
         let n = items.len();
@@ -7835,9 +7891,10 @@ impl BacakState {
 
         let cx = bx + PAD;
         let mut y = by + PAD + TH + GAP;
-        let mw = (inner - GAP) / 2.0;
+        let mw = (inner - 2.0 * GAP) / 3.0;
         let mode_whole = Rect::new(cx, y, mw, MH);
         let mode_window = Rect::new(cx + mw + GAP, y, mw, MH);
+        let mode_region = Rect::new(cx + 2.0 * (mw + GAP), y, mw, MH);
         y += MH + GAP + DLH + 6.0;
         let dw = (inner - 3.0 * GAP) / 4.0;
         let secs = [0u64, 3, 5, 10];
@@ -7864,14 +7921,16 @@ impl BacakState {
             panel,
             mode_whole,
             mode_window,
+            mode_region,
             delays,
             capture,
             cancel,
-            sel_window: false,
+            sel: ShotScope::Whole,
             sel_delay: 0,
             title: cc_rasterize(text, "Ekran Görüntüsü", 17.0, LABEL, inner as usize),
             l_whole: cc_rasterize(text, "Tüm Ekran", 14.0, LABEL, (mw - 12.0) as usize),
-            l_window: cc_rasterize(text, "Aktif Pencere", 14.0, LABEL, (mw - 12.0) as usize),
+            l_window: cc_rasterize(text, "Pencere", 14.0, LABEL, (mw - 12.0) as usize),
+            l_region: cc_rasterize(text, "Bölge", 14.0, LABEL, (mw - 12.0) as usize),
             l_delay: cc_rasterize(text, "Gecikme", 12.0, SUB, inner as usize),
             delay_lbls,
             l_capture: cc_rasterize(text, "❏  Çek", 15.0, LABEL, (aw - 12.0) as usize),
@@ -7886,10 +7945,10 @@ impl BacakState {
     pub fn shot_dialog_press(&mut self, px: f32, py: f32) -> bool {
         let Some(d) = self.shot_dialog.as_ref() else { return false };
         let panel = d.panel;
-        let (mode_whole, mode_window, cancel, capture) =
-            (d.mode_whole, d.mode_window, d.cancel, d.capture);
+        let (mode_whole, mode_window, mode_region, cancel, capture) =
+            (d.mode_whole, d.mode_window, d.mode_region, d.cancel, d.capture);
         let delays = d.delays.clone();
-        let (output, sel_window, sel_delay) = (d.output, d.sel_window, d.sel_delay);
+        let (output, sel, sel_delay) = (d.output, d.sel, d.sel_delay);
         // `d` borrow ends here.
 
         let hit = |r: Rect| px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h;
@@ -7897,13 +7956,11 @@ impl BacakState {
             self.shot_dialog = None;
             return true;
         }
-        if hit(mode_whole) {
-            if let Some(m) = self.shot_dialog.as_mut() { m.sel_window = false; }
-            return true;
-        }
-        if hit(mode_window) {
-            if let Some(m) = self.shot_dialog.as_mut() { m.sel_window = true; }
-            return true;
+        for (r, scope) in [(mode_whole, ShotScope::Whole), (mode_window, ShotScope::Window), (mode_region, ShotScope::Region)] {
+            if hit(r) {
+                if let Some(m) = self.shot_dialog.as_mut() { m.sel = scope; }
+                return true;
+            }
         }
         for (r, s) in delays {
             if hit(r) {
@@ -7916,8 +7973,13 @@ impl BacakState {
             return true;
         }
         if hit(capture) {
-            let window = if sel_window { self.active_window() } else { None };
             self.shot_dialog = None;
+            if sel == ShotScope::Region {
+                // Arm the interactive selection; the next drag draws it.
+                self.region_shot = Some(RegionShot { output, anchor: None, cur: self.pointer_position });
+                return true;
+            }
+            let window = if sel == ShotScope::Window { self.active_window() } else { None };
             let req = ScreenshotReq { output, region: None, window };
             if sel_delay == 0 {
                 self.pending_screenshot = Some(req);
@@ -8287,8 +8349,8 @@ impl BacakState {
         let target = carousel::index_scroll(carousel::selected(scroll_pos, n, sp), sp);
         scroll.retarget(target);
 
-        // "Close all" pill, bottom-centre (Android-style).
-        let pill_w = 132.0_f32;
+        // "Tümünü kapat" pill, bottom-centre (Android-style).
+        let pill_w = 150.0_f32;
         let pill_h = 40.0_f32;
         let close_all = Rect::new(
             bounds.x + (bounds.w - pill_w) / 2.0,
@@ -8297,7 +8359,7 @@ impl BacakState {
             pill_h,
         );
         let close_all_label =
-            cc_rasterize(text, "Close all", 15.0, label_color, pill_w as usize);
+            cc_rasterize(text, "Tümünü kapat", 15.0, label_color, pill_w as usize);
         self.overview = Some(Overview {
             output: out,
             cards,
@@ -8586,6 +8648,13 @@ impl BacakState {
         self.restore_window_animated(id);
     }
 
+    /// Zero-based index of `ws` in its output's id-sorted workspace list.
+    fn workspace_index_of(&self, out: OutputId, ws: WorkspaceId) -> Option<usize> {
+        let mut wss = self.wm.workspaces_for(out);
+        wss.sort_by_key(|w| w.id);
+        wss.iter().position(|w| w.id == ws)
+    }
+
     fn build_dock_menu_items(&self, entry: &DockEntry) -> Vec<DockMenuItem> {
         let pinned = self.config.dock_pinned.iter().any(|p| p == &entry.app);
         let mut items = Vec::new();
@@ -8595,10 +8664,31 @@ impl BacakState {
                     label: "Öne Getir".into(),
                     action: DockMenuAction::Activate(id),
                 });
+                let win = self.wm.all_windows().into_iter().find(|w| w.id == id);
+                if win.as_ref().is_some_and(|w| !matches!(w.state, WinState::Minimized)) {
+                    items.push(DockMenuItem {
+                        label: "Küçült".into(),
+                        action: DockMenuAction::Minimize(id),
+                    });
+                }
                 items.push(DockMenuItem {
                     label: "Kapat".into(),
                     action: DockMenuAction::CloseWindow(id),
                 });
+                // Touch has no Super+Shift+N: send the window to another
+                // workspace from here.
+                let here = win.as_ref().and_then(|w| {
+                    let out = self.wm.output_for_window(w.id)?.id;
+                    self.workspace_index_of(out, w.workspace)
+                });
+                if let Some(here) = here {
+                    for i in (0..crate::wm::WORKSPACE_COUNT).filter(|&i| i != here) {
+                        items.push(DockMenuItem {
+                            label: format!("{}. alana taşı", i + 1),
+                            action: DockMenuAction::MoveToWorkspace(id, i),
+                        });
+                    }
+                }
                 items.push(DockMenuItem {
                     label: if pinned {
                         "Sabitlemeyi Kaldır".into()
@@ -8676,6 +8766,12 @@ impl BacakState {
         match action {
             DockMenuAction::Activate(id) => self.restore_window_animated(id),
             DockMenuAction::CloseWindow(id) => self.close_window(id),
+            DockMenuAction::Minimize(id) => self.minimize_window_animated(id),
+            DockMenuAction::MoveToWorkspace(id, index) => {
+                if let Err(e) = self.move_window_to_index(id, index) {
+                    tracing::warn!(?e, "could not move window from dock menu");
+                }
+            }
             DockMenuAction::Launch(app) => {
                 self.prune_pending_launches();
                 if !self.pending_launches.contains_key(&app)
@@ -8736,6 +8832,7 @@ impl BacakState {
                         id,
                         grab_dx: px - geom.x,
                         grab_dy: py - geom.y,
+                        start: (px, py),
                     });
                     let _ = self.wm.focus(id);
                     let s = self.surface_for_window(id);
@@ -8769,6 +8866,73 @@ impl BacakState {
     /// ownership, so a second finger moving during a drag would be
     /// ambiguous), so a touch on the rest of the bar falls through to normal
     /// touch routing unchanged. Returns whether a close button was hit.
+    /// Touch twin of the region / window-pick screenshot clicks: while either
+    /// is armed (Shift/Alt + PrintScreen) the first finger anchors the
+    /// rectangle — or captures the window it lands on — and never reaches a
+    /// client. Returns whether the touch was consumed.
+    pub fn shot_touch_down(&mut self, tx: f32, ty: f32, slot: i32) -> bool {
+        if self.region_shot.is_none() && !self.window_pick {
+            return false;
+        }
+        if self.shot_touch_slot.is_some() {
+            return true; // extra fingers while selecting are ignored
+        }
+        self.shot_touch_slot = Some(slot);
+        let p = (tx as f64, ty as f64);
+        if let Some(rs) = self.region_shot.as_mut() {
+            rs.anchor = Some(p);
+            rs.cur = p;
+        } else {
+            if let Some(id) = self.wm.hit_test(tx, ty) {
+                if let Some(out) = self.wm.output_for_window(id).map(|o| o.id) {
+                    self.pending_screenshot = Some(ScreenshotReq {
+                        output: out,
+                        region: None,
+                        window: Some(id),
+                    });
+                }
+            }
+            self.window_pick = false;
+        }
+        true
+    }
+
+    /// The selecting finger moved: stretch the region rectangle.
+    pub fn shot_touch_motion(&mut self, tx: f32, ty: f32, slot: i32) -> bool {
+        if self.shot_touch_slot != Some(slot) {
+            return false;
+        }
+        if let Some(rs) = self.region_shot.as_mut() {
+            rs.cur = (tx as f64, ty as f64);
+        }
+        true
+    }
+
+    /// The selecting finger lifted: queue the region capture.
+    pub fn shot_touch_up(&mut self, slot: i32) -> bool {
+        if self.shot_touch_slot != Some(slot) {
+            return false;
+        }
+        self.shot_touch_slot = None;
+        if let Some(rs) = self.region_shot.take() {
+            if let Some(region) = rs.rect() {
+                self.pending_screenshot = Some(ScreenshotReq {
+                    output: rs.output,
+                    region: Some(region),
+                    window: None,
+                });
+            }
+        }
+        true
+    }
+
+    /// The touch sequence was cancelled mid-selection: drop the region.
+    pub fn shot_touch_cancel(&mut self) {
+        if self.shot_touch_slot.take().is_some() {
+            self.region_shot = None;
+        }
+    }
+
     pub fn title_touch_close(&mut self, px: f32, py: f32) -> bool {
         use crate::decoration::{hit, DecoHit};
         let mut wins = self.wm.list_visible();
@@ -8863,13 +9027,81 @@ impl BacakState {
     /// Track an in-flight title-bar drag — the window follows the pointer at
     /// the captured grab offset. Cheap no-op when no drag is active.
     pub fn title_pointer_motion(&mut self, px: f32, py: f32) {
-        let Some(d) = self.title_drag else { return };
+        let Some(mut d) = self.title_drag else { return };
+        if let Ok(w) = self.wm.get(d.id) {
+            let moved = (px - d.start.0).abs().max((py - d.start.1).abs());
+            if moved < UNSNAP_DRAG_PX
+                && matches!(w.state, WinState::Snapped(_) | WinState::Maximized)
+            {
+                return;
+            }
+        }
+        self.unsnap_for_drag(&mut d, px);
         if let Ok(w) = self.wm.get(d.id) {
             let _ = self.wm.r#move(
                 d.id,
                 Rect::new(px - d.grab_dx, py - d.grab_dy, w.geom.w, w.geom.h),
             );
         }
+        // Edge/corner snapping, as for a client-initiated move grab: the
+        // pointer (not the window origin) picks the zone, previewed while
+        // dragging and applied on release (`title_release`).
+        self.snap_preview = self.wm.monitor_for_window(d.id).and_then(|m| {
+            crate::wm::hit_test_snap(px, py, m).map(|z| (z, crate::wm::rect_for_zone(z, m)))
+        });
+    }
+
+    /// Dragging a snapped or maximised window out of its zone: give it back
+    /// the size it had before, keeping the grab point proportionally under
+    /// the pointer (as other desktops do).
+    fn unsnap_for_drag(&mut self, d: &mut TitleDrag, px: f32) {
+        let Ok(w) = self.wm.get(d.id) else { return };
+        if !matches!(w.state, WinState::Snapped(_) | WinState::Maximized) {
+            return;
+        }
+        let Some(restore) = self.maximize_restore.remove(&d.id) else { return };
+        if w.geom.w > 0.0 {
+            d.grab_dx = (d.grab_dx / w.geom.w * restore.w).clamp(0.0, restore.w);
+        }
+        self.title_drag = Some(*d);
+        let geom = Rect::new(px - d.grab_dx, w.geom.y, restore.w, restore.h);
+        let _ = self.wm.r#move(d.id, geom);
+        self.notify_tiling(d.id, None, geom);
+    }
+
+    /// Tell the client its new size after a snap (or un-snap): xdg via a
+    /// configure carrying the size and maximised/tiled states, X11 via the
+    /// X11 surface. Without it the WM moves the window but the app keeps
+    /// drawing at its old size.
+    pub(crate) fn notify_tiling(&mut self, id: WindowId, zone: Option<SnapZone>, geom: Rect) {
+        use xdg_toplevel::State;
+        if let Some(top) = self.toplevel_for(id) {
+            top.with_pending_state(|s| {
+                for st in [State::Maximized, State::TiledLeft, State::TiledRight, State::TiledTop, State::TiledBottom] {
+                    s.states.unset(st);
+                }
+                let tiled: &[State] = match zone {
+                    None => &[],
+                    Some(SnapZone::Maximize) => &[State::Maximized],
+                    Some(SnapZone::Left) => &[State::TiledLeft, State::TiledTop, State::TiledBottom],
+                    Some(SnapZone::Right) => &[State::TiledRight, State::TiledTop, State::TiledBottom],
+                    Some(SnapZone::Top) => &[State::TiledLeft, State::TiledRight, State::TiledTop],
+                    Some(SnapZone::Bottom) => &[State::TiledLeft, State::TiledRight, State::TiledBottom],
+                    Some(SnapZone::TopLeft) => &[State::TiledLeft, State::TiledTop],
+                    Some(SnapZone::TopRight) => &[State::TiledRight, State::TiledTop],
+                    Some(SnapZone::BottomLeft) => &[State::TiledLeft, State::TiledBottom],
+                    Some(SnapZone::BottomRight) => &[State::TiledRight, State::TiledBottom],
+                };
+                for st in tiled {
+                    s.states.set(*st);
+                }
+                s.size = Some((geom.w.round() as i32, geom.h.round() as i32).into());
+            });
+            top.send_configure();
+        } else {
+            self.x11_apply_maximized(id, zone == Some(SnapZone::Maximize), geom);
+        }
+        self.ftl_refresh_all_state();
     }
 
     /// End a title-bar drag. Returns whether one was active (so the backend
@@ -8877,6 +9109,8 @@ impl BacakState {
     pub fn title_release(&mut self) -> bool {
         match self.title_drag.take() {
             Some(d) => {
+                let preview = self.snap_preview.take();
+                crate::grab::finish_move(self, d.id, preview);
                 // X11 windows are positioned by the WM, so push the final
                 // post-move geometry back to Xwayland (xdg clients don't need
                 // this — they never control their own position). No-op for xdg.
@@ -8991,7 +9225,13 @@ impl BacakState {
         let is_max = matches!(w.state, WinState::Maximized)
             || matches!(w.state, WinState::Snapped(SnapZone::Maximize));
         if is_max {
-            let restore = self.maximize_restore.remove(&id).unwrap_or(w.geom);
+            let mut restore = self.maximize_restore.remove(&id).unwrap_or(w.geom);
+            // Keep the title bar on screen: a size remembered from a drag that
+            // ended at the top edge may sit with its bar above the output.
+            if let Some(mon) = self.wm.monitor_for_window(id) {
+                let bar = if self.decorated.contains(&id) { crate::decoration::BAR_H } else { 0.0 };
+                restore.y = restore.y.max(mon.work_area.y + bar);
+            }
             let _ = self.wm.r#move(id, restore);
             self.notify_maximize(id, false, restore);
         } else {
@@ -9719,6 +9959,9 @@ impl BacakState {
                                 );
                             }
                         }
+                        if let Ok(w) = self.wm.get(id) {
+                            self.notify_tiling(id, Some(zone), w.geom);
+                        }
                     }
                     AnimEnd::Minimize { restore } => {
                         // The spring shrank it toward the dock for show;
@@ -9891,6 +10134,15 @@ impl BacakState {
         // "focused" anyway because the WM clears focus when a window
         // moves out of view.
         let Some(win) = self.wm.list_visible().into_iter().find(|w| w.focused) else {
+            return Ok(());
+        };
+        self.move_window_to_index(win.id, index)
+    }
+
+    /// Move window `id` to the workspace at zero-based `index` on its own
+    /// output (the dock menu's "N. alana taşı" and the Super+Shift+N path).
+    pub fn move_window_to_index(&mut self, id: WindowId, index: usize) -> Result<(), WmError> {
+        let Some(win) = self.wm.all_windows().into_iter().find(|w| w.id == id) else {
             return Ok(());
         };
         let src_ws = win.workspace;
@@ -10940,11 +11192,21 @@ impl BacakState {
             DsAction::SetWallpaper(i) => {
                 let color = crate::plugins::desktop_settings::WALLPAPER_PRESETS[i];
                 self.config.wallpaper_color = color;
+                // A picture covers the colour completely: picking a colour
+                // means "use this colour", so drop the picture — otherwise the
+                // tap would change nothing on screen.
+                let had_image = self.config.wallpaper_image.take().is_some();
+                if had_image {
+                    self.wallpaper_cache.clear();
+                }
                 let _ = self.config.save();
                 if let Some(ds) = self.desktop_settings.as_mut() {
                     for row in &mut ds.rows {
                         if let DsAction::SetWallpaper(j) = row.action {
                             row.toggled = j == i;
+                        }
+                        if had_image && matches!(row.action, DsAction::SetWallpaperImage) {
+                            row.value_label = ds_rasterize(&self.text, "Seçilmedi", 12.0, [170, 178, 196], 200);
                         }
                     }
                 }
@@ -11579,8 +11841,9 @@ impl BacakState {
 
     pub fn open_file_browser(&mut self, out: OutputId) {
         use std::path::PathBuf;
-        let initial_dir = dirs::home_dir()
-            .map(|h| { let p = h.join("Pictures"); if p.exists() { p } else { h } })
+        let initial_dir = dirs::picture_dir()
+            .filter(|p| p.exists())
+            .or_else(dirs::home_dir)
             .unwrap_or_else(|| PathBuf::from("/"));
 
         let Some(bounds) = self.wm.output(out).map(|o| o.bounds) else { return };
@@ -12811,5 +13074,41 @@ mod cc_layout_tests {
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(raw, "30", "lowest step, still on");
         assert!((state.brightness - 1.0).abs() < 1e-6, "no dimming on top");
+    }
+}
+
+#[cfg(test)]
+mod shot_touch_tests {
+    use super::*;
+    use smithay::reexports::wayland_server::Display;
+
+    #[test]
+    fn finger_draws_region_screenshot() {
+        let display: Display<BacakState> = Display::new().unwrap();
+        let mut st = BacakState::new(&display, "shot-touch-seat");
+        let output = st.wm.primary_output().unwrap();
+        // Nothing armed → touches pass through.
+        assert!(!st.shot_touch_down(100.0, 100.0, 0));
+        st.region_shot = Some(RegionShot { output, anchor: None, cur: (0.0, 0.0) });
+        assert!(st.shot_touch_down(100.0, 120.0, 3));
+        assert!(st.shot_touch_down(500.0, 500.0, 4), "a second finger is swallowed");
+        assert!(!st.shot_touch_motion(600.0, 600.0, 4), "only the first finger drags");
+        assert!(st.shot_touch_motion(400.0, 320.0, 3));
+        assert!(st.shot_touch_up(3));
+        assert!(st.region_shot.is_none());
+        let req = st.pending_screenshot.take().expect("capture queued");
+        let r = req.region.expect("region capture");
+        assert_eq!((r.x, r.y, r.w, r.h), (100.0, 120.0, 300.0, 200.0));
+    }
+
+    #[test]
+    fn cancel_drops_region() {
+        let display: Display<BacakState> = Display::new().unwrap();
+        let mut st = BacakState::new(&display, "shot-touch-seat-2");
+        let output = st.wm.primary_output().unwrap();
+        st.region_shot = Some(RegionShot { output, anchor: None, cur: (0.0, 0.0) });
+        assert!(st.shot_touch_down(10.0, 10.0, 0));
+        st.shot_touch_cancel();
+        assert!(st.region_shot.is_none() && st.pending_screenshot.is_none());
     }
 }
