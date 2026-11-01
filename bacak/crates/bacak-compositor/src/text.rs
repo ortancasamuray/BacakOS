@@ -148,6 +148,19 @@ impl TextRenderer {
         out
     }
 
+    /// Pen advance of `text` at `px` (same measure `rasterize_line` fits by).
+    pub fn text_width(&self, text: &str, px: f32) -> f32 {
+        text.chars().map(|c| self.font.metrics(c, px).advance_width).sum()
+    }
+
+    /// Break a short label into at most two lines at word boundaries, so
+    /// names sharing a first word ("LibreOffice Writer", "LibreOffice Calc")
+    /// stay distinguishable. The second line may still be ellipsised by
+    /// `rasterize_line`; a single over-long word is left to it as well.
+    pub fn wrap_two_lines(&self, text: &str, px: f32, max_w: f32) -> (String, Option<String>) {
+        wrap_two(text.trim(), max_w, |s| self.text_width(s, px))
+    }
+
     /// Rasterise one line at `px` height into an `Abgr8888` buffer.
     ///
     /// * `color` is the straight-alpha RGB the glyphs tint to.
@@ -411,5 +424,48 @@ mod tests {
             capped < natural,
             "expected truncation: capped {capped} >= natural {natural}"
         );
+    }
+}
+
+/// Greedy two-line word wrap over a width measure (font-free, testable).
+fn wrap_two(text: &str, max_w: f32, width: impl Fn(&str) -> f32) -> (String, Option<String>) {
+    if width(text) <= max_w {
+        return (text.to_string(), None);
+    }
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let mut first = 0;
+    for n in 1..words.len() {
+        if width(&words[..n].join(" ")) <= max_w {
+            first = n;
+        } else {
+            break;
+        }
+    }
+    if first == 0 {
+        return (text.to_string(), None);
+    }
+    (words[..first].join(" "), Some(words[first..].join(" ")))
+}
+
+#[cfg(test)]
+mod wrap_tests {
+    use super::wrap_two;
+    fn w(s: &str) -> f32 {
+        s.chars().count() as f32
+    }
+
+    #[test]
+    fn labels_wrap_on_words() {
+        assert_eq!(wrap_two("Altay", 10.0, w), ("Altay".into(), None));
+        assert_eq!(
+            wrap_two("LibreOffice Writer", 12.0, w),
+            ("LibreOffice".into(), Some("Writer".into()))
+        );
+        assert_eq!(
+            wrap_two("GDebi Package Installer", 14.0, w),
+            ("GDebi Package".into(), Some("Installer".into()))
+        );
+        // One long word: nothing to break, the rasteriser ellipsises it.
+        assert_eq!(wrap_two("Uzunbirkelimeadı", 6.0, w), ("Uzunbirkelimeadı".into(), None));
     }
 }

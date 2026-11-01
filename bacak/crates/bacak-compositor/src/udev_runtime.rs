@@ -2690,7 +2690,7 @@ fn forward_libinput_event(
                         }
 
                         // PrintScreen → full-output screenshot to a PNG
-                        // (~/Pictures). Shift+PrintScreen → interactive region
+                        // (pictures folder). Shift+PrintScreen → interactive region
                         // select (drag a rectangle, release to capture). The key
                         // handler has no renderer; it flags the request and the
                         // render tick captures it.
@@ -3175,27 +3175,20 @@ fn forward_libinput_event(
                 }
                 return;
             }
-            // Right-press opens (or dismisses) the dock context menu;
-            // left-press first consults an open menu, then falls
-            // through to the normal press/drag/release flow.
-            // Right-click: the dock context menu if it's on a tile, otherwise
-            // our text action menu (Copy/Paste/…) at the pointer — a desktop
-            // context menu. Both press and release are swallowed so the client
-            // never sees a stray button.
+            // Right-click: the dock tile menu on a dock tile; otherwise it goes
+            // to the app under the pointer (its own context menu). Presses on
+            // compositor UI or the bare desktop are swallowed, release with them.
             if event.button_code() == BTN_RIGHT {
-                if bstate == ButtonState::Pressed && !data.state.dock_right_press(px, py) {
-                    // Focus the window under the cursor so Copy/Paste's synthesised
-                    // keys land in it — but only if there *is* one, else we'd
-                    // clear focus and the keys would go nowhere. Then pop the menu.
-                    if let Some(target) = data.state.surface_under_pointer() {
-                        data.keyboard.set_focus(&mut data.state, Some(target), serial);
-                    }
-                    data.state.open_text_context_menu(px, py);
-                }
+                let consumed = match bstate {
+                    ButtonState::Pressed => data.state.right_press_consumed(px, py),
+                    ButtonState::Released => data.state.right_release_consumed(),
+                };
                 for t in data.targets.iter_mut() {
                     t.needs_redraw = true;
                 }
-                return;
+                if consumed {
+                    return;
+                }
             }
             // Middle-click closes the hovered Overview card (Android-style).
             if event.button_code() == BTN_MIDDLE
@@ -3301,9 +3294,31 @@ fn forward_libinput_event(
                 }
                 return;
             }
+            // Shift/Alt + PrintScreen armed: the finger draws the region or
+            // picks the window, like the left button does.
+            if data.state.shot_touch_down(tx, ty, slot) {
+                for t in data.targets.iter_mut() {
+                    t.needs_redraw = true;
+                }
+                return;
+            }
             // Core: a touch on a server-side title bar's close button (not a
             // plugin, mirrors the pointer path's `title_press` check).
             if data.state.title_touch_close(tx, ty) {
+                for t in data.targets.iter_mut() {
+                    t.needs_redraw = true;
+                }
+                return;
+            }
+            // One finger on a server-side title bar: drag the window (with
+            // edge snapping) or double-tap to maximise, like the mouse does.
+            if data.state.touch_aggregator.fingers() == 0
+                && data.state.title_touch_slot.is_none()
+                && data.state.title_press(tx, ty)
+            {
+                if data.state.title_drag.is_some() {
+                    data.state.title_touch_slot = Some(slot);
+                }
                 for t in data.targets.iter_mut() {
                     t.needs_redraw = true;
                 }
@@ -3437,6 +3452,19 @@ fn forward_libinput_event(
                 }
                 return;
             }
+            if data.state.shot_touch_motion(tx, ty, slot) {
+                for t in data.targets.iter_mut() {
+                    t.needs_redraw = true;
+                }
+                return;
+            }
+            if data.state.title_touch_slot == Some(slot) {
+                data.state.title_pointer_motion(tx, ty);
+                for t in data.targets.iter_mut() {
+                    t.needs_redraw = true;
+                }
+                return;
+            }
             // Always track the finger for gesture recognition.
             data.state.touch_aggregator.motion(slot, tx, ty);
             // Movement past the slop cancels a pending long-press (it's a drag).
@@ -3498,6 +3526,20 @@ fn forward_libinput_event(
             // A plugin owning the drag (selection settle, or the slot-tracked
             // OSK/overview/dock/apps-menu) finishes it + clears its slot.
             if crate::plugins::touch_up(&mut data.state, slot) {
+                for t in data.targets.iter_mut() {
+                    t.needs_redraw = true;
+                }
+                return;
+            }
+            if data.state.shot_touch_up(slot) {
+                for t in data.targets.iter_mut() {
+                    t.needs_redraw = true;
+                }
+                return;
+            }
+            if data.state.title_touch_slot == Some(slot) {
+                data.state.title_touch_slot = None;
+                data.state.title_release();
                 for t in data.targets.iter_mut() {
                     t.needs_redraw = true;
                 }
@@ -3572,6 +3614,10 @@ fn forward_libinput_event(
         }
 
         InputEvent::TouchCancel { .. } => {
+            if data.state.title_touch_slot.take().is_some() {
+                data.state.title_release();
+            }
+            data.state.shot_touch_cancel();
             if data.state.dock_touch_slot.is_some() {
                 data.state.dock_touch_cancel();
             }

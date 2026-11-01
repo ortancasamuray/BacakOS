@@ -80,23 +80,36 @@ impl RegionShot {
 /// window) and a **delay** before the capture fires. A modal compositor overlay
 /// rebuilt on open; selection toggles mutate the `sel_*` fields in place; "Çek"
 /// schedules the grab via `BacakState::pending_shot`.
+/// What the screenshot dialog captures.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ShotScope {
+    /// The whole output.
+    Whole,
+    /// The active window only.
+    Window,
+    /// A rectangle the user draws next (finger or mouse) — the dialog's twin
+    /// of Shift+PrintScreen, so a keyboard-less smart board can reach it.
+    Region,
+}
+
 pub struct ShotDialog {
     pub output: OutputId,
     pub panel: Rect,
     /// Scope pills.
     pub mode_whole: Rect,
     pub mode_window: Rect,
+    pub mode_region: Rect,
     /// Delay pills, each tagged with its seconds.
     pub delays: Vec<(Rect, u64)>,
     pub capture: Rect,
     pub cancel: Rect,
-    /// `false` = whole output, `true` = active window.
-    pub sel_window: bool,
+    pub sel: ShotScope,
     /// Chosen delay in seconds (0 = immediate).
     pub sel_delay: u64,
     pub title: Label,
     pub l_whole: Label,
     pub l_window: Label,
+    pub l_region: Label,
     pub l_delay: Label,
     pub delay_lbls: Vec<Label>,
     pub l_capture: Label,

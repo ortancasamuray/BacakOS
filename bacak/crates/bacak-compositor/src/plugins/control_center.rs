@@ -24,7 +24,7 @@ pub enum CcAction {
     DarkToggle,
     Volume,
     Brightness,
-    /// Capture the whole output to ~/Pictures (same path as PrintScreen).
+    /// Capture the whole output to the pictures folder (~/Resimler) (same path as PrintScreen).
     Screenshot,
     PowerOff,
     Reboot,

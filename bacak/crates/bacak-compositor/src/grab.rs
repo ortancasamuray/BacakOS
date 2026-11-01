@@ -38,7 +38,7 @@ use smithay::wayland::shell::xdg::ToplevelSurface;
 
 use crate::animation::{AnimEnd, WindowAnim};
 use crate::state::BacakState;
-use crate::wm::{hit_test_snap, rect_for_zone, Monitor, Rect, WindowId};
+use crate::wm::{hit_test_snap, rect_for_zone, Monitor, Rect, SnapZone, WindowId};
 
 /// Minimum window size during interactive resize. Anything smaller than this
 /// makes the chrome unusable, and a zero size would crash dumb clients.
@@ -148,49 +148,7 @@ impl PointerGrab<BacakState> for MoveGrab {
         handle.unset_grab(self, data, serial, event.time, true);
         let preview = data.snap_preview.take();
 
-        // Decide the spring target:
-        //   * snap zone → animate to half-screen rect, then re-snap WM state
-        //   * off-snap  → animate the window from its current spot to the
-        //                 same spot (== no-op), so we still flush any
-        //                 sub-pixel drift introduced by floating-point math.
-        let current = match data.wm.get(self.window) {
-            Ok(w) => w.geom,
-            Err(_) => return,
-        };
-        let (target, zone) = match preview {
-            Some((zone, target_rect)) => {
-                // Decorated windows reserve the title-bar strip at the top of
-                // the snap zone, so the bar (drawn above the content) stays
-                // on-screen instead of off the top edge / over the panel.
-                let t = if data.decorated.contains(&self.window) {
-                    let b = crate::decoration::BAR_H;
-                    Rect::new(
-                        target_rect.x,
-                        target_rect.y + b,
-                        target_rect.w,
-                        (target_rect.h - b).max(1.0),
-                    )
-                } else {
-                    target_rect
-                };
-                (t, Some(zone))
-            }
-            None => (current, None),
-        };
-        // Avoid scheduling a no-op animation that would burn frames.
-        if (target.x - current.x).abs() < 0.5
-            && (target.y - current.y).abs() < 0.5
-            && (target.w - current.w).abs() < 0.5
-            && (target.h - current.h).abs() < 0.5
-            && zone.is_none()
-        {
-            return;
-        }
-        let end = zone.map(AnimEnd::Snap).unwrap_or(AnimEnd::None);
-        data.animations.insert(
-            self.window,
-            WindowAnim::to_rect(self.window, current, target, end),
-        );
+        finish_move(data, self.window, preview);
     }
 
     fn axis(&mut self, data: &mut BacakState, handle: &mut PointerInnerHandle<'_, BacakState>, details: AxisFrame) {
@@ -231,6 +189,61 @@ impl PointerGrab<BacakState> for MoveGrab {
         // stale snap preview painted on the next frame.
         data.snap_preview = None;
     }
+}
+
+/// End of a window move — a pointer grab or a server-side title-bar drag:
+/// released over a snap zone the window springs into that half/quarter (or
+/// maximises at the top edge); elsewhere it just settles where it is.
+pub fn finish_move(data: &mut BacakState, window: WindowId, preview: Option<(SnapZone, Rect)>) {
+    // Decide the spring target:
+    //   * snap zone → animate to half-screen rect, then re-snap WM state
+    //   * off-snap  → animate the window from its current spot to the
+    //                 same spot (== no-op), so we still flush any
+    //                 sub-pixel drift introduced by floating-point math.
+    let current = match data.wm.get(window) {
+        Ok(w) => w.geom,
+        Err(_) => return,
+    };
+    let (target, zone) = match preview {
+        Some((zone, target_rect)) => {
+            // Decorated windows reserve the title-bar strip at the top of
+            // the snap zone, so the bar (drawn above the content) stays
+            // on-screen instead of off the top edge / over the panel.
+            let t = if data.decorated.contains(&window) {
+                let b = crate::decoration::BAR_H;
+                Rect::new(
+                    target_rect.x,
+                    target_rect.y + b,
+                    target_rect.w,
+                    (target_rect.h - b).max(1.0),
+                )
+            } else {
+                target_rect
+            };
+            (t, Some(zone))
+        }
+        None => (current, None),
+    };
+    // Avoid scheduling a no-op animation that would burn frames.
+    if (target.x - current.x).abs() < 0.5
+        && (target.y - current.y).abs() < 0.5
+        && (target.w - current.w).abs() < 0.5
+        && (target.h - current.h).abs() < 0.5
+        && zone.is_none()
+    {
+        return;
+    }
+    // Remember the size it had, so dragging it back out (or a double-click
+    // on the title) restores it. A drag out of a zone has already given the
+    // window its earlier size back, so `current` is always the free size.
+    if zone.is_some() {
+        data.maximize_restore.insert(window, current);
+    }
+    let end = zone.map(AnimEnd::Snap).unwrap_or(AnimEnd::None);
+    data.animations.insert(
+        window,
+        WindowAnim::to_rect(window, current, target, end),
+    );
 }
 
 // ---------------------------------------------------------------------------

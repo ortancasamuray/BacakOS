@@ -23,6 +23,8 @@ pub struct AppMenuItem {
     /// Pre-rasterised name label + its pixel size, built when the (filtered)
     /// list is assembled so the render path never re-rasterises per frame.
     pub label: Option<(MemoryRenderBuffer, usize, usize)>,
+    /// Second line of a name too wide for one ("LibreOffice" / "Writer").
+    pub label2: Option<(MemoryRenderBuffer, usize, usize)>,
 }
 
 /// One category tab in the apps-menu sidebar. `mask` is the [`crate::icons`]

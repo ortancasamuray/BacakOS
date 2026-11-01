@@ -1577,15 +1577,19 @@ pub(crate) fn render_apps_menu(
         }
         let cell = menu.item_rect(i);
         let side = (cell.w.min(cell.h) * 0.52).max(8.0);
-        let icon = Rect::new(cell.x + (cell.w - side) / 2.0, cell.y + cell.h * 0.12, side, side);
+        let icon = Rect::new(cell.x + (cell.w - side) / 2.0, cell.y + cell.h * 0.08, side, side);
         match app_icon_element(state, renderer, &item.app, icon, 1.0, output_scale, off_x, off_y) {
             Some(el) => push_cropped(out, el),
             None => push_cropped(out, solid_element(icon, tile_color(&item.app, 0.9), output_scale, off_x, off_y)),
         }
-        if let Some((buf, w, h)) = &item.label {
+        // One line sits at the bottom of the cell; a two-line name moves its
+        // first line up by a line height.
+        let line_h = item.label2.as_ref().map_or(0.0, |(_, _, h)| *h as f32 - 1.0);
+        for (lbl, lift) in [(&item.label, line_h), (&item.label2, 0.0)] {
+            let Some((buf, w, h)) = lbl else { continue };
             let scale = output_scale as f32;
             let lx = cell.x + (cell.w - *w as f32) / 2.0;
-            let ly = cell.y + cell.h - *h as f32 - 8.0;
+            let ly = cell.y + cell.h - *h as f32 - 6.0 - lift;
             let phys = Point::<f64, Physical>::from((
                 ((lx - off_x as f32) * scale) as f64,
                 ((ly - off_y as f32) * scale) as f64,
@@ -2734,6 +2738,7 @@ pub(crate) fn render_shot_dialog(
     }
     centered(out, renderer, &d.l_whole, d.mode_whole);
     centered(out, renderer, &d.l_window, d.mode_window);
+    centered(out, renderer, &d.l_region, d.mode_region);
     // "Gecikme" label left-aligned just above the first delay pill.
     if let Some(first) = d.delays.first() {
         cc_blit_label(
@@ -2754,10 +2759,11 @@ pub(crate) fn render_shot_dialog(
     centered(out, renderer, &d.l_capture, d.capture);
 
     // --- pass 2: button cards (selection highlight) ---
-    let mode_w_col = if d.sel_window { off_card } else { accent };
-    let mode_n_col = if d.sel_window { accent } else { off_card };
-    cc_card(out, renderer, d.mode_whole, mode_w_col, 14.0, output_scale, off_x, off_y);
-    cc_card(out, renderer, d.mode_window, mode_n_col, 14.0, output_scale, off_x, off_y);
+    use crate::state::ShotScope;
+    for (r, scope) in [(d.mode_whole, ShotScope::Whole), (d.mode_window, ShotScope::Window), (d.mode_region, ShotScope::Region)] {
+        let col = if d.sel == scope { accent } else { off_card };
+        cc_card(out, renderer, r, col, 14.0, output_scale, off_x, off_y);
+    }
     for (r, s) in &d.delays {
         let col = if *s == d.sel_delay { accent } else { off_card };
         cc_card(out, renderer, *r, col, 12.0, output_scale, off_x, off_y);
@@ -3443,7 +3449,10 @@ pub(crate) fn render_floating_menu(
         }
         // Label below the icon.
         if let Some(font) = font {
-            let max_w = (btn.w - 2.0 * crate::state::SEL_MENU_BTN_PAD).max(1.0) as usize;
+            // The width estimate (SEL_MENU_CHAR_W) is rough: give the label the
+            // whole button but a small margin, so Turkish labels ("Tümünü Seç")
+            // are never elided.
+            let max_w = (btn.w - 8.0).max(1.0) as usize;
             if let Some((buffer, w, _h)) = rasterize_label(
                 font,
                 &item.label,
@@ -4486,11 +4495,14 @@ fn save_screenshot(img: image::RgbaImage) -> Option<(std::path::PathBuf, Vec<u8>
     Some((path, png))
 }
 
-/// Where to write a screenshot: `$XDG_PICTURES_DIR`, else `~/Pictures`, else
-/// `$HOME`, else `/tmp`; filename `Screenshot_<unixsecs>.png`.
+/// Where to write a screenshot: `$XDG_PICTURES_DIR`, else the pictures
+/// folder from `~/.config/user-dirs.dirs` (`~/Resimler` on a Turkish
+/// system), else `~/Pictures`, else `/tmp`; filename
+/// `Screenshot_<unixsecs>.png`.
 fn screenshot_path() -> std::path::PathBuf {
     let dir = std::env::var_os("XDG_PICTURES_DIR")
         .map(std::path::PathBuf::from)
+        .or_else(dirs::picture_dir)
         .or_else(|| {
             std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join("Pictures"))
         })
