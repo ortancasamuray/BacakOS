@@ -171,6 +171,20 @@ impl Tarayici {
         yenile.set_tooltip_text(Some("Yenile"));
         ev.set_tooltip_text(Some("Ana sayfa"));
         let adres = gtk::Entry::builder().hexpand(true).placeholder_text("Adres yazın ya da arayın").input_purpose(gtk::InputPurpose::Url).build();
+        // Dokunuşla adres kutusuna gelince adresin tamamı seçilsin: akıllı
+        // tahtada Ctrl+A yok, yazılan yeni adres eskisinin yerine geçmeli.
+        let odak = gtk::EventControllerFocus::new();
+        let a = adres.downgrade();
+        odak.connect_enter(move |_| {
+            let a = a.clone();
+            // Tıklama imleci yerleştirdikten sonra seç.
+            glib::idle_add_local_once(move || {
+                if let Some(a) = a.upgrade() {
+                    a.select_region(0, -1);
+                }
+            });
+        });
+        adres.add_controller(odak);
         let cizim_dugmesi = gtk::ToggleButton::builder().label("✎  Çiz").tooltip_text("Sayfanın üzerine yaz ve çiz").build();
         let alt_satir = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         for w in [geri.upcast_ref::<gtk::Widget>(), ileri.upcast_ref(), yenile.upcast_ref(), ev.upcast_ref(), adres.upcast_ref(), cizim_dugmesi.upcast_ref()] {
