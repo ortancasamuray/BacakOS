@@ -64,6 +64,8 @@ pub enum ToolbarAction {
     ToggleTextBox,
     /// Shows/hides the draggable function-graph panel (`graph.rs`).
     ToggleGraph,
+    /// Shows/hides the draggable 3D solid + section panel (`solid.rs`).
+    ToggleSolid,
     /// Opens EBA in the system browser (see `masaustu.rs`).
     OpenBrowser,
     /// Adds what's on screen behind the board (the browser, a video, any
@@ -109,6 +111,7 @@ pub struct ToolbarState {
     pub magnifier_visible: bool,
     pub textbox_visible: bool,
     pub graph_visible: bool,
+    pub solid_visible: bool,
     /// Undo/Redo glyphs dim when the page has nothing to take back/redo.
     pub can_undo: bool,
     pub can_redo: bool,
@@ -171,6 +174,7 @@ const ENTRIES: &[Entry] = &[
     Entry::Group(&[ToolbarAction::ToggleCalculator, ToolbarAction::ToggleStopwatch, ToolbarAction::ToggleDice]),
     Entry::Group(&[ToolbarAction::ToggleSpotlight, ToolbarAction::ToggleMagnifier]),
     Entry::Direct(ToolbarAction::ToggleGraph),
+    Entry::Direct(ToolbarAction::ToggleSolid),
     Entry::Direct(ToolbarAction::ToggleTextBox),
     Entry::Direct(ToolbarAction::OpenBrowser),
     Entry::Direct(ToolbarAction::CaptureScreen),
@@ -188,9 +192,9 @@ const ENTRIES: &[Entry] = &[
 
 /// Local index right before which a thin separator is drawn: tool-select
 /// (0-3) | brush/color/undo/redo/clear (4-8) | drafting/widget/view groups
-/// (9-11) + function graph (12) | text/browser/screen grab (13-15) | page
-/// group (16) | minimize (17).
-const SEPARATOR_BEFORE: [usize; 5] = [4, 9, 13, 16, 17];
+/// (9-11) + function graph, solids (12-13) | text/browser/screen grab
+/// (14-16) | page group (17) | minimize (18).
+const SEPARATOR_BEFORE: [usize; 5] = [4, 9, 14, 17, 18];
 
 /// Bottom-center floating toolbar. Screen-space, never affected by canvas
 /// pan/zoom, recomputed each frame from the current window size (though
@@ -391,6 +395,7 @@ fn is_active(action: ToolbarAction, state: &ToolbarState) -> bool {
         ToolbarAction::ToggleMagnifier => state.magnifier_visible,
         ToolbarAction::ToggleTextBox => state.textbox_visible,
         ToolbarAction::ToggleGraph => state.graph_visible,
+        ToolbarAction::ToggleSolid => state.solid_visible,
         ToolbarAction::NewBoard => state.new_board_armed,
         ToolbarAction::OpenFile => state.opener_visible,
         _ => false,
@@ -646,6 +651,22 @@ fn draw_glyph(
             };
             for i in 0..STEPS {
                 push_line(point(i), point(i + 1), 2.5, COLOR_GLYPH, out_vertices, out_indices);
+            }
+        }
+        ToolbarAction::ToggleSolid => {
+            // A wireframe cube in oblique view, back edges thinner.
+            let s = r * 1.15;
+            let o = Vec2::new(r * 0.45, -r * 0.45);
+            let front = center + Vec2::new(-s / 2.0 - o.x / 2.0, -s / 2.0 - o.y / 2.0);
+            let back = front + o;
+            let corners = |tl: Vec2| [tl, tl + Vec2::new(s, 0.0), tl + Vec2::new(s, s), tl + Vec2::new(0.0, s)];
+            let (f, b) = (corners(front), corners(back));
+            for i in 0..4 {
+                push_line(b[i], b[(i + 1) % 4], 1.2, COLOR_GLYPH, out_vertices, out_indices);
+                push_line(f[i], b[i], 1.6, COLOR_GLYPH, out_vertices, out_indices);
+            }
+            for i in 0..4 {
+                push_line(f[i], f[(i + 1) % 4], 2.2, COLOR_GLYPH, out_vertices, out_indices);
             }
         }
         ToolbarAction::OpenBrowser => {

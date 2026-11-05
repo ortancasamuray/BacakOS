@@ -14,6 +14,7 @@ use glam::Vec2;
 
 use crate::expr::{self, Expr};
 use crate::font_atlas::{fit_text, FontAtlas, GlyphVertex};
+use crate::ink::{densify, stroke_text, stroke_text_width, InkLine};
 use crate::stroke::{push_circle, push_line, push_rect, Vertex};
 
 const BTN: f32 = 52.0;
@@ -113,13 +114,6 @@ pub enum GraphPress {
     Stamp,
     /// Anything else (a key, a formula row, padding) — already applied.
     Other,
-}
-
-/// One polyline to stamp onto the page, in screen space.
-pub struct InkLine {
-    pub points: Vec<Vec2>,
-    pub color: [f32; 4],
-    pub width: f32,
 }
 
 pub struct Graph {
@@ -731,74 +725,6 @@ fn format_decimal(v: f64, decimals: usize) -> String {
     } else {
         s
     }
-}
-
-/// Resamples a polyline so consecutive points are at most `spacing` apart
-/// — `stroke.rs` smooths ink through segment midpoints, which would round
-/// a sparse polyline's corners (an axis arrow, a digit's edges) away.
-fn densify(points: &[Vec2], spacing: f32) -> Vec<Vec2> {
-    let mut out = vec![points[0]];
-    for w in points.windows(2) {
-        let n = (w[0].distance(w[1]) / spacing).ceil().max(1.0) as usize;
-        for k in 1..=n {
-            out.push(w[0].lerp(w[1], k as f32 / n as f32));
-        }
-    }
-    out
-}
-
-/// Single-line stroke glyphs for stamped numbers/axis names, in a box
-/// 0.6 wide × 1 tall (y down). Each glyph is one or more polylines.
-fn stroke_glyph(c: char) -> &'static [&'static [(f32, f32)]] {
-    match c {
-        '0' => &[&[(0.3, 0.0), (0.55, 0.12), (0.6, 0.5), (0.55, 0.88), (0.3, 1.0), (0.05, 0.88), (0.0, 0.5), (0.05, 0.12), (0.3, 0.0)]],
-        '1' => &[&[(0.1, 0.2), (0.35, 0.0), (0.35, 1.0)]],
-        '2' => &[&[(0.02, 0.18), (0.25, 0.0), (0.5, 0.05), (0.6, 0.25), (0.5, 0.48), (0.0, 1.0), (0.6, 1.0)]],
-        '3' => &[&[(0.02, 0.1), (0.3, 0.0), (0.55, 0.12), (0.55, 0.38), (0.25, 0.48), (0.58, 0.6), (0.58, 0.88), (0.3, 1.0), (0.0, 0.9)]],
-        '4' => &[&[(0.45, 1.0), (0.45, 0.0), (0.0, 0.68), (0.6, 0.68)]],
-        '5' => &[&[(0.58, 0.0), (0.05, 0.0), (0.02, 0.45), (0.3, 0.4), (0.55, 0.52), (0.6, 0.78), (0.45, 0.97), (0.2, 1.0), (0.0, 0.9)]],
-        '6' => &[&[(0.5, 0.02), (0.2, 0.12), (0.02, 0.5), (0.05, 0.88), (0.3, 1.0), (0.55, 0.88), (0.58, 0.62), (0.32, 0.5), (0.05, 0.6)]],
-        '7' => &[&[(0.0, 0.0), (0.6, 0.0), (0.2, 1.0)]],
-        '8' => &[&[(0.3, 0.48), (0.08, 0.36), (0.08, 0.1), (0.3, 0.0), (0.52, 0.1), (0.52, 0.36), (0.3, 0.48), (0.02, 0.62), (0.05, 0.9), (0.3, 1.0), (0.55, 0.9), (0.58, 0.62), (0.3, 0.48)]],
-        '9' => &[&[(0.55, 0.4), (0.28, 0.5), (0.03, 0.38), (0.03, 0.12), (0.28, 0.0), (0.55, 0.12), (0.58, 0.5), (0.4, 0.88), (0.1, 0.98)]],
-        '-' => &[&[(0.05, 0.55), (0.45, 0.55)]],
-        ',' => &[&[(0.15, 0.85), (0.15, 1.0), (0.08, 1.12)]],
-        'x' => &[&[(0.0, 0.35), (0.55, 1.0)], &[(0.55, 0.35), (0.0, 1.0)]],
-        'y' => &[&[(0.0, 0.35), (0.3, 0.8)], &[(0.6, 0.35), (0.15, 1.25)]],
-        _ => &[],
-    }
-}
-
-/// Pen advance after a stroke glyph, in glyph heights — the minus sign
-/// and comma are narrow, so a fixed advance would leave "- 8" gaps.
-fn stroke_advance(c: char) -> f32 {
-    match c {
-        '-' => 0.55,
-        ',' => 0.35,
-        _ => 0.8,
-    }
-}
-
-fn stroke_text_width(text: &str, height: f32) -> f32 {
-    // The last glyph's ink ends at 0.6, not at its advance.
-    let advance: f32 = text.chars().map(stroke_advance).sum();
-    match text.chars().last() {
-        Some(last) => (advance - stroke_advance(last) + 0.6) * height,
-        None => 0.0,
-    }
-}
-
-fn stroke_text(text: &str, top_left: Vec2, height: f32) -> Vec<Vec<Vec2>> {
-    let mut out = Vec::new();
-    let mut x = 0.0;
-    for c in text.chars() {
-        let origin = top_left + Vec2::new(x * height, 0.0);
-        for poly in stroke_glyph(c) {
-            out.push(poly.iter().map(|&(gx, gy)| origin + Vec2::new(gx, gy) * height).collect());
-        }
-        x += stroke_advance(c);
-    }
-    out
 }
 
 #[allow(clippy::too_many_arguments)]
