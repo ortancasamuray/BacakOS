@@ -50,6 +50,10 @@ pub struct Stroke {
     pub color: [f32; 4],
     pub width: f32,
     pub brush_type: BrushType,
+    /// Non-zero for strokes stamped together by a panel's "Tahtaya bas"
+    /// (`input_handler::commit_ink`): they're selected and moved as one
+    /// figure. 0 = ordinary ink.
+    pub group: u32,
 }
 
 impl Stroke {
@@ -60,6 +64,7 @@ impl Stroke {
             color,
             width,
             brush_type,
+            group: 0,
         }
     }
 
@@ -237,7 +242,7 @@ impl Stroke {
             None => self.clear(),
         }
 
-        runs.map(|(pts, times)| Stroke { points: pts, timestamps: times, color: self.color, width: self.width, brush_type: self.brush_type })
+        runs.map(|(pts, times)| Stroke { points: pts, timestamps: times, color: self.color, width: self.width, brush_type: self.brush_type, group: self.group })
             .collect()
     }
 }

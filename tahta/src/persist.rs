@@ -25,7 +25,10 @@ use crate::board::{BoardBackground, GridPattern, PdfImage};
 use crate::brush::BrushType;
 use crate::stroke::Stroke;
 
-const MAGIC: &[u8; 8] = b"TAHTA\0\0\x01";
+/// v2 adds each stroke's `group` (stamped figures); v1 files still load,
+/// their ink ungrouped.
+const MAGIC: &[u8; 8] = b"TAHTA\0\0\x02";
+const MAGIC_V1: &[u8; 8] = b"TAHTA\0\0\x01";
 const BOARD_FILE: &str = "tahta.bin";
 
 /// One page as stored: what's behind the ink, and the ink.
@@ -220,6 +223,7 @@ fn encode(board: &BoardData) -> Vec<u8> {
         w.extend_from_slice(&(strokes.len() as u32).to_le_bytes());
         for s in strokes {
             w.push(brush_code(s.brush_type));
+            w.extend_from_slice(&s.group.to_le_bytes());
             for c in s.color {
                 w.extend_from_slice(&c.to_le_bytes());
             }
@@ -240,9 +244,11 @@ fn decode(
     mut image: impl FnMut(u64) -> anyhow::Result<Arc<PdfImage>>,
 ) -> anyhow::Result<BoardData> {
     let mut r = Reader { buf: raw, pos: 0 };
-    if r.take(MAGIC.len())? != MAGIC {
-        bail!("tahta dosyası değil ya da desteklenmeyen sürüm");
-    }
+    let v1 = match r.take(MAGIC.len())? {
+        m if m == MAGIC => false,
+        m if m == MAGIC_V1 => true,
+        _ => bail!("tahta dosyası değil ya da desteklenmeyen sürüm"),
+    };
     let current_page = r.u32()? as usize;
     let n_pages = r.u32()?;
     let mut pages = Vec::new();
@@ -267,10 +273,12 @@ fn decode(
         let mut strokes = Vec::new();
         for _ in 0..n_strokes {
             let brush = brush_from(r.u8()?);
+            let group = if v1 { 0 } else { r.u32()? };
             let color = [r.f32()?, r.f32()?, r.f32()?, r.f32()?];
             let width = r.f32()?;
             let n = r.u32()? as usize;
             let mut s = Stroke::new(color, width, brush);
+            s.group = group;
             s.points.reserve(n);
             s.timestamps.reserve(n);
             for _ in 0..n {
@@ -372,6 +380,42 @@ mod tests {
         assert_eq!((back_img.key, back_img.width, back_img.height), (img.key, 2, 1));
         assert_eq!(back_img.rgba, img.rgba);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn stamped_groups_survive_and_v1_files_still_load() {
+        let mut grouped = (*stroke(BrushType::Ballpoint, &[(0.0, 0.0), (5.0, 5.0)])).clone();
+        grouped.group = 7;
+        let board = BoardData {
+            current_page: 0,
+            pages: vec![PageData {
+                background: BoardBackground::White,
+                grid: GridPattern::Plain,
+                pdf_image: None,
+                strokes: vec![Arc::new(grouped), stroke(BrushType::Ballpoint, &[(1.0, 1.0), (2.0, 2.0)])],
+            }],
+        };
+        let back = decode(&encode(&board), |_| bail!("no images")).unwrap();
+        let groups: Vec<u32> = back.pages[0].strokes.iter().map(|s| s.group).collect();
+        assert_eq!(groups, vec![7, 0]);
+
+        // A file written before groups existed: one 1-point stroke.
+        let mut v1 = MAGIC_V1.to_vec();
+        v1.extend_from_slice(&0u32.to_le_bytes());
+        v1.extend_from_slice(&1u32.to_le_bytes());
+        v1.extend_from_slice(&[background_code(BoardBackground::Black), grid_code(GridPattern::Plain), 0]);
+        v1.extend_from_slice(&1u32.to_le_bytes());
+        v1.push(brush_code(BrushType::Ballpoint));
+        for f in [1.0f32, 1.0, 1.0, 1.0, 3.0] {
+            v1.extend_from_slice(&f.to_le_bytes());
+        }
+        v1.extend_from_slice(&1u32.to_le_bytes());
+        v1.extend_from_slice(&4.0f32.to_le_bytes());
+        v1.extend_from_slice(&5.0f32.to_le_bytes());
+        v1.extend_from_slice(&0.5f64.to_le_bytes());
+        let back = decode(&v1, |_| bail!("no images")).unwrap();
+        let s = &back.pages[0].strokes[0];
+        assert_eq!((s.group, s.width, s.points[0]), (0, 3.0, Vec2::new(4.0, 5.0)));
     }
 
     #[test]
