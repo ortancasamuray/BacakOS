@@ -137,6 +137,14 @@ enum PointerRole {
     TextBoxMove { grab_offset: Vec2 },
     /// Touch landed on a text box key; already applied on touch-down.
     TextBoxPress,
+    /// Dragging the graph panel by its header.
+    GraphMove { grab_offset: Vec2 },
+    /// Dragging inside the graph's plot: pans its view.
+    GraphPan { last_pos: Vec2 },
+    /// Dragging one of the graph's `a`/`b`/`c` sliders.
+    GraphSlider { param: usize },
+    /// Touch landed on a graph key/formula row; already applied.
+    GraphPress,
     /// Touch landed on the toolbar; consumed, never reaches the canvas.
     Toolbar,
     /// Flagged by the palm-rejection heuristic, or consumed by a
@@ -185,6 +193,10 @@ pub struct InputHandler {
     spotlight: Option<crate::spotlight::Spotlight>,
     magnifier: Option<crate::magnifier::Magnifier>,
     textbox: Option<crate::textbox::TextBox>,
+    graph: Option<crate::graph::Graph>,
+    /// The graph panel while hidden — reopening it brings back the same
+    /// formulas, sliders and view.
+    graph_stash: Option<crate::graph::Graph>,
     /// The "Aç" panel, while open (modal, see `opener.rs`).
     opener: Option<crate::opener::Opener>,
     /// Page images being made on their own thread — a PDF picked in the
@@ -264,6 +276,8 @@ impl InputHandler {
             spotlight: None,
             magnifier: None,
             textbox: None,
+            graph: None,
+            graph_stash: None,
             opener: None,
             loading: None,
             zone_enabled: false,
@@ -715,6 +729,7 @@ impl InputHandler {
                     None => Some(crate::textbox::TextBox::new(self.screen_size / 2.0 - Vec2::new(310.0, 240.0))),
                 };
             }
+            ToolbarAction::ToggleGraph => self.toggle_graph(),
             ToolbarAction::OpenBrowser => match crate::masaustu::open_browser(crate::masaustu::BROWSER_HOME) {
                 // The fullscreen board would cover the browser window: step
                 // aside like "return to desktop" (back via the dock).
@@ -939,6 +954,28 @@ impl InputHandler {
             if textbox.contains(position) {
                 textbox.press_at(position);
                 self.sessions.insert(id, PointerSession { role: PointerRole::TextBoxPress, start_pos: position, start_time: now });
+                return;
+            }
+        }
+
+        // Same UI-panel priority for the graph.
+        if let Some(graph) = &mut self.graph {
+            if graph.contains(position) {
+                let role = match graph.press_at(position) {
+                    crate::graph::GraphPress::Move => PointerRole::GraphMove { grab_offset: position - graph.position },
+                    crate::graph::GraphPress::Pan => PointerRole::GraphPan { last_pos: position },
+                    crate::graph::GraphPress::Slider(param) => PointerRole::GraphSlider { param },
+                    crate::graph::GraphPress::Close => {
+                        self.toggle_graph();
+                        PointerRole::GraphPress
+                    }
+                    crate::graph::GraphPress::Stamp => {
+                        self.stamp_graph();
+                        PointerRole::GraphPress
+                    }
+                    crate::graph::GraphPress::Other => PointerRole::GraphPress,
+                };
+                self.sessions.insert(id, PointerSession { role, start_pos: position, start_time: now });
                 return;
             }
         }
@@ -1274,12 +1311,32 @@ impl InputHandler {
                     textbox.drag_to(position, grab_offset);
                 }
             }
+            PointerRole::GraphMove { grab_offset } => {
+                let grab_offset = *grab_offset;
+                if let Some(graph) = &mut self.graph {
+                    graph.drag_to(position, grab_offset);
+                }
+            }
+            PointerRole::GraphPan { last_pos } => {
+                let delta = position - *last_pos;
+                *last_pos = position;
+                if let Some(graph) = &mut self.graph {
+                    graph.pan_by(delta);
+                }
+            }
+            PointerRole::GraphSlider { param } => {
+                let param = *param;
+                if let Some(graph) = &mut self.graph {
+                    graph.set_slider(param, position.x);
+                }
+            }
             PointerRole::Toolbar
             | PointerRole::Palm
             | PointerRole::CalculatorPress
             | PointerRole::StopwatchPress
             | PointerRole::DicePress
-            | PointerRole::TextBoxPress => {}
+            | PointerRole::TextBoxPress
+            | PointerRole::GraphPress => {}
         }
         if do_erase {
             self.erase_at(position, self.eraser_radius);
@@ -1359,6 +1416,43 @@ impl InputHandler {
         }
         self.checkpoint();
         self.pages[self.current_page].strokes.push(Arc::new(stroke));
+    }
+
+    fn toggle_graph(&mut self) {
+        self.graph = match self.graph.take() {
+            Some(graph) => {
+                self.graph_stash = Some(graph);
+                None
+            }
+            None => Some(self.graph_stash.take().unwrap_or_else(|| crate::graph::Graph::new(self.screen_size))),
+        };
+    }
+
+    /// "Tahtaya bas": the graph panel's plot becomes ordinary ink on the
+    /// current page (one undo step), and the panel steps aside so the
+    /// result is visible.
+    fn stamp_graph(&mut self) {
+        let Some(graph) = &self.graph else { return };
+        let now = self.last_input_at.unwrap_or(0.0);
+        if !graph.has_curves() {
+            self.toast = Some(("Önce bir fonksiyon yazın".to_string(), now + 2.5));
+            return;
+        }
+        let ink = match self.pages[self.current_page].background {
+            board::BoardBackground::White => [0.12, 0.12, 0.15, 1.0],
+            _ => crate::brush::PALETTE[0],
+        };
+        let lines = graph.stamp_lines(self.screen_size, ink);
+        self.checkpoint();
+        for line in lines {
+            let mut stroke = Stroke::new(line.color, line.width / self.view_scale, BrushType::Ballpoint);
+            for p in line.points {
+                stroke.push_point(self.to_canvas(p), now);
+            }
+            self.pages[self.current_page].strokes.push(Arc::new(stroke));
+        }
+        self.toggle_graph();
+        self.toast = Some(("Grafik tahtaya eklendi".to_string(), now + 2.5));
     }
 
     /// Erases using whichever mode the Eraser tool is currently set to.
@@ -1625,6 +1719,7 @@ impl InputHandler {
             spotlight_visible: self.spotlight.is_some(),
             magnifier_visible: self.magnifier.is_some(),
             textbox_visible: self.textbox.is_some(),
+            graph_visible: self.graph.is_some(),
             can_undo: page.can_undo(),
             can_redo: page.can_redo(),
             new_board_armed: self.new_board_armed_until.is_some(),
@@ -1645,6 +1740,9 @@ impl InputHandler {
         }
         if let Some(textbox) = &self.textbox {
             textbox.render(&self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
+        }
+        if let Some(graph) = &self.graph {
+            graph.render(&self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
         }
 
         if let Some(opener) = &self.opener {
