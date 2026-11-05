@@ -145,6 +145,15 @@ enum PointerRole {
     GraphSlider { param: usize },
     /// Touch landed on a graph key/formula row; already applied.
     GraphPress,
+    /// Dragging the solid panel by its header.
+    SolidMove { grab_offset: Vec2 },
+    /// Finger on the solid's 3D view: turns it once it has moved past
+    /// the tap slop; lifted before that, it's a tap (section point).
+    SolidView { last_pos: Vec2, moved: f32 },
+    /// Dragging the solid's section-plane slider.
+    SolidSlider,
+    /// Touch landed on a solid button; already applied.
+    SolidPress,
     /// Touch landed on the toolbar; consumed, never reaches the canvas.
     Toolbar,
     /// Flagged by the palm-rejection heuristic, or consumed by a
@@ -197,6 +206,9 @@ pub struct InputHandler {
     /// The graph panel while hidden — reopening it brings back the same
     /// formulas, sliders and view.
     graph_stash: Option<crate::graph::Graph>,
+    solid: Option<crate::solid::Solid>,
+    /// Like `graph_stash`, for the solid panel.
+    solid_stash: Option<crate::solid::Solid>,
     /// The "Aç" panel, while open (modal, see `opener.rs`).
     opener: Option<crate::opener::Opener>,
     /// Page images being made on their own thread — a PDF picked in the
@@ -278,6 +290,8 @@ impl InputHandler {
             textbox: None,
             graph: None,
             graph_stash: None,
+            solid: None,
+            solid_stash: None,
             opener: None,
             loading: None,
             zone_enabled: false,
@@ -730,6 +744,7 @@ impl InputHandler {
                 };
             }
             ToolbarAction::ToggleGraph => self.toggle_graph(),
+            ToolbarAction::ToggleSolid => self.toggle_solid(),
             ToolbarAction::OpenBrowser => match crate::masaustu::open_browser(crate::masaustu::BROWSER_HOME) {
                 // The fullscreen board would cover the browser window: step
                 // aside like "return to desktop" (back via the dock).
@@ -974,6 +989,28 @@ impl InputHandler {
                         PointerRole::GraphPress
                     }
                     crate::graph::GraphPress::Other => PointerRole::GraphPress,
+                };
+                self.sessions.insert(id, PointerSession { role, start_pos: position, start_time: now });
+                return;
+            }
+        }
+
+        // Same UI-panel priority for the solid.
+        if let Some(solid) = &mut self.solid {
+            if solid.contains(position) {
+                let role = match solid.press_at(position) {
+                    crate::solid::SolidPress::Move => PointerRole::SolidMove { grab_offset: position - solid.position },
+                    crate::solid::SolidPress::View => PointerRole::SolidView { last_pos: position, moved: 0.0 },
+                    crate::solid::SolidPress::Slider => PointerRole::SolidSlider,
+                    crate::solid::SolidPress::Close => {
+                        self.toggle_solid();
+                        PointerRole::SolidPress
+                    }
+                    crate::solid::SolidPress::Stamp => {
+                        self.stamp_solid();
+                        PointerRole::SolidPress
+                    }
+                    crate::solid::SolidPress::Other => PointerRole::SolidPress,
                 };
                 self.sessions.insert(id, PointerSession { role, start_pos: position, start_time: now });
                 return;
@@ -1330,13 +1367,35 @@ impl InputHandler {
                     graph.set_slider(param, position.x);
                 }
             }
+            PointerRole::SolidMove { grab_offset } => {
+                let grab_offset = *grab_offset;
+                if let Some(solid) = &mut self.solid {
+                    solid.drag_to(position, grab_offset);
+                }
+            }
+            PointerRole::SolidView { last_pos, moved } => {
+                let delta = position - *last_pos;
+                *last_pos = position;
+                *moved += delta.length();
+                if *moved > crate::solid::TAP_SLOP {
+                    if let Some(solid) = &mut self.solid {
+                        solid.rotate_by(delta);
+                    }
+                }
+            }
+            PointerRole::SolidSlider => {
+                if let Some(solid) = &mut self.solid {
+                    solid.set_slider(position.x);
+                }
+            }
             PointerRole::Toolbar
             | PointerRole::Palm
             | PointerRole::CalculatorPress
             | PointerRole::StopwatchPress
             | PointerRole::DicePress
             | PointerRole::TextBoxPress
-            | PointerRole::GraphPress => {}
+            | PointerRole::GraphPress
+            | PointerRole::SolidPress => {}
         }
         if do_erase {
             self.erase_at(position, self.eraser_radius);
@@ -1365,6 +1424,13 @@ impl InputHandler {
                     self.mark_dirty();
                 }
                 PointerRole::CompassDrag { .. } => self.commit_compass_circle(),
+                PointerRole::SolidView { moved, .. } => {
+                    if moved <= crate::solid::TAP_SLOP {
+                        if let Some(solid) = &mut self.solid {
+                            solid.tap(session.start_pos);
+                        }
+                    }
+                }
                 PointerRole::Drawing { stroke_index, .. } => {
                     self.mark_dirty();
                     // A stroke that barely moved is a tap — remember it so
@@ -1438,11 +1504,44 @@ impl InputHandler {
             self.toast = Some(("Önce bir fonksiyon yazın".to_string(), now + 2.5));
             return;
         }
-        let ink = match self.pages[self.current_page].background {
+        let lines = graph.stamp_lines(self.screen_size, self.stamp_ink());
+        self.commit_ink(lines);
+        self.toggle_graph();
+        self.toast = Some(("Grafik tahtaya eklendi".to_string(), now + 2.5));
+    }
+
+    fn toggle_solid(&mut self) {
+        self.solid = match self.solid.take() {
+            Some(solid) => {
+                self.solid_stash = Some(solid);
+                None
+            }
+            None => Some(self.solid_stash.take().unwrap_or_else(|| crate::solid::Solid::new(self.screen_size))),
+        };
+    }
+
+    /// "Tahtaya bas" for the solid panel — same as `stamp_graph`.
+    fn stamp_solid(&mut self) {
+        let Some(solid) = &self.solid else { return };
+        let lines = solid.stamp_lines(self.screen_size, self.stamp_ink());
+        self.commit_ink(lines);
+        self.toggle_solid();
+        let now = self.last_input_at.unwrap_or(0.0);
+        self.toast = Some(("Cisim tahtaya eklendi".to_string(), now + 2.5));
+    }
+
+    /// Axis/edge/number color for stamped figures: dark on the white
+    /// board, chalk on the dark ones.
+    fn stamp_ink(&self) -> [f32; 4] {
+        match self.pages[self.current_page].background {
             board::BoardBackground::White => [0.12, 0.12, 0.15, 1.0],
             _ => crate::brush::PALETTE[0],
-        };
-        let lines = graph.stamp_lines(self.screen_size, ink);
+        }
+    }
+
+    /// Screen-space ink lines → strokes on the current page, as one undo step.
+    fn commit_ink(&mut self, lines: Vec<crate::ink::InkLine>) {
+        let now = self.last_input_at.unwrap_or(0.0);
         self.checkpoint();
         for line in lines {
             let mut stroke = Stroke::new(line.color, line.width / self.view_scale, BrushType::Ballpoint);
@@ -1451,8 +1550,6 @@ impl InputHandler {
             }
             self.pages[self.current_page].strokes.push(Arc::new(stroke));
         }
-        self.toggle_graph();
-        self.toast = Some(("Grafik tahtaya eklendi".to_string(), now + 2.5));
     }
 
     /// Erases using whichever mode the Eraser tool is currently set to.
@@ -1720,6 +1817,7 @@ impl InputHandler {
             magnifier_visible: self.magnifier.is_some(),
             textbox_visible: self.textbox.is_some(),
             graph_visible: self.graph.is_some(),
+            solid_visible: self.solid.is_some(),
             can_undo: page.can_undo(),
             can_redo: page.can_redo(),
             new_board_armed: self.new_board_armed_until.is_some(),
@@ -1743,6 +1841,9 @@ impl InputHandler {
         }
         if let Some(graph) = &self.graph {
             graph.render(&self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
+        }
+        if let Some(solid) = &self.solid {
+            solid.render(&self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
         }
 
         if let Some(opener) = &self.opener {
