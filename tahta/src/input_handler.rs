@@ -154,12 +154,27 @@ enum PointerRole {
     SolidSlider,
     /// Touch landed on a solid button; already applied.
     SolidPress,
+    /// Dragging the selected stamped figure. The undo checkpoint is taken
+    /// on the first real movement, so a tap leaves no empty undo step.
+    SelectionMove { last_pos: Vec2, started: bool },
     /// Touch landed on the toolbar; consumed, never reaches the canvas.
     Toolbar,
     /// Flagged by the palm-rejection heuristic, or consumed by a
     /// two-finger-tap gesture / the open radial menu / the open "Aç"
     /// panel; ignored until lift.
     Palm,
+}
+
+/// Radius of the selected figure's move handle.
+const SELECTION_HANDLE_R: f32 = 20.0;
+
+/// Where the selected figure's move handle sits: centered above its
+/// frame, or below it when the frame reaches the top of the screen.
+fn selection_handle((tl, br): (Vec2, Vec2), screen_size: Vec2) -> Vec2 {
+    let x = ((tl.x + br.x) / 2.0).clamp(SELECTION_HANDLE_R, screen_size.x - SELECTION_HANDLE_R);
+    let above = tl.y - SELECTION_HANDLE_R - 8.0;
+    let y = if above >= SELECTION_HANDLE_R + 4.0 { above } else { br.y + SELECTION_HANDLE_R + 8.0 };
+    Vec2::new(x, y)
 }
 
 /// What `InputHandler::loading` will do with its page images.
@@ -209,6 +224,10 @@ pub struct InputHandler {
     solid: Option<crate::solid::Solid>,
     /// Like `graph_stash`, for the solid panel.
     solid_stash: Option<crate::solid::Solid>,
+    /// The stamped figure (`Stroke::group`) currently selected for moving:
+    /// set right after "Tahtaya bas", or by tapping a figure with the Hand
+    /// tool; a touch outside its frame lets go.
+    selection: Option<u32>,
     /// The "Aç" panel, while open (modal, see `opener.rs`).
     opener: Option<crate::opener::Opener>,
     /// Page images being made on their own thread — a PDF picked in the
@@ -292,6 +311,7 @@ impl InputHandler {
             graph_stash: None,
             solid: None,
             solid_stash: None,
+            selection: None,
             opener: None,
             loading: None,
             zone_enabled: false,
@@ -1017,6 +1037,22 @@ impl InputHandler {
             }
         }
 
+        // A selected stamped figure: its frame or handle grabs it; any
+        // other touch only lets go of it (consumed, so letting go never
+        // leaves a stray dot).
+        if let Some((_, bounds)) = self.selection_bounds() {
+            let inside = position.cmpge(bounds.0).all() && position.cmple(bounds.1).all();
+            if inside || position.distance(selection_handle(bounds, self.screen_size)) <= SELECTION_HANDLE_R + 8.0 {
+                let role = PointerRole::SelectionMove { last_pos: position, started: false };
+                self.sessions.insert(id, PointerSession { role, start_pos: position, start_time: now });
+                return;
+            }
+            self.selection = None;
+            self.sessions.insert(id, PointerSession { role: PointerRole::Palm, start_pos: position, start_time: now });
+            return;
+        }
+        self.selection = None;
+
         // Grabbing the ruler's handle (rotate) or body (move) takes
         // priority over drawing — checked before edge-snap below, since
         // the handle/body zones and the snap zone don't overlap in
@@ -1244,6 +1280,7 @@ impl InputHandler {
         };
 
         let mut do_erase = false;
+        let mut move_selection: Option<(Vec2, bool)> = None;
         match &mut session.role {
             PointerRole::Drawing { stroke_index, predictor, edge_snap } => {
                 let point_screen = match edge_snap {
@@ -1388,6 +1425,16 @@ impl InputHandler {
                     solid.set_slider(position.x);
                 }
             }
+            PointerRole::SelectionMove { last_pos, started } => {
+                let first = !*started && position.distance(session.start_pos) > 3.0;
+                if first {
+                    *started = true;
+                }
+                if *started {
+                    move_selection = Some((position - *last_pos, first));
+                    *last_pos = position;
+                }
+            }
             PointerRole::Toolbar
             | PointerRole::Palm
             | PointerRole::CalculatorPress
@@ -1399,6 +1446,12 @@ impl InputHandler {
         }
         if do_erase {
             self.erase_at(position, self.eraser_radius);
+        }
+        if let (Some((delta, first)), Some(group)) = (move_selection, self.selection) {
+            if first {
+                self.checkpoint();
+            }
+            self.move_group(group, delta);
         }
     }
 
@@ -1424,6 +1477,17 @@ impl InputHandler {
                     self.mark_dirty();
                 }
                 PointerRole::CompassDrag { .. } => self.commit_compass_circle(),
+                PointerRole::SelectionMove { started: true, .. } => self.mark_dirty(),
+                // A Hand-tool tap (no real pan) on a stamped figure selects it.
+                PointerRole::Panning { last_pos } if last_pos.distance(session.start_pos) < 10.0 => {
+                    let (offset, scale) = (self.view_offset, self.view_scale);
+                    self.selection = self.pages[self.current_page]
+                        .strokes
+                        .iter()
+                        .rev()
+                        .find(|s| s.group != 0 && s.hit_test(session.start_pos, 14.0, offset, scale))
+                        .map(|s| s.group);
+                }
                 PointerRole::SolidView { moved, .. } => {
                     if moved <= crate::solid::TAP_SLOP {
                         if let Some(solid) = &mut self.solid {
@@ -1507,7 +1571,7 @@ impl InputHandler {
         let lines = graph.stamp_lines(self.screen_size, self.stamp_ink());
         self.commit_ink(lines);
         self.toggle_graph();
-        self.toast = Some(("Grafik tahtaya eklendi".to_string(), now + 2.5));
+        self.toast = Some(("Grafik tahtaya eklendi · sürükleyerek taşıyın".to_string(), now + 3.5));
     }
 
     fn toggle_solid(&mut self) {
@@ -1527,7 +1591,7 @@ impl InputHandler {
         self.commit_ink(lines);
         self.toggle_solid();
         let now = self.last_input_at.unwrap_or(0.0);
-        self.toast = Some(("Cisim tahtaya eklendi".to_string(), now + 2.5));
+        self.toast = Some(("Cisim tahtaya eklendi · sürükleyerek taşıyın".to_string(), now + 3.5));
     }
 
     /// Axis/edge/number color for stamped figures: dark on the white
@@ -1539,16 +1603,51 @@ impl InputHandler {
         }
     }
 
-    /// Screen-space ink lines → strokes on the current page, as one undo step.
+    /// Screen-space ink lines → strokes on the current page, as one undo
+    /// step and one movable figure (a fresh `Stroke::group`), selected so
+    /// it can be dragged into place right away.
     fn commit_ink(&mut self, lines: Vec<crate::ink::InkLine>) {
         let now = self.last_input_at.unwrap_or(0.0);
+        let group = self.pages.iter().flat_map(|p| p.strokes.iter().map(|s| s.group)).max().unwrap_or(0) + 1;
         self.checkpoint();
         for line in lines {
             let mut stroke = Stroke::new(line.color, line.width / self.view_scale, BrushType::Ballpoint);
+            stroke.group = group;
             for p in line.points {
                 stroke.push_point(self.to_canvas(p), now);
             }
             self.pages[self.current_page].strokes.push(Arc::new(stroke));
+        }
+        self.selection = Some(group);
+    }
+
+    /// Screen-space frame (top-left, bottom-right) around the selected
+    /// figure on the current page — `None` when nothing is selected or the
+    /// figure is gone (undone, cleared, erased, another page).
+    fn selection_bounds(&self) -> Option<(u32, (Vec2, Vec2))> {
+        let group = self.selection?;
+        let mut min = Vec2::splat(f32::INFINITY);
+        let mut max = Vec2::splat(f32::NEG_INFINITY);
+        for s in self.pages[self.current_page].strokes.iter().filter(|s| s.group == group) {
+            for &p in &s.points {
+                min = min.min(p);
+                max = max.max(p);
+            }
+        }
+        if min.x > max.x {
+            return None;
+        }
+        let pad = Vec2::splat(14.0);
+        Some((group, (min * self.view_scale + self.view_offset - pad, max * self.view_scale + self.view_offset + pad)))
+    }
+
+    /// Moves every stroke of `group` by a screen-space delta.
+    fn move_group(&mut self, group: u32, delta: Vec2) {
+        let d = delta / self.view_scale;
+        for s in self.pages[self.current_page].strokes.iter_mut().filter(|s| s.group == group) {
+            for p in &mut Arc::make_mut(s).points {
+                *p += d;
+            }
         }
     }
 
@@ -1795,6 +1894,26 @@ impl InputHandler {
         }
         if let Some(spotlight) = &self.spotlight {
             spotlight.render(self.screen_size, &mut normal_v, &mut normal_i);
+        }
+
+        if let Some((_, (tl, br))) = self.selection_bounds() {
+            let accent = [0.23, 0.51, 0.96, 1.0];
+            let frame = [tl, Vec2::new(br.x, tl.y), br, Vec2::new(tl.x, br.y), tl];
+            for dash in crate::ink::dash_polyline(&frame, 10.0, 6.0) {
+                push_line(dash[0], dash[dash.len() - 1], 2.0, accent, &mut normal_v, &mut normal_i);
+            }
+            // Move handle: a filled circle with four arrows.
+            let c = selection_handle((tl, br), self.screen_size);
+            push_circle(c, SELECTION_HANDLE_R, accent, 24, &mut normal_v, &mut normal_i);
+            let white = [0.97, 0.97, 0.99, 1.0];
+            let (a, h) = (SELECTION_HANDLE_R * 0.62, SELECTION_HANDLE_R * 0.24);
+            for dir in [Vec2::X, -Vec2::X, Vec2::Y, -Vec2::Y] {
+                let tip = c + dir * a;
+                let side = dir.perp();
+                push_line(c, tip, 2.0, white, &mut normal_v, &mut normal_i);
+                push_line(tip, tip - dir * h + side * h, 2.0, white, &mut normal_v, &mut normal_i);
+                push_line(tip, tip - dir * h - side * h, 2.0, white, &mut normal_v, &mut normal_i);
+            }
         }
 
         let toolbar_state = ToolbarState {
