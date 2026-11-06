@@ -355,6 +355,23 @@ TAHTA_SRC="$HERE/tahta"
 )
 
 # ---------------------------------------------------------------------------
+# yzsunucu: okul içi yapay zekâ sunucusu (tahta "Sor" kartı) — ISO'ya girmez,
+# okulda ekran kartlı tek sunucuya kurulur. yzsunucu-model-indir şimdilik
+# yalnız x86-64 llama.cpp derlemesini indirir.
+# ---------------------------------------------------------------------------
+if [ "$ARCH" = amd64 ]; then
+    log "=== yzsunucu derleniyor ==="
+    (
+        cd "$HERE/yzsunucu"
+        cbuild
+        log "yzsunucu deb oluşturuluyor"
+        cdeb
+    )
+else
+    log "yzsunucu ATLANDI ($ARCH): model indirici yalnız amd64 llama.cpp derlemesi getiriyor"
+fi
+
+# ---------------------------------------------------------------------------
 # ruzgar: web tarayıcısı (WebKitGTK; adres çubuğu altta, sayfaya çizim)
 # ---------------------------------------------------------------------------
 log "=== ruzgar derleniyor ==="
