@@ -1,0 +1,41 @@
+[package]
+name = "yzsunucu"
+version = "0.1.0"
+edition = "2021"
+description = "Okul içi yapay zekâ sunucusu: tahtadaki soruyu yerel, açık bir görüntü-dil modeline sorar"
+license = "GPL-3.0-or-later"
+authors = ["Anadolu Panteri <bilgi@anadolupanteri.org.tr>"]
+
+[dependencies]
+serde_json = "1"
+libc = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+
+[package.metadata.deb]
+revision = "1"
+maintainer = "Anadolu Panteri <bilgi@anadolupanteri.org.tr>"
+copyright = "2026, Anadolu Panteri <bilgi@anadolupanteri.org.tr>"
+section = "science"
+priority = "optional"
+depends = "$auto, adduser, libvulkan1"
+extended-description = """\
+Okulun kendi sunucusunda çalışan yapay zekâ hizmeti. Tahtanın "Sor" kartı
+çerçevelenen bölümün görüntüsünü buraya gönderir; sunucu onu llama.cpp ile
+çalışan açık bir görüntü-dil modeline (varsayılan Qwen3-VL 8B) sorar ve
+adım adım açıklamayı geri yollar. Görüntü okul dışına çıkmaz, saklanmaz,
+günlüğe yazılmaz. Model dosyaları pakette yoktur: yzsunucu-model-indir."""
+assets = [
+    ["target/release/yzsunucu", "usr/bin/", "755"],
+    ["paket/yzsunucu-model-indir", "usr/bin/", "755"],
+    ["paket/yzsunucu.conf", "etc/yzsunucu/", "644"],
+    ["paket/yzsunucu.service", "lib/systemd/system/", "644"],
+    ["README.md", "usr/share/doc/yzsunucu/", "644"],
+]
+conf-files = ["/etc/yzsunucu/yzsunucu.conf"]
+maintainer-scripts = "paket/debian/"
+systemd-units = { unit-name = "yzsunucu", enable = false, start = false }
