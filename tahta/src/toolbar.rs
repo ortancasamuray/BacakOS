@@ -66,6 +66,8 @@ pub enum ToolbarAction {
     ToggleGraph,
     /// Shows/hides the draggable 3D solid + section panel (`solid.rs`).
     ToggleSolid,
+    /// "Sor": frame part of the board, ask the school's YZsunucu.
+    ToggleAsk,
     /// Opens EBA in the system browser (see `masaustu.rs`).
     OpenBrowser,
     /// Adds what's on screen behind the board (the browser, a video, any
@@ -111,6 +113,7 @@ pub struct ToolbarState {
     pub magnifier_visible: bool,
     pub textbox_visible: bool,
     pub graph_visible: bool,
+    pub ask_visible: bool,
     pub solid_visible: bool,
     /// Undo/Redo glyphs dim when the page has nothing to take back/redo.
     pub can_undo: bool,
@@ -175,6 +178,7 @@ const ENTRIES: &[Entry] = &[
     Entry::Group(&[ToolbarAction::ToggleSpotlight, ToolbarAction::ToggleMagnifier]),
     Entry::Direct(ToolbarAction::ToggleGraph),
     Entry::Direct(ToolbarAction::ToggleSolid),
+    Entry::Direct(ToolbarAction::ToggleAsk),
     Entry::Direct(ToolbarAction::ToggleTextBox),
     Entry::Direct(ToolbarAction::OpenBrowser),
     Entry::Direct(ToolbarAction::CaptureScreen),
@@ -192,9 +196,9 @@ const ENTRIES: &[Entry] = &[
 
 /// Local index right before which a thin separator is drawn: tool-select
 /// (0-3) | brush/color/undo/redo/clear (4-8) | drafting/widget/view groups
-/// (9-11) + function graph, solids (12-13) | text/browser/screen grab
-/// (14-16) | page group (17) | minimize (18).
-const SEPARATOR_BEFORE: [usize; 5] = [4, 9, 14, 17, 18];
+/// (9-11) + function graph, solids, "Sor" (12-14) | text/browser/screen
+/// grab (15-17) | page group (18) | minimize (19).
+const SEPARATOR_BEFORE: [usize; 5] = [4, 9, 15, 18, 19];
 
 /// Bottom-center floating toolbar. Screen-space, never affected by canvas
 /// pan/zoom, recomputed each frame from the current window size (though
@@ -396,6 +400,7 @@ fn is_active(action: ToolbarAction, state: &ToolbarState) -> bool {
         ToolbarAction::ToggleTextBox => state.textbox_visible,
         ToolbarAction::ToggleGraph => state.graph_visible,
         ToolbarAction::ToggleSolid => state.solid_visible,
+        ToolbarAction::ToggleAsk => state.ask_visible,
         ToolbarAction::NewBoard => state.new_board_armed,
         ToolbarAction::OpenFile => state.opener_visible,
         _ => false,
@@ -668,6 +673,31 @@ fn draw_glyph(
             for i in 0..4 {
                 push_line(f[i], f[(i + 1) % 4], 2.2, COLOR_GLYPH, out_vertices, out_indices);
             }
+        }
+        ToolbarAction::ToggleAsk => {
+            // A speech bubble with a question mark.
+            let (w, h) = (r * 1.9, r * 1.35);
+            let tl = center + Vec2::new(-w / 2.0, -r * 0.95);
+            let corners = [tl, tl + Vec2::new(w, 0.0), tl + Vec2::new(w, h), tl + Vec2::new(0.0, h)];
+            for i in 0..4 {
+                push_line(corners[i], corners[(i + 1) % 4], 2.0, COLOR_GLYPH, out_vertices, out_indices);
+            }
+            let tail = tl + Vec2::new(w * 0.25, h);
+            push_line(tail, tail + Vec2::new(-r * 0.15, r * 0.55), 2.0, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(tail + Vec2::new(-r * 0.15, r * 0.55), tail + Vec2::new(r * 0.45, 0.0), 2.0, COLOR_GLYPH, out_vertices, out_indices);
+            // "?": a hook from a few arc segments, then the dot.
+            let q = tl + Vec2::new(w / 2.0, h * 0.36);
+            const STEPS: usize = 8;
+            let arc = |i: usize| {
+                let t = std::f32::consts::PI * (1.0 + 1.25 * i as f32 / STEPS as f32);
+                q + Vec2::new(t.cos(), t.sin()) * r * 0.26
+            };
+            for i in 0..STEPS {
+                push_line(arc(i), arc(i + 1), 2.0, COLOR_GLYPH, out_vertices, out_indices);
+            }
+            let end = arc(STEPS);
+            push_line(end, Vec2::new(q.x, q.y + r * 0.3), 2.0, COLOR_GLYPH, out_vertices, out_indices);
+            push_circle(Vec2::new(q.x, q.y + r * 0.5), 1.6, COLOR_GLYPH, 8, out_vertices, out_indices);
         }
         ToolbarAction::OpenBrowser => {
             // A globe: circle outline + one vertical + two horizontal
