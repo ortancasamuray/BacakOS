@@ -977,6 +977,9 @@
       <h3>Tahta'da önceki çalışmam kayboldu</h3>
       <p>Yeni tahta açtıysanız ya da bir PDF açtıysanız eski tahta silinmez: tahta'da <b>Aç</b> &rarr; <b>Önceki tahta</b> ile geri getirin. Tahta'nın kayıtları <code>~/.local/share/tahta/tahtalar/</code> altındadır (<code>son</code>: şu anki, <code>onceki</code>: bir önceki).</p>
 
+      <h3>Rüzgar okul ağında "Unacceptable TLS certificate" diyor</h3>
+      <p>MEB okul ağlarındaki güvenlik duvarı HTTPS trafiğini denetlerken siteleri MEB'in kök sertifikasıyla (<code>fatihca</code>) yeniden imzalar; bu sertifika sistemde yoksa Rüzgar sayfayı açmaz. BacakOS'ta <strong>meb-sertifika</strong> paketi bu sertifikayı sistem güven deposuna ekler ve ISO ile hazır gelir. Kurulu değilse: <code>sudo apt install meb-sertifika</code>, sonra Rüzgar'ı kapatıp açın. Kaynak: <code>https://sertifika.meb.gov.tr/MEB_SERTIFIKASI.cer</code>. Firefox kendi sertifika deposunu kullanır; orada sertifikayı Ayarlar &rarr; Gizlilik ve Güvenlik &rarr; Sertifikaları Göster &rarr; İçe Aktar ile ayrıca ekleyin.</p>
+
       <h3>Tahta'da "Sor" yanıt vermiyor</h3>
       <p>Kartta "YZsunucu'ya ulaşılamadı" yazıyorsa tahtanın <code>/etc/tahta/yzsunucu</code> dosyasındaki adresi ve sunucuda <code>systemctl status yzsunucu</code> ile <code>curl http://localhost:8790/durum</code> çıktısını denetleyin ("Model yükleniyor." yanıtı: model açılıyor, birkaç saniye bekleyin). Sunucunun güvenlik duvarında 8790 kapısı okul ağına açık olmalıdır. Ayrıntı: <code>journalctl -u yzsunucu</code> (soruların içeriği günlüğe yazılmaz).</p>
 
