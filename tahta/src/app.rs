@@ -199,13 +199,13 @@ impl App {
             self.window.set_minimized(true);
         }
 
-        let (normal_v, normal_i, highlight_v, highlight_i, page_image, content_index_count, glyph_v, glyph_i) = self.input.collect_geometry(now);
+        let (normal_v, normal_i, highlight_v, highlight_i, page_image, content_ranges, glyph_v, glyph_i) = self.input.collect_geometry(now);
 
         match self.renderer.render(
             (&normal_v, &normal_i),
             (&highlight_v, &highlight_i),
             (&glyph_v, &glyph_i),
-            content_index_count,
+            content_ranges,
             page_image.as_deref(),
             self.input.magnifier_lens(),
         ) {
