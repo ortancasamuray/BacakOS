@@ -68,6 +68,8 @@ enum Key {
     ZoomOut,
     ZoomIn,
     Reset,
+    /// "Tahtadan oku": read a handwritten formula off the board.
+    Read,
     Stamp,
 }
 
@@ -91,7 +93,7 @@ const ROW_2: Row = &[
 ];
 const ROW_3: Row = &[
     (ins("0", "0"), 1.0), (ins(",", ","), 1.0), (ins("+", "+"), 1.0), (Key::ZoomOut, 1.0), (Key::ZoomIn, 1.0),
-    (Key::Reset, 1.0), (Key::Stamp, 4.0),
+    (Key::Reset, 1.0), (Key::Read, 2.0), (Key::Stamp, 2.0),
 ];
 const ROWS: &[Row] = &[ROW_0, ROW_1, ROW_2, ROW_3];
 
@@ -112,6 +114,8 @@ pub enum GraphPress {
     Slider(usize),
     /// "Tahtaya bas".
     Stamp,
+    /// "Tahtadan oku": hide, let the teacher frame a handwritten formula.
+    Read,
     /// Anything else (a key, a formula row, padding) — already applied.
     Other,
 }
@@ -275,6 +279,7 @@ impl Graph {
                 self.px_per_unit = DEFAULT_PX_PER_UNIT;
             }
             Key::Stamp => return GraphPress::Stamp,
+            Key::Read => return GraphPress::Read,
         }
         self.parsed[self.active] = expr::parse(&self.formulas[self.active]).ok();
         GraphPress::Other
@@ -292,6 +297,21 @@ impl Graph {
     pub fn pan_by(&mut self, delta: Vec2) {
         self.center.0 -= delta.x as f64 / self.px_per_unit;
         self.center.1 += delta.y as f64 / self.px_per_unit;
+    }
+
+    /// Puts a formula read off the board into the active row when it's
+    /// empty, else into the first empty row (else over the active one),
+    /// and makes that row active. Returns whether it parses.
+    pub fn set_formula(&mut self, text: &str) -> bool {
+        let row = if self.formulas[self.active].is_empty() {
+            self.active
+        } else {
+            (0..3).find(|&i| self.formulas[i].is_empty()).unwrap_or(self.active)
+        };
+        self.active = row;
+        self.formulas[row] = text.chars().take(MAX_CHARS).collect();
+        self.parsed[row] = expr::parse(&self.formulas[row]).ok();
+        self.parsed[row].is_some()
     }
 
     pub fn has_curves(&self) -> bool {
@@ -426,7 +446,7 @@ impl Graph {
                 let color = match key {
                     Key::Ins { text, .. } if text.ends_with('(') || text == "^" || text == "²" || text == "π" => COLOR_KEY_FUNC,
                     Key::Ins { .. } => COLOR_KEY_IDLE,
-                    Key::Backspace | Key::ZoomIn | Key::ZoomOut | Key::Reset => COLOR_KEY_SPECIAL,
+                    Key::Backspace | Key::ZoomIn | Key::ZoomOut | Key::Reset | Key::Read => COLOR_KEY_SPECIAL,
                     Key::Clear => COLOR_KEY_CLEAR,
                     Key::Stamp if self.has_curves() => COLOR_KEY_STAMP,
                     Key::Stamp => COLOR_KEY_IDLE,
@@ -780,7 +800,8 @@ fn draw_key_glyph(
             push_line(center - Vec2::new(0.0, r), center + Vec2::new(0.0, r), 2.0, COLOR_TEXT, out_vertices, out_indices);
             push_circle(center, 3.5, COLOR_TEXT, 12, out_vertices, out_indices);
         }
-        Key::Stamp => text("Tahtaya bas", size.y * 0.4, glyph_vertices, glyph_indices),
+        Key::Stamp => text("Tahtaya bas", size.y * 0.36, glyph_vertices, glyph_indices),
+        Key::Read => text("Tahtadan oku", size.y * 0.34, glyph_vertices, glyph_indices),
     }
 }
 
