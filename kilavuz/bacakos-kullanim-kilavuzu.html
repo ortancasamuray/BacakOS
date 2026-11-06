@@ -790,13 +790,80 @@
         ekranın tamamı derse ayrılır.
       </p>
 
-      <h3>Çizim araçları</h3>
+      <h3>Araç çubuğu</h3>
+      <p>Bütün araçlar ekranın altındaki araç çubuğundadır (tahta tam ekrandayken dock gizlenir). Bazı düğmeler bir <b>grup</b>tur: dokununca üstünde küçük bir açılır sıra çıkar.</p>
+      <table class="kv">
+        <tr><th>Düğme</th><th>Ne yapar</th></tr>
+        <tr><td class="k">Kalem · El · Silgi · Pergel</td><td class="d">Çizim aracını seçer</td></tr>
+        <tr><td class="k">Kalem türü</td><td class="d">Tükenmez → kaligrafi → fosforlu → lazer işaretçi</td></tr>
+        <tr><td class="k">Renk</td><td class="d">Her dokunuşta bir sonraki renge geçer</td></tr>
+        <tr><td class="k">Geri al · Yinele · Temizle</td><td class="d">Sayfa başına 50 adım; Temizle de geri alınabilir</td></tr>
+        <tr><td class="k">Geometri grubu</td><td class="d">Cetvel, gönye, iletki</td></tr>
+        <tr><td class="k">Etkinlik grubu</td><td class="d">Hesap makinesi, kronometre, zar</td></tr>
+        <tr><td class="k">Odak grubu</td><td class="d">Spot ışığı, büyüteç</td></tr>
+        <tr><td class="k">Grafik · Cisim · Sor · Metin</td><td class="d">Fonksiyon grafiği, 3D cisim ve kesit, yapay zekâya sorma, metin kutusu</td></tr>
+        <tr><td class="k">Küre · Vizör</td><td class="d">EBA'yı Rüzgar'da aç · Ekranı tahtaya al</td></tr>
+        <tr><td class="k">Sayfa grubu</td><td class="d">Çift bölge, zemin, PDF kaydet, önceki/sonraki sayfa, bu sayfayı sil, yeni tahta, aç</td></tr>
+        <tr><td class="k">Aşağı ok</td><td class="d">Masaüstüne dön (tahta açık kalır)</td></tr>
+      </table>
+
+      <h3>Kalem ve silgi</h3>
       <ul>
-        <li>Kalem, vurgulayıcı (highlighter), silgi ve şekil araçları (çizgi, dikdörtgen, daire).</li>
-        <li>Cetvel, gönye ve pergel — geometrik çizim için gerçek ölçekli yardımcı araçlar.</li>
-        <li>Metin kutusu (gerçek font kerning'i ile), kronometre, zar, spot ışığı ve büyüteç panelleri.</li>
-        <li>Çok dokunuşlu çizim ve iki parmakla sıkıştırarak yakınlaştırma/uzaklaştırma (pinch-zoom).</li>
+        <li><strong>Tükenmez</strong> yazı ve formül için, <strong>kaligrafi</strong> hıza göre kalınlaşan başlık kalemidir.</li>
+        <li><strong>Fosforlu kalem</strong> yazının üstünü yarı saydam boyar; üst üste geçtiğiniz yerler koyulaşmaz, altındaki yazı okunur kalır.</li>
+        <li><strong>Lazer işaretçi</strong>nin izi birkaç saniyede kaybolur; bir yeri göstermek içindir, sayfaya kaydedilmez.</li>
+        <li>Tahta çok dokunuşludur: birkaç öğrenci aynı anda ayrı parmaklarla yazabilir. Avuçla dokunmak o bölgeyi siler.</li>
+        <li><strong>Silgi</strong> parmağın değdiği yeri siler. Silgi düğmesine yeniden dokunursanız <strong>nesne silgisi</strong>ne geçer: dokunduğunuz çizgi bütünüyle silinir.</li>
+        <li><strong>Çevresel menü:</strong> boş bir yere iki kez hızlıca dokunun. Renk, kalınlık ve silgi buradan da seçilir; son dilim araç çubuğunu gizler/geri getirir (daha geniş yazı alanı için).</li>
       </ul>
+
+      <h3>Kaydırma, yakınlaştırma ve geometri</h3>
+      <ul>
+        <li><strong>El</strong> aracıyla tahtayı kaydırırsınız; yazı alanı her yöne genişler. İki parmağı açıp kapatarak yakınlaştırıp uzaklaştırırsınız.</li>
+        <li><strong>Pergel:</strong> merkezden dışarı sürükleyince kusursuz çember çizilir.</li>
+        <li><strong>Cetvel, gönye, iletki:</strong> gövdesinden tutup taşınır, ucundaki tutamaçla döndürülür. Kenarı boyunca çizilen çizgi dümdüz olur. Gönye dik açılar, iletki açı ölçmek içindir.</li>
+      </ul>
+
+      <h3>Sınıf araçları ve metin</h3>
+      <ul>
+        <li><strong>Hesap makinesi, kronometre, zar</strong> panelleri başlıklarından tutularak taşınır.</li>
+        <li><strong>Spot ışığı</strong> tahtanın geri kalanını karartır, <strong>büyüteç</strong> altındaki yazıyı büyütür; ikisi de sürüklenir, kenarındaki tutamaçla boyutlandırılır.</li>
+        <li><strong>Metin kutusu</strong>nun kendi ekran klavyesi vardır (Türkçe harflerle); fiziksel klavye gerekmez. Başlık ve kısa notlar için düzgün yazı verir.</li>
+      </ul>
+
+      <h3>Grafik</h3>
+      <ul>
+        <li>Grafik paneline bir fonksiyon yazınca (ör. <code>y = 2x + 1</code>, <code>x² − 3</code>, <code>√x</code>, <code>sin x</code>) grafiği hemen çizilir.</li>
+        <li>Formülde <code>a</code>, <code>b</code> ya da <code>c</code> kullanırsanız her biri için bir <strong>kaydırıcı</strong> çıkar; değeri değiştirdikçe grafik canlı değişir.</li>
+        <li><strong>Tahtadan oku:</strong> tahtaya elle yazdığınız formülün çevresine bir dikdörtgen çizin; tahta yazıyı okuyup panele aktarır. Tanıma tahtanın içinde, internetsiz çalışır.</li>
+        <li><strong>Tahtaya bas:</strong> grafiği tahtaya çizgi olarak aktarır. Basılan grafik seçili gelir; sürükleyip istediğiniz yere taşıyın, üzerine yazabilirsiniz.</li>
+      </ul>
+
+      <h3>Cisim ve kesit</h3>
+      <ul>
+        <li>Küp, prizmalar, piramitler, silindir, koni ve küre bulunur. Cismi parmağınızla çevirerek her yönden gösterirsiniz.</li>
+        <li>Kenarlara dokunarak <strong>üç nokta</strong> seçince bu noktalardan geçen kesit çizilir; sağda kesitin gerçek şekli, açıları ve adı (üçgen, dörtgen, altıgen…) görünür.</li>
+        <li><strong>Düzlem</strong> kaydırıcısı kesiti paralel kaydırır — ör. küpte üçgen kesitin altıgene dönüşmesi gösterilebilir.</li>
+      </ul>
+
+      <h3>Sor — okulun yapay zekâ sunucusu</h3>
+      <ul>
+        <li><b>Sor</b> düğmesine dokunup tahtadaki sorunun çevresine bir dikdörtgen çizin. Birkaç saniye içinde adım adım çözüm, taşınabilir bir kartta görünür.</li>
+        <li>Karttaki <b>İpucu</b> çözümü vermeden yol gösterir, <b>Açıkla</b> konuyu anlatır, <b>Çöz</b> yeniden çözer.</li>
+        <li>Görüntü yalnız okulun kendi sunucusuna (<a href="#yzsunucu">YZsunucu</a>) gider; okul dışına çıkmaz, saklanmaz, günlüğe yazılmaz.</li>
+        <li>Tahta sunucuyu sırasıyla <code>TAHTA_YZSUNUCU</code> ortam değişkeninde, <code>/etc/tahta/yzsunucu</code> dosyasında (ör. <code>http://192.168.1.131:8790</code>) ve son olarak <code>http://yzsunucu.local:8790</code> adresinde arar.</li>
+      </ul>
+
+      <h3 id="yzsunucu">YZsunucu kurulumu (okul sunucusu)</h3>
+      <p>Okulda ekran kartlı bir bilgisayara bir kez kurulur; bütün tahtalar ona bağlanır. Açık bir görüntü-dil modeli (Qwen3-VL 8B, Apache 2.0) llama.cpp ile yerelde çalışır. En az 8 GB belleği olan bir ekran kartı (Vulkan) önerilir; kartsız da çalışır ama çok yavaştır.</p>
+      <ol class="steps">
+        <li><code>sudo apt install yzsunucu</code></li>
+        <li><code>sudo yzsunucu-model-indir</code> — llama.cpp ve modeli (yaklaşık 6 GB) indirir.</li>
+        <li><code>sudo systemctl enable --now yzsunucu</code></li>
+        <li>Denetim: <code>curl http://localhost:8790/durum</code> → <code>hazır</code>. Güvenlik duvarında 8790 kapısını okul ağına açın (ör. <code>sudo ufw allow from 192.168.1.0/24 to any port 8790</code>).</li>
+        <li>Her tahtada <code>/etc/tahta/yzsunucu</code> dosyasına <code>http://&lt;sunucu adresi&gt;:8790</code> yazın.</li>
+      </ol>
+      <p>Ayarlar <code>/etc/yzsunucu/yzsunucu.conf</code> dosyasındadır (dinlenen adres, GPU katman sayısı, bağlam uzunluğu); değiştirdikten sonra <code>sudo systemctl restart yzsunucu</code>.</p>
 
       <h3>Otomatik kayıt ve geri al</h3>
       <ul>
@@ -805,8 +872,16 @@
         <li>Sayfa grubundaki <b>Yeni tahta</b> boş bir tahta açar (yanlışlıkla basılmasın diye iki dokunuş ister); eski tahta "Önceki tahta" olarak saklanır.</li>
       </ul>
 
-      <h3>PDF ve sayfalar</h3>
-      <p>Bir PDF dosyasını sayfa sayfa açıp üzerine not ekleyebilir, çalışmanızı PDF olarak dışa aktarabilirsiniz. PDF açmanın yolları:</p>
+      <h3>Sayfalar, zemin ve çift bölge</h3>
+      <ul>
+        <li><b>Zemin</b> düğmesi koyu gri, siyah, beyaz, çizgili, kareli ve yeşil tahta zeminleri arasında geçiş yapar.</li>
+        <li><b>Sonraki sayfa</b> yeni bir sayfa açar. Araç çubuğunun hemen üstündeki <strong>noktalar</strong> sayfaları gösterir; bir noktaya dokunarak doğrudan o sayfaya geçersiniz.</li>
+        <li><b>Bu sayfayı sil</b> iki dokunuşla bulunduğunuz sayfayı siler. Silmeden önceki tahta <b>Aç</b> &rarr; <b>Önceki tahta</b>'dan geri alınabilir.</li>
+        <li><b>Çift bölge</b> tahtayı ikiye ayırır; sol ve sağ taraf ayrı kalem rengi ve kalem türü kullanır (her taraf kendi bölgesindeki araç çubuğu dokunuşlarıyla ayarlanır), iki öğrenci yan yana çalışabilir.</li>
+      </ul>
+
+      <h3>PDF</h3>
+      <p>Bir PDF dosyasını sayfa sayfa açıp üzerine yazabilir, çalışmanızı bütün sayfalarıyla PDF olarak <em>Belgeler/tahta-pdf</em> klasörüne kaydedebilirsiniz (sayfa grubundaki <b>PDF kaydet</b>). PDF açmanın yolları:</p>
       <ul>
         <li>Sayfa grubundaki klasör simgeli <b>Aç</b> düğmesi: Belgeler, İndirilenler ve Masaüstü klasörlerindeki (bir alt klasör derinliğine kadar) ve takılı USB belleklerdeki PDF'leri yeniden eskiye listeler. Listenin başındaki <b>Önceki tahta</b>, bir önceki tahtayı geri getirir (şu anki tahta onun yerine saklanır, yani ikisi arasında gidip gelebilirsiniz).</li>
         <li>Dosya yöneticisinden "Birlikte Aç" &rarr; tahta, veya <code>tahta dosya.pdf</code>.</li>
@@ -828,7 +903,7 @@
       </ul>
 
       <h3>Kapatma</h3>
-      <p>Araç çubuğunun sonundaki aşağı-ok simgesi tahta'yı küçültüp masaüstüne döner (uygulama kapanmaz, arka planda açık kalır). Pencereyi tamamen kapattığınızda dock otomatik olarak geri gelir.</p>
+      <p>Araç çubuğunun sonundaki aşağı-ok simgesi tahta'yı küçültüp masaüstüne döner (uygulama kapanmaz, arka planda açık kalır; dock'tan yeniden açılır). Pencereyi tamamen kapattığınızda dock otomatik olarak geri gelir.</p>
     </section>
 
     <section id="ruzgar">
@@ -886,7 +961,7 @@
         <div class="card"><span class="app-icon">R</span><div><h4>Rüzgar</h4><p>Web tarayıcı — adres çubuğu altta, sayfaya çizim; ana sayfa www.eba.gov.tr</p></div></div>
         <div class="card"><span class="app-icon">L</span><div><h4>LibreOffice</h4><p>Ofis paketi başlangıç merkezi</p></div></div>
         <div class="card"><span class="app-icon">B</span><div><h4>bacak-belge</h4><p>PDF / EPUB / resim görüntüleyici</p></div></div>
-        <div class="card"><span class="app-icon">T</span><div><h4>tahta</h4><p>Dokunmatik panel için dijital tahta</p></div></div>
+        <div class="card"><span class="app-icon">T</span><div><h4>tahta</h4><p>Dokunmatik panel için dijital tahta — grafik, 3D cisim, "Sor"</p></div></div>
       </div>
     </section>
 
@@ -901,6 +976,9 @@
 
       <h3>Tahta'da önceki çalışmam kayboldu</h3>
       <p>Yeni tahta açtıysanız ya da bir PDF açtıysanız eski tahta silinmez: tahta'da <b>Aç</b> &rarr; <b>Önceki tahta</b> ile geri getirin. Tahta'nın kayıtları <code>~/.local/share/tahta/tahtalar/</code> altındadır (<code>son</code>: şu anki, <code>onceki</code>: bir önceki).</p>
+
+      <h3>Tahta'da "Sor" yanıt vermiyor</h3>
+      <p>Kartta "YZsunucu'ya ulaşılamadı" yazıyorsa tahtanın <code>/etc/tahta/yzsunucu</code> dosyasındaki adresi ve sunucuda <code>systemctl status yzsunucu</code> ile <code>curl http://localhost:8790/durum</code> çıktısını denetleyin ("Model yükleniyor." yanıtı: model açılıyor, birkaç saniye bekleyin). Sunucunun güvenlik duvarında 8790 kapısı okul ağına açık olmalıdır. Ayrıntı: <code>journalctl -u yzsunucu</code> (soruların içeriği günlüğe yazılmaz).</p>
 
       <h3>Uzakel bilgisayarı bulamıyor ya da bağlanmıyor</h3>
       <p>Telefon ile bilgisayarın aynı Wi-Fi ağında olduğundan emin olun (misafir ağları cihazları birbirinden ayırabilir). Bilgisayarda Uzakel servisinin çalıştığını <code>systemctl --user status uzakel-daemon</code> ile kontrol edin; kapalıysa <code>systemctl --user restart uzakel-daemon</code>. Uygulama "bu bilgisayar eşleşmeyi tanımıyor" diyorsa (30 gün kullanılmamış olabilir) Kontrol Merkezi &rarr; Uzakel'e Bağlan ile yeniden eşleştirin.</p>
