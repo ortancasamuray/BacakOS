@@ -154,6 +154,8 @@ enum PointerRole {
     SolidSlider,
     /// Touch landed on a solid button; already applied.
     SolidPress,
+    /// Framing a handwritten formula for the graph panel's "Tahtadan oku".
+    FormulaPick,
     /// Dragging the selected stamped figure. The undo checkpoint is taken
     /// on the first real movement, so a tap leaves no empty undo step.
     SelectionMove { last_pos: Vec2, started: bool },
@@ -228,6 +230,10 @@ pub struct InputHandler {
     /// set right after "Tahtaya bas", or by tapping a figure with the Hand
     /// tool; a touch outside its frame lets go.
     selection: Option<u32>,
+    /// "Tahtadan oku" is waiting for the teacher to frame a formula; the
+    /// live frame (screen space) while they drag.
+    formula_pick: bool,
+    formula_rect: Option<(Vec2, Vec2)>,
     /// The "Aç" panel, while open (modal, see `opener.rs`).
     opener: Option<crate::opener::Opener>,
     /// Page images being made on their own thread — a PDF picked in the
@@ -312,6 +318,8 @@ impl InputHandler {
             solid: None,
             solid_stash: None,
             selection: None,
+            formula_pick: false,
+            formula_rect: None,
             opener: None,
             loading: None,
             zone_enabled: false,
@@ -1008,6 +1016,12 @@ impl InputHandler {
                         self.stamp_graph();
                         PointerRole::GraphPress
                     }
+                    crate::graph::GraphPress::Read => {
+                        self.toggle_graph();
+                        self.formula_pick = true;
+                        self.toast = Some(("Formülün çevresine bir dikdörtgen çizin".to_string(), now + 4.0));
+                        PointerRole::GraphPress
+                    }
                     crate::graph::GraphPress::Other => PointerRole::GraphPress,
                 };
                 self.sessions.insert(id, PointerSession { role, start_pos: position, start_time: now });
@@ -1035,6 +1049,13 @@ impl InputHandler {
                 self.sessions.insert(id, PointerSession { role, start_pos: position, start_time: now });
                 return;
             }
+        }
+
+        // "Tahtadan oku": this drag frames the handwritten formula.
+        if self.formula_pick {
+            self.formula_rect = Some((position, position));
+            self.sessions.insert(id, PointerSession { role: PointerRole::FormulaPick, start_pos: position, start_time: now });
+            return;
         }
 
         // A selected stamped figure: its frame or handle grabs it; any
@@ -1425,6 +1446,11 @@ impl InputHandler {
                     solid.set_slider(position.x);
                 }
             }
+            PointerRole::FormulaPick => {
+                if let Some((_, end)) = &mut self.formula_rect {
+                    *end = position;
+                }
+            }
             PointerRole::SelectionMove { last_pos, started } => {
                 let first = !*started && position.distance(session.start_pos) > 3.0;
                 if first {
@@ -1478,6 +1504,7 @@ impl InputHandler {
                 }
                 PointerRole::CompassDrag { .. } => self.commit_compass_circle(),
                 PointerRole::SelectionMove { started: true, .. } => self.mark_dirty(),
+                PointerRole::FormulaPick => self.finish_formula_pick(now),
                 // A Hand-tool tap (no real pan) on a stamped figure selects it.
                 PointerRole::Panning { last_pos } if last_pos.distance(session.start_pos) < 10.0 => {
                     let (offset, scale) = (self.view_offset, self.view_scale);
@@ -1619,6 +1646,42 @@ impl InputHandler {
             self.pages[self.current_page].strokes.push(Arc::new(stroke));
         }
         self.selection = Some(group);
+    }
+
+    /// The teacher lifted the finger after framing a formula: read the ink
+    /// inside and hand the result to the graph panel (reopened either way;
+    /// a mere tap just cancels).
+    fn finish_formula_pick(&mut self, now: f64) {
+        self.formula_pick = false;
+        let Some((a, b)) = self.formula_rect.take() else { return };
+        let (tl, br) = (a.min(b), a.max(b));
+        if self.graph.is_none() {
+            self.toggle_graph();
+        }
+        let message = if (br - tl).min_element() < 20.0 {
+            None
+        } else {
+            let (offset, scale) = (self.view_offset, self.view_scale);
+            let strokes: Vec<Vec<Vec2>> = self.pages[self.current_page]
+                .strokes
+                .iter()
+                .filter(|s| s.brush_type != BrushType::LaserPointer && s.group == 0 && !s.points.is_empty())
+                .filter(|s| {
+                    let n = s.points.len() as f32;
+                    let c = s.points.iter().copied().sum::<Vec2>() / n * scale + offset;
+                    c.cmpge(tl).all() && c.cmple(br).all()
+                })
+                .map(|s| s.points.clone())
+                .collect();
+            Some(match crate::handwriting::recognize(&strokes) {
+                Some(text) => {
+                    let ok = self.graph.as_mut().is_some_and(|g| g.set_formula(&text));
+                    if ok { format!("Okundu: y = {text}") } else { format!("Okundu: {text} · tuşlarla düzeltin") }
+                }
+                None => "Çerçevede yazı bulunamadı".to_string(),
+            })
+        };
+        self.toast = message.map(|m| (m, now + 4.0));
     }
 
     /// Screen-space frame (top-left, bottom-right) around the selected
@@ -1896,6 +1959,13 @@ impl InputHandler {
             spotlight.render(self.screen_size, &mut normal_v, &mut normal_i);
         }
 
+        if let Some((a, b)) = self.formula_rect {
+            let (tl, br) = (a.min(b), a.max(b));
+            let frame = [tl, Vec2::new(br.x, tl.y), br, Vec2::new(tl.x, br.y), tl];
+            for dash in crate::ink::dash_polyline(&frame, 10.0, 6.0) {
+                push_line(dash[0], dash[dash.len() - 1], 2.5, [0.98, 0.55, 0.15, 1.0], &mut normal_v, &mut normal_i);
+            }
+        }
         if let Some((_, (tl, br))) = self.selection_bounds() {
             let accent = [0.23, 0.51, 0.96, 1.0];
             let frame = [tl, Vec2::new(br.x, tl.y), br, Vec2::new(tl.x, br.y), tl];

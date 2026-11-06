@@ -11,6 +11,7 @@ mod expr;
 mod font_atlas;
 mod geom;
 mod graph;
+mod handwriting;
 mod ink;
 mod input_handler;
 mod magnifier;
