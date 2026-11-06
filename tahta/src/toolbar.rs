@@ -77,6 +77,11 @@ pub enum ToolbarAction {
     CycleBackground,
     PrevPage,
     NextPage,
+    /// Tapped page dot: jump straight to that page.
+    GoToPage(usize),
+    /// Deletes the current page — takes a second tap to confirm; the
+    /// board before the deletion is kept as the backup file.
+    DeletePage,
     /// Writes every page's ink to a multi-page PDF file — a one-shot
     /// action like Undo/Clear, not a toggle.
     ExportPdf,
@@ -120,6 +125,8 @@ pub struct ToolbarState {
     pub can_redo: bool,
     /// The first "New board" tap is waiting for its confirming second tap.
     pub new_board_armed: bool,
+    /// Same for "Bu sayfayı sil".
+    pub delete_page_armed: bool,
     pub opener_visible: bool,
 }
 
@@ -141,6 +148,11 @@ const BAR_BOTTOM_MARGIN: f32 = 80.0;
 /// Gap between the bar and a group's flyout, and between the flyout and
 /// the buttons it contains.
 const FLYOUT_GAP: f32 = 8.0;
+/// Page dots: spacing (each dot's tap cell width), tap band height above
+/// the bar, and how many are drawn at most.
+const PAGE_DOT_GAP: f32 = 30.0;
+const PAGE_DOT_ZONE: f32 = 34.0;
+const MAX_PAGE_DOTS: usize = 20;
 
 const COLOR_BAR_BG: [f32; 4] = [0.12, 0.13, 0.17, 0.92];
 const COLOR_BUTTON_IDLE: [f32; 4] = [0.22, 0.24, 0.30, 1.0];
@@ -188,6 +200,7 @@ const ENTRIES: &[Entry] = &[
         ToolbarAction::ExportPdf,
         ToolbarAction::PrevPage,
         ToolbarAction::NextPage,
+        ToolbarAction::DeletePage,
         ToolbarAction::NewBoard,
         ToolbarAction::OpenFile,
     ]),
@@ -210,6 +223,9 @@ pub struct Toolbar {
     /// The one piece of state `Toolbar` carries across frames — everything
     /// else here is recomputed from scratch by `layout()`.
     open_group: Option<usize>,
+    /// Page count, for hit-testing the page dots (set by `set_page_count`
+    /// before each touch is routed).
+    page_count: usize,
 }
 
 impl Toolbar {
@@ -229,14 +245,38 @@ impl Toolbar {
             })
             .collect();
 
-        Self { bar_rect: (bar_top_left, Vec2::new(bar_w, bar_h)), button_rects, open_group: None }
+        Self { bar_rect: (bar_top_left, Vec2::new(bar_w, bar_h)), button_rects, open_group: None, page_count: 1 }
+    }
+
+    pub fn set_page_count(&mut self, count: usize) {
+        self.page_count = count;
+    }
+
+    /// Centers of the page dots above the bar (none for a single page).
+    fn page_dot_centers(&self, count: usize) -> Vec<Vec2> {
+        if count <= 1 {
+            return Vec::new();
+        }
+        let n = count.min(MAX_PAGE_DOTS);
+        let total_w = (n - 1) as f32 * PAGE_DOT_GAP;
+        let start_x = self.bar_rect.0.x + self.bar_rect.1.x / 2.0 - total_w / 2.0;
+        let y = self.bar_rect.0.y - PAGE_DOT_ZONE / 2.0;
+        (0..n).map(|i| Vec2::new(start_x + i as f32 * PAGE_DOT_GAP, y)).collect()
+    }
+
+    /// Index of the page dot under `point` — each dot owns a finger-sized
+    /// cell, far larger than the dot itself.
+    fn page_dot_at(&self, point: Vec2) -> Option<usize> {
+        self.page_dot_centers(self.page_count)
+            .iter()
+            .position(|c| (point.x - c.x).abs() <= PAGE_DOT_GAP / 2.0 && (point.y - c.y).abs() <= PAGE_DOT_ZONE / 2.0)
     }
 
     /// True if `point` lands anywhere on the toolbar's background, or on
     /// the open group's flyout — used to swallow touches so they never
     /// start a stroke, even between buttons.
     pub fn contains(&self, point: Vec2) -> bool {
-        if rect_contains(self.bar_rect, point) {
+        if rect_contains(self.bar_rect, point) || self.page_dot_at(point).is_some() {
             return true;
         }
         self.open_group.is_some_and(|gi| rect_contains(self.flyout_rect(gi), point))
@@ -266,13 +306,18 @@ impl Toolbar {
                         // "New board" asks for a confirming second tap on
                         // the same button, so its flyout stays open (the
                         // handler closes it once confirmed).
-                        if *action != ToolbarAction::NewBoard {
+                        if !matches!(action, ToolbarAction::NewBoard | ToolbarAction::DeletePage) {
                             self.open_group = None;
                         }
                         return Some(*action);
                     }
                 }
             }
+        }
+
+        if let Some(page) = self.page_dot_at(point) {
+            self.open_group = None;
+            return Some(ToolbarAction::GoToPage(page));
         }
 
         for (i, rect) in self.button_rects.iter().enumerate() {
@@ -372,15 +417,9 @@ impl Toolbar {
         if state.page_count <= 1 {
             return;
         }
-        let dot_r = 4.0;
-        let gap = 14.0;
-        let count = state.page_count.min(20) as f32;
-        let total_w = (count - 1.0) * gap;
-        let start_x = self.bar_rect.0.x + self.bar_rect.1.x / 2.0 - total_w / 2.0;
-        let y = self.bar_rect.0.y - 14.0;
-        for i in 0..state.page_count.min(20) {
+        for (i, c) in self.page_dot_centers(state.page_count).into_iter().enumerate() {
             let color = if i == state.page_index { COLOR_BUTTON_ACTIVE } else { COLOR_BUTTON_IDLE };
-            push_circle(Vec2::new(start_x + i as f32 * gap, y), dot_r, color, 10, out_vertices, out_indices);
+            push_circle(c, 6.0, color, 12, out_vertices, out_indices);
         }
     }
 }
@@ -402,6 +441,7 @@ fn is_active(action: ToolbarAction, state: &ToolbarState) -> bool {
         ToolbarAction::ToggleSolid => state.solid_visible,
         ToolbarAction::ToggleAsk => state.ask_visible,
         ToolbarAction::NewBoard => state.new_board_armed,
+        ToolbarAction::DeletePage => state.delete_page_armed,
         ToolbarAction::OpenFile => state.opener_visible,
         _ => false,
     }
@@ -504,6 +544,20 @@ fn draw_glyph(
             push_line(tl + Vec2::new(0.0, h), tl, 3.0, COLOR_GLYPH, out_vertices, out_indices);
             push_line(center - Vec2::new(r * 0.4, 0.0), center + Vec2::new(r * 0.4, 0.0), 3.5, COLOR_GLYPH, out_vertices, out_indices);
             push_line(center - Vec2::new(0.0, r * 0.4), center + Vec2::new(0.0, r * 0.4), 3.5, COLOR_GLYPH, out_vertices, out_indices);
+        }
+        // Page dots are drawn by `render_page_dots`, never as a button.
+        ToolbarAction::GoToPage(_) => {}
+        ToolbarAction::DeletePage => {
+            // A sheet with an "×" in it.
+            let (w, h) = (r * 1.3, r * 1.8);
+            let tl = center - Vec2::new(w / 2.0, h / 2.0);
+            push_line(tl, tl + Vec2::new(w, 0.0), 3.0, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(tl + Vec2::new(w, 0.0), tl + Vec2::new(w, h), 3.0, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(tl + Vec2::new(w, h), tl + Vec2::new(0.0, h), 3.0, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(tl + Vec2::new(0.0, h), tl, 3.0, COLOR_GLYPH, out_vertices, out_indices);
+            let d = r * 0.32;
+            push_line(center - Vec2::splat(d), center + Vec2::splat(d), 3.5, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(center + Vec2::new(-d, d), center + Vec2::new(d, -d), 3.5, COLOR_GLYPH, out_vertices, out_indices);
         }
         ToolbarAction::OpenFile => {
             // A folder: body outline with a tab on its top-left.
@@ -807,5 +861,38 @@ fn draw_brush_glyph(brush: BrushType, center: Vec2, r: f32, out_vertices: &mut V
                 push_line(center + dir * (r * 0.55), center + dir * r, 2.0, COLOR_GLYPH, out_vertices, out_indices);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn page_dots_jump_and_delete_keeps_flyout_open() {
+        let mut bar = Toolbar::layout(Vec2::new(1920.0, 1080.0));
+        bar.set_page_count(1);
+        let dots = bar.page_dot_centers(3);
+        assert!(dots.is_empty() || bar.page_dot_at(dots[0]).is_none(), "one page: no dots to tap");
+        bar.set_page_count(3);
+        let dots = bar.page_dot_centers(3);
+        assert_eq!(dots.len(), 3);
+        // A finger a little off the dot still hits it, and the band counts
+        // as toolbar (no stray stroke).
+        let near = dots[2] + Vec2::new(10.0, 12.0);
+        assert!(bar.contains(near));
+        assert_eq!(bar.hit_test(near), Some(ToolbarAction::GoToPage(2)));
+        assert!(!bar.contains(dots[0] - Vec2::new(0.0, 40.0)));
+
+        // Open the page group, tap "Bu sayfayı sil": flyout stays for the
+        // confirming tap.
+        let gi = ENTRIES.iter().position(|e| matches!(e, Entry::Group(a) if a.contains(&ToolbarAction::DeletePage))).unwrap();
+        let (pos, size) = bar.button_rects[gi];
+        assert_eq!(bar.hit_test(pos + size / 2.0), None);
+        let Entry::Group(actions) = &ENTRIES[gi] else { unreachable!() };
+        let k = actions.iter().position(|a| *a == ToolbarAction::DeletePage).unwrap();
+        let (cpos, csize) = bar.flyout_child_rects(gi)[k];
+        assert_eq!(bar.hit_test(cpos + csize / 2.0), Some(ToolbarAction::DeletePage));
+        assert!(bar.has_open_group());
     }
 }

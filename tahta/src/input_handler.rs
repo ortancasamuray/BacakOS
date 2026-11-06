@@ -294,6 +294,8 @@ pub struct InputHandler {
     save_now: bool,
     /// "New board" needs a second tap before this deadline (input clock).
     new_board_armed_until: Option<f64>,
+    /// "Bu sayfayı sil" needs a second tap before this deadline.
+    delete_page_armed_until: Option<f64>,
     /// The board "New board" replaced, for `app.rs` to keep as a backup.
     replaced_board: Option<crate::persist::BoardData>,
 }
@@ -352,6 +354,7 @@ impl InputHandler {
             last_change: 0.0,
             save_now: false,
             new_board_armed_until: None,
+            delete_page_armed_until: None,
             replaced_board: None,
         }
     }
@@ -469,6 +472,9 @@ impl InputHandler {
         }
         if self.new_board_armed_until.is_some_and(|t| now > t) {
             self.new_board_armed_until = None;
+        }
+        if self.delete_page_armed_until.is_some_and(|t| now > t) {
+            self.delete_page_armed_until = None;
         }
         self.poll_loading(now);
         if let Some(card) = &mut self.ask {
@@ -833,6 +839,39 @@ impl InputHandler {
                 }
                 self.mark_dirty();
             }
+            ToolbarAction::GoToPage(page) => {
+                if page < self.pages.len() && page != self.current_page {
+                    self.release_drawing_pointers();
+                    self.current_page = page;
+                    self.mark_dirty();
+                }
+            }
+            ToolbarAction::DeletePage => {
+                let now = self.last_input_at.unwrap_or(0.0);
+                if self.delete_page_armed_until.is_some_and(|t| now <= t) {
+                    self.delete_page_armed_until = None;
+                    self.toolbar.close_group();
+                    self.release_drawing_pointers();
+                    // The whole board before the deletion stays reachable
+                    // from "Aç" → "Önceki tahta".
+                    self.keep_as_backup();
+                    if self.pages.len() > 1 {
+                        self.pages.remove(self.current_page);
+                        self.current_page = self.current_page.min(self.pages.len() - 1);
+                    } else {
+                        self.pages = vec![Page::new()];
+                        self.current_page = 0;
+                    }
+                    self.selection = None;
+                    self.mark_dirty();
+                    self.save_now = true;
+                    self.toast = Some(("Sayfa silindi · geri almak için Aç → Önceki tahta".to_string(), now + 3.5));
+                } else {
+                    self.delete_page_armed_until = Some(now + 4.0);
+                    self.new_board_armed_until = None;
+                    self.toast = Some(("Bu sayfayı silmek için tekrar dokunun".to_string(), now + 4.0));
+                }
+            }
             ToolbarAction::NewBoard => {
                 // Wipes every page, so it takes a second tap; the old board
                 // is kept as a backup file (see `take_replaced_board`).
@@ -949,6 +988,7 @@ impl InputHandler {
         }
 
         if self.toolbar_visible {
+            self.toolbar.set_page_count(self.pages.len());
             if self.toolbar.contains(position) {
                 if let Some(action) = self.toolbar.hit_test(position) {
                     self.apply_toolbar_action(action, self.zone_of(position));
@@ -2098,6 +2138,7 @@ impl InputHandler {
             can_undo: page.can_undo(),
             can_redo: page.can_redo(),
             new_board_armed: self.new_board_armed_until.is_some(),
+            delete_page_armed: self.delete_page_armed_until.is_some(),
             opener_visible: self.opener.is_some(),
         };
         if self.toolbar_visible {
