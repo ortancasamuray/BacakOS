@@ -1,0 +1,11 @@
+#!/bin/sh
+set -e
+SATIR=meb/meb-fatihca.crt
+case "$1" in
+    remove|purge)
+        if [ -f /etc/ca-certificates.conf ]; then
+            sed -i "\|^!\?$SATIR\$|d" /etc/ca-certificates.conf
+        fi
+        command -v update-ca-certificates >/dev/null && update-ca-certificates --fresh >/dev/null 2>&1 || true
+        ;;
+esac

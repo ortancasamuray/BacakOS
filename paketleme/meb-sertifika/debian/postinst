@@ -1,0 +1,10 @@
+#!/bin/sh
+set -e
+SATIR=meb/meb-fatihca.crt
+if [ "$1" = configure ]; then
+    # ca-certificates.conf'ta "!satır" ile bilerek kapatılmışsa dokunma.
+    if ! grep -qxE "!?$SATIR" /etc/ca-certificates.conf 2>/dev/null; then
+        echo "$SATIR" >> /etc/ca-certificates.conf
+    fi
+    update-ca-certificates >/dev/null 2>&1 || true
+fi

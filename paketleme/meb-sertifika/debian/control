@@ -1,0 +1,18 @@
+Package: meb-sertifika
+Version: @SURUM@
+Architecture: all
+Maintainer: Bacak Desktop Project <bilgi@anadolupanteri.org.tr>
+Depends: ca-certificates
+Section: misc
+Priority: optional
+Homepage: https://sertifika.meb.gov.tr/
+Description: MEB okul ağları kök sertifikası (fatihca)
+ MEB okul ağlarındaki güvenlik duvarı HTTPS trafiğini denetlerken siteleri
+ MEB'in kök sertifikasıyla yeniden imzalar. Bu sertifika sistemde yoksa
+ Rüzgar gibi sistem güven deposunu kullanan uygulamalar "Unacceptable TLS
+ certificate" hatası verir. Paket, https://sertifika.meb.gov.tr/ adresindeki
+ MEB_SERTIFIKASI.cer'i (CN=fatihca, 2036'ya kadar geçerli) sistem güven
+ deposuna ekler; kaldırılınca sertifika da depodan çıkarılır.
+ .
+ Bu sertifikaya güvenmek, MEB ağındaki güvenlik duvarının HTTPS trafiğini
+ açabilmesi demektir; okul ağı dışında etkisi yoktur.

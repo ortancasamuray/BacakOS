@@ -431,6 +431,12 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# meb-sertifika: MEB okul ağları kök sertifikası (Architecture: all)
+# ---------------------------------------------------------------------------
+log "=== meb-sertifika oluşturuluyor ==="
+sh "$HERE/paketleme/meb-sertifika/yap.sh" "$OUT"
+
+# ---------------------------------------------------------------------------
 # bacakos: içeriksiz meta-paket — tek `apt install` ile tüm bileşenleri kurar
 # ---------------------------------------------------------------------------
 log "=== bacakos meta-paketi oluşturuluyor ==="
