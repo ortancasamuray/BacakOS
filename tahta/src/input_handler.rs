@@ -156,6 +156,12 @@ enum PointerRole {
     SolidPress,
     /// Framing a handwritten formula for the graph panel's "Tahtadan oku".
     FormulaPick,
+    /// Dragging the "Sor" card by its header.
+    AskMove { grab_offset: Vec2 },
+    /// Finger on the card's answer: drag scrolls it.
+    AskScroll { last_y: f32 },
+    /// Touch landed on a card button; already applied.
+    AskPress,
     /// Dragging the selected stamped figure. The undo checkpoint is taken
     /// on the first real movement, so a tap leaves no empty undo step.
     SelectionMove { last_pos: Vec2, started: bool },
@@ -234,6 +240,10 @@ pub struct InputHandler {
     /// live frame (screen space) while they drag.
     formula_pick: bool,
     formula_rect: Option<(Vec2, Vec2)>,
+    /// "Sor" armed: the next drag frames the question (shares
+    /// `formula_rect` and the `FormulaPick` session with "Tahtadan oku").
+    ask_pick: bool,
+    ask: Option<crate::ask::AskCard>,
     /// The "Aç" panel, while open (modal, see `opener.rs`).
     opener: Option<crate::opener::Opener>,
     /// Page images being made on their own thread — a PDF picked in the
@@ -320,6 +330,8 @@ impl InputHandler {
             selection: None,
             formula_pick: false,
             formula_rect: None,
+            ask_pick: false,
+            ask: None,
             opener: None,
             loading: None,
             zone_enabled: false,
@@ -459,6 +471,9 @@ impl InputHandler {
             self.new_board_armed_until = None;
         }
         self.poll_loading(now);
+        if let Some(card) = &mut self.ask {
+            card.poll();
+        }
     }
 
     // --- Opening a PDF / the backup ("Aç" panel) ----------------------------
@@ -659,6 +674,7 @@ impl InputHandler {
             || self.toast.as_ref().is_some_and(|(_, until)| now < *until)
             || self.stopwatch.as_ref().is_some_and(|s| s.is_running())
             || self.loading.is_some()
+            || self.ask.as_ref().is_some_and(|c| c.is_waiting())
             || self.pages[self.current_page]
                 .strokes
                 .iter()
@@ -772,6 +788,14 @@ impl InputHandler {
                 };
             }
             ToolbarAction::ToggleGraph => self.toggle_graph(),
+            ToolbarAction::ToggleAsk => {
+                let now = self.last_input_at.unwrap_or(0.0);
+                if self.ask.take().is_none() {
+                    self.ask_pick = !self.ask_pick;
+                    self.formula_pick = false;
+                    self.toast = self.ask_pick.then(|| ("Sorunun çevresine bir dikdörtgen çizin".to_string(), now + 4.0));
+                }
+            }
             ToolbarAction::ToggleSolid => self.toggle_solid(),
             ToolbarAction::OpenBrowser => match crate::masaustu::open_browser(crate::masaustu::BROWSER_HOME) {
                 // The fullscreen board would cover the browser window: step
@@ -1001,6 +1025,23 @@ impl InputHandler {
             }
         }
 
+        // The "Sor" card sits on top of the other panels.
+        if let Some(card) = &mut self.ask {
+            if card.contains(position) {
+                let role = match card.press_at(position, now) {
+                    crate::ask::AskPress::Move => PointerRole::AskMove { grab_offset: position - card.position },
+                    crate::ask::AskPress::Scroll => PointerRole::AskScroll { last_y: position.y },
+                    crate::ask::AskPress::Close => {
+                        self.ask = None;
+                        PointerRole::AskPress
+                    }
+                    crate::ask::AskPress::Other => PointerRole::AskPress,
+                };
+                self.sessions.insert(id, PointerSession { role, start_pos: position, start_time: now });
+                return;
+            }
+        }
+
         // Same UI-panel priority for the graph.
         if let Some(graph) = &mut self.graph {
             if graph.contains(position) {
@@ -1052,7 +1093,7 @@ impl InputHandler {
         }
 
         // "Tahtadan oku": this drag frames the handwritten formula.
-        if self.formula_pick {
+        if self.formula_pick || self.ask_pick {
             self.formula_rect = Some((position, position));
             self.sessions.insert(id, PointerSession { role: PointerRole::FormulaPick, start_pos: position, start_time: now });
             return;
@@ -1451,6 +1492,19 @@ impl InputHandler {
                     *end = position;
                 }
             }
+            PointerRole::AskMove { grab_offset } => {
+                let grab_offset = *grab_offset;
+                if let Some(card) = &mut self.ask {
+                    card.drag_to(position, grab_offset);
+                }
+            }
+            PointerRole::AskScroll { last_y } => {
+                let dy = position.y - *last_y;
+                *last_y = position.y;
+                if let Some(card) = &mut self.ask {
+                    card.scroll_by(dy, &self.font_atlas);
+                }
+            }
             PointerRole::SelectionMove { last_pos, started } => {
                 let first = !*started && position.distance(session.start_pos) > 3.0;
                 if first {
@@ -1468,6 +1522,7 @@ impl InputHandler {
             | PointerRole::DicePress
             | PointerRole::TextBoxPress
             | PointerRole::GraphPress
+            | PointerRole::AskPress
             | PointerRole::SolidPress => {}
         }
         if do_erase {
@@ -1504,6 +1559,7 @@ impl InputHandler {
                 }
                 PointerRole::CompassDrag { .. } => self.commit_compass_circle(),
                 PointerRole::SelectionMove { started: true, .. } => self.mark_dirty(),
+                PointerRole::FormulaPick if self.ask_pick => self.finish_ask_pick(now),
                 PointerRole::FormulaPick => self.finish_formula_pick(now),
                 // A Hand-tool tap (no real pan) on a stamped figure selects it.
                 PointerRole::Panning { last_pos } if last_pos.distance(session.start_pos) < 10.0 => {
@@ -1682,6 +1738,37 @@ impl InputHandler {
             })
         };
         self.toast = message.map(|m| (m, now + 4.0));
+    }
+
+    /// The teacher framed a question for "Sor": draw the ink inside as an
+    /// image and open the card, which sends it to YZsunucu.
+    fn finish_ask_pick(&mut self, now: f64) {
+        self.ask_pick = false;
+        let Some((a, b)) = self.formula_rect.take() else { return };
+        let (tl, br) = (a.min(b), a.max(b));
+        if (br - tl).min_element() < 20.0 {
+            self.toast = None;
+            return;
+        }
+        let (offset, scale) = (self.view_offset, self.view_scale);
+        let strokes: Vec<crate::ask::InkStroke> = self.pages[self.current_page]
+            .strokes
+            .iter()
+            .filter(|s| s.brush_type != BrushType::LaserPointer && !s.points.is_empty())
+            .map(|s| crate::ask::InkStroke {
+                points: s.points.iter().map(|&p| p * scale + offset).collect(),
+                width: s.width * scale,
+                color: s.color,
+            })
+            .filter(|s| s.points.iter().any(|p| p.cmpge(tl).all() && p.cmple(br).all()))
+            .collect();
+        match crate::ask::render_png(&strokes, (tl, br)) {
+            Some(png) => {
+                self.ask = Some(crate::ask::AskCard::open(png, (tl, br), self.screen_size, now));
+                self.toast = None;
+            }
+            None => self.toast = Some(("Çerçevede yazı bulunamadı".to_string(), now + 4.0)),
+        }
     }
 
     /// Screen-space frame (top-left, bottom-right) around the selected
@@ -2007,6 +2094,7 @@ impl InputHandler {
             textbox_visible: self.textbox.is_some(),
             graph_visible: self.graph.is_some(),
             solid_visible: self.solid.is_some(),
+            ask_visible: self.ask.is_some() || self.ask_pick,
             can_undo: page.can_undo(),
             can_redo: page.can_redo(),
             new_board_armed: self.new_board_armed_until.is_some(),
@@ -2033,6 +2121,9 @@ impl InputHandler {
         }
         if let Some(solid) = &self.solid {
             solid.render(&self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
+        }
+        if let Some(card) = &self.ask {
+            card.render(now, &self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
         }
 
         if let Some(opener) = &self.opener {

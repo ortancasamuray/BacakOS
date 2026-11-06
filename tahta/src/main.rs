@@ -2,6 +2,7 @@
 //! interactive flat panels.
 
 mod app;
+mod ask;
 mod board;
 mod brush;
 mod calculator;
