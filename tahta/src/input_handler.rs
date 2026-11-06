@@ -1976,11 +1976,13 @@ impl InputHandler {
     /// standard alpha blend) and a highlighter batch (Max blend so marker
     /// overlaps never darken — see `renderer`).
     /// Returns `(normal_vertices, normal_indices, highlighter_vertices,
-    /// highlighter_indices, page_image, content_index_count, glyph_vertices,
-    /// glyph_indices)` — `content_index_count` is how many of
-    /// `normal_indices` (from the start) are "page content" rather than
-    /// floating UI chrome; see the comment at its call site below and
-    /// `renderer.rs::render`'s `content_index_count` param, which uses it
+    /// highlighter_indices, page_image, (background_index_count,
+    /// content_index_count), glyph_vertices, glyph_indices)` — the first
+    /// `background_index_count` of `normal_indices` are the page
+    /// background (drawn under the highlighter batch) and the first
+    /// `content_index_count` are "page content" rather than floating UI
+    /// chrome; see the comment at its call site below and
+    /// `renderer.rs::render`'s `content_ranges` param, which uses it
     /// to render the magnifier lens's texture sample. `glyph_vertices`/
     /// `glyph_indices` are the text box's real-font text (see
     /// `font_atlas.rs`), drawn through a separate pipeline from the rest
@@ -1994,7 +1996,7 @@ impl InputHandler {
         Vec<Vertex>,
         Vec<u32>,
         Option<Arc<board::PdfImage>>,
-        usize,
+        (usize, usize),
         Vec<crate::font_atlas::GlyphVertex>,
         Vec<u32>,
     ) {
@@ -2007,6 +2009,10 @@ impl InputHandler {
 
         let page = &self.pages[self.current_page];
         board::render_background(page, self.screen_size, self.view_offset, self.view_scale, &mut normal_v, &mut normal_i);
+        // The (opaque) background is drawn before the highlighter batch,
+        // everything else in the content range after it — see
+        // `renderer.rs::render`'s `content_ranges` param.
+        let background_index_count = normal_i.len();
 
         // Draw straightedge widgets before ink so strokes snapped to their
         // edges are never hidden underneath the widget body (see
@@ -2074,7 +2080,7 @@ impl InputHandler {
 
         // Everything above this line is "page content" (background, page
         // image, ink, live tool previews) — the split point the magnifier
-        // lens samples from (see `renderer.rs::render`'s `content_index_count`
+        // lens samples from (see `renderer.rs::render`'s `content_ranges`
         // param). Everything below is floating UI chrome (the magnifier's
         // own rim/handle included) that should never itself be magnified.
         let content_index_count = normal_i.len();
@@ -2186,7 +2192,7 @@ impl InputHandler {
             }
         }
 
-        (normal_v, normal_i, highlight_v, highlight_i, page.pdf_image.clone(), content_index_count, glyph_v, glyph_i)
+        (normal_v, normal_i, highlight_v, highlight_i, page.pdf_image.clone(), (background_index_count, content_index_count), glyph_v, glyph_i)
     }
 
     /// `(center, radius, zoom)` for the renderer to draw the magnifier's

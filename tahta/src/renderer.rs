@@ -188,6 +188,17 @@ pub struct Renderer {
     content_view: wgpu::TextureView,
     content_bind_group: wgpu::BindGroup,
 
+    /// Offscreen layer the highlighter batch is Max-blended into (cleared
+    /// transparent every frame), then alpha-composited over the page
+    /// background as one full-screen quad: overlapping marker strokes
+    /// never stack up darker, yet the marker stays translucent instead of
+    /// replacing the board color underneath it.
+    highlight_texture: wgpu::Texture,
+    highlight_view: wgpu::TextureView,
+    highlight_bind_group: wgpu::BindGroup,
+    highlight_composite_pipeline: wgpu::RenderPipeline,
+    screen_quad_vertex: wgpu::Buffer,
+
     magnifier_pipeline: wgpu::RenderPipeline,
     magnifier_uniform_buffer: wgpu::Buffer,
     magnifier_uniform_bind_group: wgpu::BindGroup,
@@ -433,6 +444,36 @@ impl Renderer {
 
         let (content_texture, content_view, content_bind_group) =
             Self::create_content_texture(&device, &page_texture_bgl, &page_sampler, surface_format, config.width, config.height);
+        let (highlight_texture, highlight_view, highlight_bind_group) =
+            Self::create_content_texture(&device, &page_texture_bgl, &page_sampler, surface_format, config.width, config.height);
+        let highlight_composite_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("tahta_highlight_composite_pipeline"),
+            layout: Some(&page_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_tex",
+                buffers: &[TexVertex::layout()],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_tex",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive,
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        });
+        let screen_quad_vertex = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("tahta_screen_quad_vertex"),
+            size: 4 * std::mem::size_of::<TexVertex>() as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
 
         let magnifier_uniform_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("tahta_magnifier_uniform_bgl"),
@@ -569,6 +610,11 @@ impl Renderer {
             content_texture,
             content_view,
             content_bind_group,
+            highlight_texture,
+            highlight_view,
+            highlight_bind_group,
+            highlight_composite_pipeline,
+            screen_quad_vertex,
             magnifier_pipeline,
             magnifier_uniform_buffer,
             magnifier_uniform_bind_group,
@@ -691,14 +737,31 @@ impl Renderer {
         self.content_texture = texture;
         self.content_view = view;
         self.content_bind_group = bind_group;
+
+        let (texture, view, bind_group) = Self::create_content_texture(
+            &self.device,
+            &self.page_texture_bgl,
+            &self.page_sampler,
+            self.config.format,
+            self.config.width,
+            self.config.height,
+        );
+        self.highlight_texture = texture;
+        self.highlight_view = view;
+        self.highlight_bind_group = bind_group;
     }
 
     /// Uploads and draws one frame: `normal` covers ink/UI (standard alpha
-    /// blend, drawn first) and `highlighter` covers Highlighter-brush
-    /// strokes (Max blend, drawn on top so marker strokes never darken the
-    /// ink or each other underneath). `content_index_count` is how many of
-    /// `normal`'s indices (from the start) are page content rather than UI
-    /// chrome — see `input_handler.rs::collect_geometry`. When
+    /// blend) and `highlighter` covers Highlighter-brush strokes (Max
+    /// blended into their own layer so marker strokes never darken each
+    /// other, then composited translucently). `content_ranges`
+    /// is `(background, content)`: the first `background` of `normal`'s
+    /// indices are the opaque page background, drawn before the
+    /// highlighter (drawing it after would hide every marker stroke); up
+    /// to `content` they are the rest of the page content (ink, tool
+    /// previews), drawn after it so ink sits on top of the marker; the
+    /// remainder is UI chrome — see `input_handler.rs::collect_geometry`.
+    /// When
     /// `magnifier_lens` is `Some((center, radius, zoom))`, the page content
     /// (page image + highlighter + that content prefix) is re-rendered into
     /// an offscreen texture first, then sampled into the lens circle
@@ -709,10 +772,11 @@ impl Renderer {
         normal: (&[Vertex], &[u32]),
         highlighter: (&[Vertex], &[u32]),
         glyph: (&[GlyphVertex], &[u32]),
-        content_index_count: usize,
+        content_ranges: (usize, usize),
         page_image: Option<&PdfImage>,
         magnifier_lens: Option<(Vec2, f32, f32)>,
     ) -> Result<(), wgpu::SurfaceError> {
+        let (background_index_count, content_index_count) = content_ranges;
         let output = self.surface.get_current_texture()?;
         let view = output
             .texture
@@ -729,6 +793,17 @@ impl Renderer {
 
         self.normal_batch.upload(&self.device, &self.queue, normal.0, normal.1);
         self.highlighter_batch.upload(&self.device, &self.queue, highlighter.0, highlighter.1);
+        let has_highlight = !highlighter.1.is_empty();
+        if has_highlight {
+            let (w, h) = (self.config.width as f32, self.config.height as f32);
+            let verts = [
+                TexVertex { position: [0.0, 0.0], uv: [0.0, 0.0] },
+                TexVertex { position: [0.0, h], uv: [0.0, 1.0] },
+                TexVertex { position: [w, 0.0], uv: [1.0, 0.0] },
+                TexVertex { position: [w, h], uv: [1.0, 1.0] },
+            ];
+            self.queue.write_buffer(&self.screen_quad_vertex, 0, bytemuck::cast_slice(&verts));
+        }
         self.glyph_batch.upload(&self.device, &self.queue, glyph.0, glyph.1);
 
         if let Some(image) = page_image {
@@ -765,6 +840,24 @@ impl Renderer {
                 label: Some("tahta_encoder"),
             });
 
+        if has_highlight {
+            let mut highlight_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("tahta_highlight_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.highlight_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            self.highlighter_batch.draw(&mut highlight_pass, &self.highlighter_pipeline, &self.uniform_bind_group, highlighter.1.len() as u32);
+        }
+
         if magnifier_lens.is_some() {
             let mut content_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("tahta_content_pass"),
@@ -790,8 +883,16 @@ impl Renderer {
                 content_pass.set_index_buffer(self.page_quad_index.slice(..), wgpu::IndexFormat::Uint32);
                 content_pass.draw_indexed(0..6, 0, 0..1);
             }
-            self.highlighter_batch.draw(&mut content_pass, &self.highlighter_pipeline, &self.uniform_bind_group, highlighter.1.len() as u32);
-            self.normal_batch.draw_range(&mut content_pass, &self.normal_pipeline, &self.uniform_bind_group, 0..content_index_count as u32);
+            self.normal_batch.draw_range(&mut content_pass, &self.normal_pipeline, &self.uniform_bind_group, 0..background_index_count as u32);
+            if has_highlight {
+                content_pass.set_pipeline(&self.highlight_composite_pipeline);
+                content_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                content_pass.set_bind_group(1, &self.highlight_bind_group, &[]);
+                content_pass.set_vertex_buffer(0, self.screen_quad_vertex.slice(..));
+                content_pass.set_index_buffer(self.page_quad_index.slice(..), wgpu::IndexFormat::Uint32);
+                content_pass.draw_indexed(0..6, 0, 0..1);
+            }
+            self.normal_batch.draw_range(&mut content_pass, &self.normal_pipeline, &self.uniform_bind_group, background_index_count as u32..content_index_count as u32);
         }
 
         {
@@ -828,8 +929,16 @@ impl Renderer {
 
             // Highlighter next (Max-blended) so it sits "under" — visually
             // behind — freshly drawn ink and UI chrome painted after it.
-            self.highlighter_batch.draw(&mut pass, &self.highlighter_pipeline, &self.uniform_bind_group, highlighter.1.len() as u32);
-            self.normal_batch.draw_range(&mut pass, &self.normal_pipeline, &self.uniform_bind_group, 0..content_index_count as u32);
+            self.normal_batch.draw_range(&mut pass, &self.normal_pipeline, &self.uniform_bind_group, 0..background_index_count as u32);
+            if has_highlight {
+                pass.set_pipeline(&self.highlight_composite_pipeline);
+                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_bind_group(1, &self.highlight_bind_group, &[]);
+                pass.set_vertex_buffer(0, self.screen_quad_vertex.slice(..));
+                pass.set_index_buffer(self.page_quad_index.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..6, 0, 0..1);
+            }
+            self.normal_batch.draw_range(&mut pass, &self.normal_pipeline, &self.uniform_bind_group, background_index_count as u32..content_index_count as u32);
 
             // Magnifier lens (real pixel zoom of the content pass above)
             // between page content and UI chrome, so its own rim/handle
