@@ -1,0 +1,17 @@
+#!/bin/sh
+set -e
+if [ "$1" = configure ]; then
+    if ! getent passwd yzsunucu >/dev/null; then
+        adduser --system --group --home /var/lib/yzsunucu --no-create-home yzsunucu
+    fi
+    for g in video render; do
+        getent group "$g" >/dev/null && adduser yzsunucu "$g" >/dev/null || true
+    done
+    mkdir -p /var/lib/yzsunucu/model
+    chown -R yzsunucu:yzsunucu /var/lib/yzsunucu
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    if [ -x /opt/yzsunucu/llama/llama-server ] && systemctl is-enabled yzsunucu >/dev/null 2>&1; then
+        systemctl restart yzsunucu || true
+    fi
+fi
+#DEBHELPER#
