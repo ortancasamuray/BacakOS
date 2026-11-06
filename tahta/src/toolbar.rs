@@ -138,13 +138,10 @@ pub struct ToolbarState {
 const BUTTON_SIZE: f32 = 44.0;
 const BUTTON_GAP: f32 = 8.0;
 const BAR_MARGIN: f32 = 10.0;
-/// Now that `main.rs` opens the window fullscreen, this bar's own
-/// bottom-center anchor lands almost exactly on top of bacakos's system
-/// dock (`compositor.json`'s `dock_height: 56`, always visible —
-/// `dock_autohide` is off) — the dock is a compositor-level overlay
-/// tahta has no way to query, so this just clears a fixed, generously
-/// padded band above it rather than computing an exact value.
-const BAR_BOTTOM_MARGIN: f32 = 80.0;
+/// The window is fullscreen and bacak-compositor hides its dock while a
+/// fullscreen window is up (`plugins/dock.rs::output_has_fullscreen`), so
+/// the bar sits at the bottom edge — only a small gap, nothing to clear.
+const BAR_BOTTOM_MARGIN: f32 = 12.0;
 /// Gap between the bar and a group's flyout, and between the flyout and
 /// the buttons it contains.
 const FLYOUT_GAP: f32 = 8.0;
