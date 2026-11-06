@@ -1,0 +1,9 @@
+meb-sertifika
+
+Sertifika: T.C. Millî Eğitim Bakanlığı, https://sertifika.meb.gov.tr/MEB_SERTIFIKASI.cer
+  CN=fatihca, DC=mebca, DC=gov, DC=tr
+  SHA-256: C4:F8:04:D0:93:BA:78:5D:EB:C6:9B:59:17:F2:99:FE:6E:A9:E8:AA:2E:66:83:E8:3F:4D:C9:CD:51:C0:8E:75
+  Geçerlilik: 2016-03-09 – 2036-03-09
+  Kamu kurumunun herkese açık olarak dağıttığı kök sertifikadır.
+
+Paketleme: 2026, Bacak Desktop Project — GPL-3.0-or-later
