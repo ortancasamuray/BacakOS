@@ -45,6 +45,9 @@ Günlük:  journalctl -u bacak-guncel -u bacak-guncel-onar
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let komut = args.first().map(String::as_str).unwrap_or("");
+    // `bacak-guncel durum | head` gibi kesilen çıktıda panik değil sessiz çıkış.
+    // SAFETY: tek iş parçacıklıyken sinyal kipini değiştirmek.
+    unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
     match komut {
         "durum" => return durum_yaz(),
         "calis" | "onar" | "denetle" => {}
