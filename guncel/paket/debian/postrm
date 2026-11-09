@@ -1,0 +1,14 @@
+#!/bin/sh
+set -e
+if [ -d /run/systemd/system ]; then
+    systemctl --system daemon-reload >/dev/null || true
+fi
+if [ "$1" = remove ]; then
+    deb-systemd-helper mask bacak-guncel.timer bacak-guncel-onar.service >/dev/null || true
+fi
+if [ "$1" = purge ]; then
+    deb-systemd-helper purge bacak-guncel.timer bacak-guncel-onar.service >/dev/null || true
+    deb-systemd-helper unmask bacak-guncel.timer bacak-guncel-onar.service >/dev/null || true
+    rm -rf /var/lib/bacak-guncel
+fi
+exit 0

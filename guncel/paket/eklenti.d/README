@@ -1,0 +1,26 @@
+bacak-guncel harici eklentileri
+================================
+
+Bu dizine (/usr/lib/bacak-guncel/eklenti.d) ya da yerel değişiklikler için
+/etc/bacak-guncel/eklenti.d dizinine konan her çalıştırılabilir dosya bir
+güncelleme kaynağıdır. Ad sırasıyla, apt'tan sonra çalışırlar (10-…, 20-…).
+/etc'deki aynı adlı dosya /usr/lib'dekinin yerine geçer; /etc'de boş bir
+dosya eklentiyi kapatır.
+
+Eklenti tek argümanla çağrılır:
+
+  onar [--cevrimdisi]  Yarıda kalmış uygula'yı toparla. 0 = tamam.
+                       --cevrimdisi: açılışta, ağ yokken.
+  denetle              0 = güncelleme var (stdout'a satır satır özet),
+                       100 = güncel, diğer = hata.
+  indir                Her şeyi indir, ama hiçbir şeyi değiştirme. 0 = tamam.
+                       Kesilebilir (SIGTERM): kaldığı yerden sürebilmeli.
+  dogrula              0 = her şey indirildi ve özetler doğru, 1 = eksik.
+  uygula               Yalnız dogrula 0 dedikten sonra çağrılır. Kapatma
+                       sinyali bu adımı kesmez; yine de elektrik kesilebilir:
+                       değişikliği geçici yerde hazırlayıp tek rename(2) ile
+                       devreye alın, eski sürümü onar için saklayın.
+
+Ortam: BACAK_GUNCEL_DIZIN eklentiye özel kalıcı dizin
+(/var/lib/bacak-guncel/eklenti/<ad>), LC_ALL=C. stderr günlüğe yazılır
+(journalctl -u bacak-guncel).

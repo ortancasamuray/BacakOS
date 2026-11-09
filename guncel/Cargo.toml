@@ -1,0 +1,46 @@
+[package]
+name = "bacak-guncel"
+version = "0.1.0"
+edition = "2021"
+description = "BacakOS otomatik güncelleyici: açılıştan sonra arka planda, sormadan, yarıda kalmaya dayanıklı güncelleme"
+license = "GPL-3.0-or-later"
+authors = ["Anadolu Panteri <bilgi@anadolupanteri.org.tr>"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+libc = "0.2"
+
+[profile.release]
+opt-level = "s"
+lto = "thin"
+codegen-units = 1
+strip = true
+
+[package.metadata.deb]
+revision = "1"
+maintainer = "Anadolu Panteri <bilgi@anadolupanteri.org.tr>"
+copyright = "2026, Anadolu Panteri <bilgi@anadolupanteri.org.tr>"
+section = "admin"
+priority = "optional"
+depends = "$auto, apt, dpkg, systemd"
+extended-description = """\
+Açılıştan kısa süre sonra arka planda, kullanıcıya sormadan BacakOS'u
+günceller. Güncellemeler tamamen indirilip doğrulanmadan kurulum başlamaz;
+kurulum sırasında kapatma ertelenir, çalışan oturumun hizmetleri yeniden
+başlatılmaz (değişiklik sonraki açılışta etkinleşir). Kurulum yine de
+yarıda kalırsa (elektrik kesintisi) sonraki açılışta giriş ekranından önce,
+önbellekte tutulan paketlerle onarılır. Güncelleme kaynakları eklentidir:
+apt yerleşiktir, /usr/lib/bacak-guncel/eklenti.d altındaki çalıştırılabilir
+dosyalar da aynı adımlarla (denetle, indir, dogrula, uygula, onar) çalışır."""
+assets = [
+    ["target/release/bacak-guncel", "usr/bin/", "755"],
+    ["paket/bacak-guncel.conf", "etc/bacak-guncel/", "644"],
+    ["paket/bacak-guncel.service", "lib/systemd/system/", "644"],
+    ["paket/bacak-guncel.timer", "lib/systemd/system/", "644"],
+    ["paket/bacak-guncel-onar.service", "lib/systemd/system/", "644"],
+    ["paket/eklenti.d/README", "usr/lib/bacak-guncel/eklenti.d/", "644"],
+    ["README.md", "usr/share/doc/bacak-guncel/", "644"],
+]
+conf-files = ["/etc/bacak-guncel/bacak-guncel.conf"]
+maintainer-scripts = "paket/debian/"
