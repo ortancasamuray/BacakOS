@@ -172,8 +172,24 @@ impl GreeterClient {
         self.next_step()
     }
 
+    /// Abandon the conversation while a `Prompt` is waiting for an answer.
+    ///
+    /// The daemon answers a cancel inside a conversation with the PAM verdict
+    /// (`AuthResult { success: false }`). That reply must be read here: left in
+    /// the socket, the next [`Self::start_auth`] would take it for its own
+    /// answer and every later login would run one message out of step (the
+    /// "İptal" button on the code prompt used to break all logins until the
+    /// greeter restarted). Any further prompt PAM raises on the way out is
+    /// cancelled the same way.
     pub fn cancel_auth(&mut self) -> Result<()> {
-        self.send(&Request::CancelAuth)
+        self.send(&Request::CancelAuth)?;
+        loop {
+            match self.next_step()? {
+                AuthStep::Done { .. } => return Ok(()),
+                AuthStep::Prompt { .. } => self.send(&Request::CancelAuth)?,
+                AuthStep::Info { .. } => {}
+            }
+        }
     }
 
     /// Launch the chosen session. On success the daemon replies `SessionStarting`
