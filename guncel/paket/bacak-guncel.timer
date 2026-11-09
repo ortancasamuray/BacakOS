@@ -1,0 +1,12 @@
+[Unit]
+Description=BacakOS otomatik güncelleme (açılıştan hemen sonra, sonra 6 saatte bir)
+ConditionKernelCommandLine=!boot=live
+
+[Timer]
+OnBootSec=90s
+OnUnitInactiveSec=6h
+RandomizedDelaySec=60s
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

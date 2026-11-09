@@ -355,6 +355,17 @@ TAHTA_SRC="$HERE/tahta"
 )
 
 # ---------------------------------------------------------------------------
+# bacak-guncel: otomatik güncelleyici (açılıştan sonra arka planda)
+# ---------------------------------------------------------------------------
+log "=== bacak-guncel derleniyor ==="
+(
+    cd "$HERE/guncel"
+    cbuild
+    log "bacak-guncel deb oluşturuluyor"
+    cdeb
+)
+
+# ---------------------------------------------------------------------------
 # yzsunucu: okul içi yapay zekâ sunucusu (tahta "Sor" kartı) — ISO'ya girmez,
 # okulda ekran kartlı tek sunucuya kurulur. yzsunucu-model-indir şimdilik
 # yalnız x86-64 llama.cpp derlemesini indirir.

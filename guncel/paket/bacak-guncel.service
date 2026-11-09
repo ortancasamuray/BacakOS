@@ -1,0 +1,19 @@
+[Unit]
+Description=BacakOS otomatik güncelleme
+Documentation=file:///usr/share/doc/bacak-guncel/README.md
+After=network-online.target time-sync.target bacak-guncel-onar.service
+Wants=network-online.target
+# Canlı (ISO) oturumda güncelleme yapılmaz.
+ConditionKernelCommandLine=!boot=live
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/bacak-guncel calis
+# Kapatmada SIGTERM yalnız ana sürece gider: indirme kesilir, kurulum
+# (dpkg) bitene kadar beklenir. systemd kapatmayı en çok bu kadar erteler.
+KillMode=process
+TimeoutStopSec=30min
+# Arka planda, oturumu yavaşlatmadan.
+Nice=15
+CPUSchedulingPolicy=batch
+IOSchedulingClass=idle

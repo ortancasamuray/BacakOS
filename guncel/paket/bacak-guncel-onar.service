@@ -1,0 +1,22 @@
+[Unit]
+Description=BacakOS yarım kalan güncellemeyi onar
+Documentation=file:///usr/share/doc/bacak-guncel/README.md
+# Yalnız kurulum yarıda kaldıysa (elektrik kesintisi, zorla kapatma).
+ConditionPathExists=/var/lib/bacak-guncel/yarim
+ConditionKernelCommandLine=!boot=live
+After=local-fs.target
+# Giriş ekranı ve oturumlar onarımdan sonra açılır.
+Before=systemd-user-sessions.service display-manager.service bacak-display-manager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/bacak-guncel onar --cevrimdisi
+RemainAfterExit=no
+KillMode=process
+TimeoutStartSec=30min
+TimeoutStopSec=30min
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,21 @@
+#!/bin/sh
+set -e
+if [ "$1" = configure ]; then
+    mkdir -p /var/lib/bacak-guncel
+    chmod 755 /var/lib/bacak-guncel
+    for u in bacak-guncel.timer bacak-guncel-onar.service; do
+        deb-systemd-helper unmask "$u" >/dev/null || true
+        if deb-systemd-helper --quiet was-enabled "$u"; then
+            deb-systemd-helper enable "$u" >/dev/null || true
+        else
+            deb-systemd-helper update-state "$u" >/dev/null || true
+        fi
+    done
+    if [ -d /run/systemd/system ]; then
+        systemctl --system daemon-reload >/dev/null || true
+        # Kendi kendini güncellerken çalışan hizmet yeniden başlatılmaz;
+        # zamanlayıcı ilk kurulumda başlar.
+        deb-systemd-invoke start bacak-guncel.timer >/dev/null || true
+    fi
+fi
+exit 0
