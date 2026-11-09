@@ -65,10 +65,14 @@ impl Apt {
         Ok(!c.basarili() || !c.stdout.trim().is_empty())
     }
 
-    /// İndirilmesi gereken dosyalar (önbellekte olsun olmasın hepsi).
+    /// Planın gerektirdiği bütün .deb dosyaları. apt `--print-uris`
+    /// önbellekte zaten bulunanları listelemez; boş bir önbellek dizini
+    /// gösterilerek hepsi alınır, sonra her biri gerçek önbellekte denetlenir.
     fn dosyalar(&self) -> Sonuc<Vec<Dosya>> {
+        let bos = Path::new(crate::durum::DIZIN).join("bos-arsiv");
+        std::fs::create_dir_all(bos.join("partial"))?;
         let mut c = self.yukseltme();
-        c.arg("--print-uris");
+        c.arg("--print-uris").arg(format!("-oDir::Cache::Archives={}/", bos.display()));
         let cikti = calistir_basarili(&mut c, true)?;
         Ok(uri_listesi(&cikti.stdout))
     }
@@ -126,6 +130,7 @@ impl Eklenti for Apt {
         if ogeler.is_empty() {
             return Ok(None);
         }
+        self.indirme_bayt = self.dosyalar()?.iter().map(|d| d.boyut).sum();
         Ok(Some(Plan { ogeler }))
     }
 
@@ -136,8 +141,11 @@ impl Eklenti for Apt {
         Ok(())
     }
 
-    fn dogrula(&mut self, _plan: &Plan) -> Sonuc<bool> {
+    fn dogrula(&mut self, plan: &Plan) -> Sonuc<bool> {
         let dosyalar = self.dosyalar()?;
+        if dosyalar.is_empty() && !plan.ogeler.is_empty() {
+            return hata("apt: plan var ama paket listesi boş");
+        }
         self.indirme_bayt = dosyalar.iter().map(|d| d.boyut).sum();
         let mut tam = true;
         for d in &dosyalar {
