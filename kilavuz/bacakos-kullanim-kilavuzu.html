@@ -306,6 +306,7 @@
       <div class="group-label">Güvenlik &amp; Yönetim</div>
       <a href="#bacak-onay">Bacak Onay — İki Adımlı Giriş</a>
       <a href="#uzak-yonetim">Uzak Yönetim (Filo)</a>
+      <a href="#guncelleme">Otomatik Güncelleme</a>
     </div>
     <div class="group">
       <div class="group-label">Uygulamalı</div>
@@ -727,8 +728,65 @@
       </div>
     </section>
 
+    <section id="guncelleme">
+      <h2><span class="num">12</span> Otomatik Güncelleme — bacak-guncel</h2>
+      <p class="lede">BacakOS kendini <strong>sormadan, arka planda</strong> günceller. Bilgisayar açıldıktan yaklaşık bir buçuk dakika sonra, ardından 6 saatte bir güncellemeleri denetler; varsa önce hepsini indirir, sonra kurar. Sizin bir şey yapmanız gerekmez, çalışmanız da kesilmez.</p>
+
+      <h3>Kullanıcı olarak bilmeniz gerekenler</h3>
+      <ul>
+        <li><strong>Çalışmanız kesilmez.</strong> Güncelleme düşük öncelikle çalışır; kurulum sırasında açık uygulamalar, giriş ekranı ve masaüstü yeniden başlatılmaz. Yeni sürümler bir sonraki açılışta devreye girer.</li>
+        <li><strong>Kapatma birkaç dakika gecikebilir.</strong> Kurulum sürerken bilgisayarı kapatır ya da yeniden başlatırsanız sistem kurulumun bitmesini bekler (en çok 30 dakika), sonra kapanır. Bu sırada güç düğmesine uzun basmayın.</li>
+        <li><strong>Pille çalışırken</strong> pil %40'ın altındaysa güncellemeler yalnız indirilir; kurulum bilgisayar prize takılınca yapılır.</li>
+        <li><strong>Canlı (USB'den denenen) oturumda</strong> güncelleme yapılmaz.</li>
+      </ul>
+
+      <h3>Güvenlik önlemleri</h3>
+      <div class="card-grid">
+        <div class="card">
+          <h4>Tam inmeden kurulmaz</h4>
+          <p>Bütün paketler önce indirilir, her birinin boyutu ve depodaki özeti tek tek denetlenir. Bir tanesi bile eksik ya da bozuksa kuruluma hiç başlanmaz; indirme bir sonraki çalışmada kaldığı yerden sürer.</p>
+        </div>
+        <div class="card">
+          <h4>Yarım kalırsa onarılır</h4>
+          <p>Elektrik kurulum ortasında kesilirse sonraki açılışta, <strong>giriş ekranından önce</strong>, internet gerekmeden önbellekte tutulan paketlerle sistem tutarlı hâle getirilir. Bu sırada açılış birkaç dakika uzayabilir.</p>
+        </div>
+        <div class="card">
+          <h4>Hiçbir şey silinmez</h4>
+          <p>Yalnızca yükseltme yapılır: paket kaldırmayı gerektiren güncellemeler kurulmaz. Ayar dosyalarında yaptığınız değişiklikler korunur.</p>
+        </div>
+      </div>
+
+      <h3>Durumu görmek</h3>
+      <p>Terminalde <code>bacak-guncel durum</code> son denemeyi, son başarılı güncellemeyi, bekleyen ve en son kurulan paketleri gösterir. Ayrıntılı günlük: <code>journalctl -u bacak-guncel -u bacak-guncel-onar</code>.</p>
+      <table class="kv">
+        <tr><th>Komut</th><th>Ne yapar</th></tr>
+        <tr><td class="k"><code>bacak-guncel durum</code></td><td>Son çalışmanın özeti (yetki gerekmez)</td></tr>
+        <tr><td class="k"><code>sudo bacak-guncel denetle</code></td><td>Bekleyen güncellemeleri listeler, hiçbir şey kurmaz</td></tr>
+        <tr><td class="k"><code>sudo bacak-guncel calis</code></td><td>Döngüyü beklemeden şimdi çalıştırır</td></tr>
+        <tr><td class="k"><code>sudo bacak-guncel onar</code></td><td>Yarım kalmış bir kurulumu elle onarır</td></tr>
+      </table>
+
+      <h3>Ayarlar (yönetici)</h3>
+      <p>Ayarlar <code>/etc/bacak-guncel/bacak-guncel.conf</code> dosyasındadır; değişiklik bir sonraki çalışmada okunur, yeniden başlatma gerekmez.</p>
+      <table class="kv">
+        <tr><th>Ayar</th><th>Varsayılan</th><th>Anlamı</th></tr>
+        <tr><td class="k"><code>etkin</code></td><td>evet</td><td class="d"><code>hayir</code>: güncelleme yapılmaz (yarım kalmış kurulumun onarımı yine yapılır)</td></tr>
+        <tr><td class="k"><code>en_az_pil</code></td><td>40</td><td class="d">Yalnız pille çalışırken kurulum için en az pil doluluğu (%)</td></tr>
+        <tr><td class="k"><code>en_az_bos_mb</code></td><td>500</td><td class="d">Kurulumdan önce diskte ayrılacak en az boş alan (MB)</td></tr>
+        <tr><td class="k"><code>kilit_bekleme_sn</code></td><td>600</td><td class="d">Başka bir paket kurulumu sürüyorsa bekleme süresi (saniye)</td></tr>
+        <tr><td class="k"><code>eklentiler</code></td><td>apt, harici</td><td class="d">Çalışacak güncelleme kaynakları, sırayla</td></tr>
+      </table>
+      <p>Denetim aralığını değiştirmek için <code>sudo systemctl edit bacak-guncel.timer</code> ile <code>[Timer]</code> altında <code>OnUnitInactiveSec=</code> değerini verin. Otomatik güncellemeyi tamamen kapatmak için ayar dosyasında <code>etkin = hayir</code> yeterlidir; zamanlayıcıyı durdurmanız önerilmez, çünkü yarım kalmış kurulumların onarımı da onunla yapılır.</p>
+
+      <h3>Eklentiler (geliştirici)</h3>
+      <p>Güncelleme kaynakları eklentidir. Sistem paketleri (<code>apt</code>) yerleşiktir. <code>/usr/lib/bacak-guncel/eklenti.d/</code> ya da <code>/etc/bacak-guncel/eklenti.d/</code> altına konan her çalıştırılabilir dosya da bir eklentidir: <code>onar</code>, <code>denetle</code>, <code>indir</code>, <code>dogrula</code>, <code>uygula</code> adımlarını argüman olarak alır ve yerleşik eklentiyle aynı kurallara bağlıdır (tam indirilmeden kurulmaz, kurulum kapatmayla kesilmez, yarım kalırsa onarılır). <code>/etc</code>'deki aynı adlı dosya <code>/usr/lib</code>'dekinin yerine geçer; boş bir dosya eklentiyi kapatır. Sözleşmenin ayrıntısı: <code>/usr/lib/bacak-guncel/eklenti.d/README</code>.</p>
+      <div class="note">
+        <strong>Güncellemeler nereden gelir?</strong> Debian güvenlik ve kararlı sürüm güncellemeleri Debian depolarından, BacakOS bileşenleri <code>depo.anadolupanteri.org.tr</code> deposundan gelir. Güncelleyici yalnız sistemde tanımlı apt depolarını (<code>/etc/apt/sources.list</code> ve <code>/etc/apt/sources.list.d/</code>) kullanır.
+      </div>
+    </section>
+
     <section id="dosya-yoneticisi">
-      <h2><span class="num">12</span> Dosya Yöneticisi — altay</h2>
+      <h2><span class="num">13</span> Dosya Yöneticisi — altay</h2>
       <p class="lede">Ev dizininizi ve bağlı sürücüleri gezmek için. Sistem dizinlerine erişimi kapalıdır (sandbox).</p>
 
       <h3>Arşivler</h3>
@@ -762,7 +820,7 @@
     </section>
 
     <section id="belge-goruntuleyici">
-      <h2><span class="num">13</span> Belge Görüntüleyici — bacak-belge</h2>
+      <h2><span class="num">14</span> Belge Görüntüleyici — bacak-belge</h2>
       <p class="lede">PDF, EPUB ve resim dosyaları için tek, birleşik görüntüleyici. PDF sayfalarına ve resimlere kalemle not alabilir, fosforlu kalemle işaretleyebilirsiniz.</p>
       <ul>
         <li><strong>PDF:</strong> sayfa pencereye sığdırılmış açılır; alttaki düğme <b>Sayfaya sığdır</b> ile <b>Genişliğe sığdır</b> arasında geçiş yapar, <b>−</b>/<b>+</b> ile %10–%800 arası yakınlaştırırsınız. Fare tekerleği sayfayı kaydırır, sayfanın sonuna gelince bir sonrakine geçer; Ctrl+tekerlek yakınlaştırır. Parolalı PDF açılırken parolası sorulur.</li>
@@ -782,7 +840,7 @@
     </section>
 
     <section id="tahta">
-      <h2><span class="num">14</span> Dijital Tahta — tahta</h2>
+      <h2><span class="num">15</span> Dijital Tahta — tahta</h2>
       <p class="lede">
         Dokunmatik etkileşimli panellerde ders/sunum yapmak için tasarlanmış,
         wgpu tabanlı tam ekran çizim uygulaması. Açılır açılmaz tam ekrana
@@ -907,7 +965,7 @@
     </section>
 
     <section id="ruzgar">
-      <h2><span class="num">15</span> Web Tarayıcı — Rüzgar</h2>
+      <h2><span class="num">16</span> Web Tarayıcı — Rüzgar</h2>
       <p class="lede">
         Etkileşimli tahtalar için yapılmış, BacakOS'un kendi web tarayıcısı. Adres çubuğu ve
         sekmeler ekranın <strong>altında</strong>, elin uzandığı yerdedir; açık sayfanın üzerine
@@ -954,7 +1012,7 @@
     </section>
 
     <section id="varsayilan-uygulamalar">
-      <h2><span class="num">16</span> Varsayılan Uygulamalar</h2>
+      <h2><span class="num">17</span> Varsayılan Uygulamalar</h2>
       <p class="lede">Dock'ta hazır sabitlenmiş gelen uygulamalar:</p>
       <div class="app-list">
         <div class="card"><span class="app-icon">A</span><div><h4>altay</h4><p>Dosya yöneticisi</p></div></div>
@@ -966,7 +1024,7 @@
     </section>
 
     <section id="sorun-giderme">
-      <h2><span class="num">17</span> Sorun Giderme</h2>
+      <h2><span class="num">18</span> Sorun Giderme</h2>
 
       <h3>Açılışta ekran siyah kalıyor / sürekli yanıp sönen imleç</h3>
       <p>Ctrl+Alt+F2 ile bir metin konsoluna geçip <code>systemctl status bacak-display-manager</code> ve <code>journalctl -u bacak-display-manager</code> ile hata mesajına bakın. Genellikle giriş ekranı servisinin bir önceki oturumu düzgün kapatamamasından kaynaklanır; <code>sudo systemctl restart bacak-display-manager</code> çoğu zaman yeterlidir.</p>
@@ -982,6 +1040,12 @@
 
       <h3>Tahta'da "Sor" yanıt vermiyor</h3>
       <p>Kartta "YZsunucu'ya ulaşılamadı" yazıyorsa tahtanın <code>/etc/tahta/yzsunucu</code> dosyasındaki adresi ve sunucuda <code>systemctl status yzsunucu</code> ile <code>curl http://localhost:8790/durum</code> çıktısını denetleyin ("Model yükleniyor." yanıtı: model açılıyor, birkaç saniye bekleyin). Sunucunun güvenlik duvarında 8790 kapısı okul ağına açık olmalıdır. Ayrıntı: <code>journalctl -u yzsunucu</code> (soruların içeriği günlüğe yazılmaz).</p>
+
+      <h3>Açılış uzun sürdü, ekranda "yarım kalan güncellemeyi onar" yazıyor</h3>
+      <p>Önceki güncelleme elektrik kesintisi ya da zorla kapatma yüzünden yarıda kalmış; sistem giriş ekranından önce kendini onarıyor. Bekleyin, bilgisayarı kapatmayın. Ne olduğunu <code>journalctl -b -u bacak-guncel-onar</code> ile görebilirsiniz. Onarım başarısız olursa bir sonraki açılışta yeniden denenir; elle <code>sudo bacak-guncel onar</code> da çalıştırabilirsiniz — bkz. <a href="#guncelleme">Otomatik Güncelleme</a>.</p>
+
+      <h3>Güncellemeler gelmiyor</h3>
+      <p><code>bacak-guncel durum</code> çıktısındaki "Son hata" satırına bakın. "apt-get update … (ağ yok mu?)" internet bağlantısı yok demektir; "kök dosya sisteminde yer yok" ise diskte yer açın. "Bekleyen" listesi doluysa paketler inmiştir ve pil düşük olduğu için kurulum prize takılmayı bekliyordur. Güncelleyicinin kapatılmadığını <code>/etc/bacak-guncel/bacak-guncel.conf</code> dosyasındaki <code>etkin</code> satırından, zamanlayıcıyı <code>systemctl list-timers bacak-guncel.timer</code> ile denetleyin.</p>
 
       <h3>Uzakel bilgisayarı bulamıyor ya da bağlanmıyor</h3>
       <p>Telefon ile bilgisayarın aynı Wi-Fi ağında olduğundan emin olun (misafir ağları cihazları birbirinden ayırabilir). Bilgisayarda Uzakel servisinin çalıştığını <code>systemctl --user status uzakel-daemon</code> ile kontrol edin; kapalıysa <code>systemctl --user restart uzakel-daemon</code>. Uygulama "bu bilgisayar eşleşmeyi tanımıyor" diyorsa (30 gün kullanılmamış olabilir) Kontrol Merkezi &rarr; Uzakel'e Bağlan ile yeniden eşleştirin.</p>
