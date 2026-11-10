@@ -13,6 +13,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use bacak_remote_proto::crypto::{Cipher, EphemeralKeypair, Opener};
+use bacak_remote_proto::pairing::PairGuard;
 use bacak_remote_proto::{decode, encode, open_message, seal_message, InputEvent, Message};
 use tokio::net::UdpSocket;
 use tokio::sync::Mutex;
@@ -100,6 +101,9 @@ pub async fn run_video_link(
 
     tokio::spawn(async move {
         let mut buf = vec![0u8; 2048];
+        // Wrong-PIN pauses (see `bacak_remote_proto::pairing`): the PIN is
+        // fixed for the session, so unbounded guessing would find it.
+        let mut guard = PairGuard::default();
         loop {
             let (len, from) = match recv_socket.recv_from(&mut buf).await {
                 Ok(v) => v,
@@ -113,8 +117,28 @@ pub async fn run_video_link(
                     let server_keypair = EphemeralKeypair::generate();
                     let server_pubkey = server_keypair.public_bytes;
 
-                    if given_pin != pin {
+                    // While a client is paired, another address may not take
+                    // the session over — the PIN travels in the clear, so
+                    // anyone who saw it could otherwise. The same client may
+                    // re-pair; the operator ends the session to let a new one in.
+                    let taken = recv_session.lock().await.as_ref().is_some_and(|s| s.addr.ip() != from.ip());
+                    let paused = guard.paused(std::time::Instant::now());
+                    let refuse = if taken {
+                        tracing::warn!("client '{client_name}' from {from} refused: another client is paired");
+                        true
+                    } else if let Some(left) = paused {
+                        tracing::warn!("client '{client_name}' from {from} refused: pairing paused for {}s after wrong PINs", left.as_secs());
+                        true
+                    } else if given_pin != pin {
                         tracing::warn!("client '{client_name}' from {from} gave wrong PIN, rejecting");
+                        if let Some(p) = guard.wrong(std::time::Instant::now()) {
+                            tracing::warn!("too many wrong PINs: pairing paused for {}s", p.as_secs());
+                        }
+                        true
+                    } else {
+                        false
+                    };
+                    if refuse {
                         if let Some(tx) = &status_tx {
                             let _ = tx.send(SessionStatus::Rejected { from: from.to_string() });
                         }
@@ -131,6 +155,7 @@ pub async fn run_video_link(
                         continue;
                     }
 
+                    guard.success();
                     let material = server_keypair.derive(client_pubkey, pin, client_pubkey, server_pubkey);
                     let video_keys = material.channel_keys("video");
                     let input_keys = material.channel_keys("input");
