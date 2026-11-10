@@ -6932,7 +6932,9 @@ impl BacakState {
         let status = cc_rasterize(text, &status_text, 12.5, SUB, inner as usize);
 
         let qr_h = if qr.is_some() { QR_PX + GAP } else { 0.0 };
-        let panel_h = PAD + TITLE_H + GAP + qr_h + STATUS_H + GAP + CLOSE_H + PAD;
+        let running = state.is_some();
+        let forget_h = if running { CLOSE_H + GAP } else { 0.0 };
+        let panel_h = PAD + TITLE_H + GAP + qr_h + STATUS_H + GAP + forget_h + CLOSE_H + PAD;
 
         let m = 14.0;
         // Bottom-right, beside the dock, where the Control Center opened.
@@ -6944,6 +6946,12 @@ impl BacakState {
         let close_y = by + panel_h - PAD - CLOSE_H;
         let close_rect = Rect::new(cx, close_y, inner, CLOSE_H);
         let close_label = cc_rasterize(text, "Kapat", 15.0, LABEL, inner as usize);
+        let forget_rect = running.then(|| Rect::new(cx, close_y - GAP - CLOSE_H, inner, CLOSE_H));
+        let forget_label = if running {
+            cc_rasterize(text, "Eşleşmeleri unut", 15.0, LABEL, inner as usize)
+        } else {
+            None
+        };
 
         self.uzakel_panel = Some(crate::plugins::control_center::UzakelPanel {
             output: out,
@@ -6951,17 +6959,28 @@ impl BacakState {
             title,
             qr,
             status,
+            forget_rect,
+            forget_label,
             close_rect,
             close_label,
         });
     }
 
-    /// Handle a pointer/touch press while the Uzakel panel is open. Any tap
-    /// dismisses it — there's only the one QR to look at, no rows to pick
-    /// between.
-    pub fn uzakel_panel_press(&mut self, _px: f32, _py: f32) -> bool {
-        if self.uzakel_panel.take().is_none() {
+    /// Handle a pointer/touch press while the Uzakel panel is open. A tap on
+    /// "Eşleşmeleri unut" revokes every paired phone (the daemon deletes its
+    /// pairing file and restarts, dropping live sessions); any other tap
+    /// dismisses the panel.
+    pub fn uzakel_panel_press(&mut self, px: f32, py: f32) -> bool {
+        let Some(panel) = self.uzakel_panel.take() else {
             return false;
+        };
+        if panel.forget_rect.is_some_and(|r| r.contains(px, py)) {
+            let argv = ["uzakel-daemon".to_string(), "eslesmeleri-unut".to_string()];
+            if crate::launcher::spawn_detached(&argv) {
+                self.show_toast(panel.output, "Uzakel", "Eşleşmiş telefonlar unutuldu; yeniden eşleşmeleri gerekir.");
+            } else {
+                self.show_toast(panel.output, "Uzakel", "Eşleşmeler unutulamadı.");
+            }
         }
         true
     }

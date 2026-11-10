@@ -2475,6 +2475,13 @@ pub(crate) fn render_uzakel_panel(
     let cy = p.close_rect.y + (p.close_rect.h - p.close_label.as_ref().map(|(_, _, h)| *h as f32).unwrap_or(0.0)) / 2.0;
     cc_blit_label(out, renderer, &p.close_label, cx, cy, output_scale, off_x, off_y);
     cc_card(out, renderer, p.close_rect, Color32F::new(1.0, 1.0, 1.0, 0.12), 12.0, output_scale, off_x, off_y);
+    if let Some(r) = p.forget_rect {
+        let lw = p.forget_label.as_ref().map(|(_, w, _)| *w as f32).unwrap_or(0.0);
+        let lh = p.forget_label.as_ref().map(|(_, _, h)| *h as f32).unwrap_or(0.0);
+        cc_blit_label(out, renderer, &p.forget_label, r.x + (r.w - lw) / 2.0, r.y + (r.h - lh) / 2.0, output_scale, off_x, off_y);
+        // Destructive action: a muted red card.
+        cc_card(out, renderer, r, Color32F::new(0.80, 0.25, 0.25, 0.55), 12.0, output_scale, off_x, off_y);
+    }
 
     let panel_col = if state.dark_mode {
         Color32F::new(0.05, 0.08, 0.13, 0.95)
