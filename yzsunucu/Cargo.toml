@@ -17,7 +17,7 @@ codegen-units = 1
 strip = true
 
 [package.metadata.deb]
-revision = "1"
+revision = "2"
 maintainer = "Anadolu Panteri <bilgi@anadolupanteri.org.tr>"
 copyright = "2026, Anadolu Panteri <bilgi@anadolupanteri.org.tr>"
 section = "science"
