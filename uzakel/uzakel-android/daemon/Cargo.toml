@@ -32,7 +32,7 @@ panic = "abort"
 lto = true
 
 [package.metadata.deb]
-revision = "2"
+revision = "3"
 maintainer = "Anadolu Panteri <bilgi@anadolupanteri.org.tr>"
 copyright = "2026, Anadolu Panteri <bilgi@anadolupanteri.org.tr>"
 section = "net"
