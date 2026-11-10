@@ -206,3 +206,77 @@ fn custom_prompt_text() {
     assert_eq!(rc, PAM_SUCCESS);
     assert_eq!(prompts, vec!["bacakonay:qr".to_string(), "Doğrulama kodu: ".to_string()]);
 }
+
+/// The *shipped* Turan auth stack (turan/pam/bacak-display-manager), with
+/// only the module paths swapped: pam_unix → `pw` (pam_permit = right
+/// password, pam_deny = wrong), pam_faillock → real faillock with a private
+/// tally dir (deny=3), pam_bacakonay → the freshly built module.
+/// pam_nologin and pam_gnome_keyring are dropped (host-dependent, no effect
+/// on this flow).
+fn shipped_stack(root: &Path, pw: &str) -> String {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../../turan/pam/bacak-display-manager");
+    let text = std::fs::read_to_string(&src).unwrap_or_else(|e| panic!("{}: {e}", src.display()));
+    let tally = root.join("tally");
+    let mut out = String::new();
+    for line in text.lines() {
+        let l = line.trim();
+        if !(l.starts_with("auth") || l.starts_with("-auth")) {
+            continue;
+        }
+        let l = if l.contains("pam_nologin.so") || l.contains("pam_gnome_keyring.so") {
+            continue;
+        } else if l.contains("pam_faillock.so") {
+            l.replace("pam_faillock.so", &format!("pam_faillock.so dir={} deny=3 unlock_time=600", tally.display()))
+        } else if l.contains("pam_unix.so") {
+            let i = l.find("pam_unix.so").unwrap();
+            format!("{}{pw}", &l[..i])
+        } else if l.contains("pam_bacakonay.so") {
+            l.replace("pam_bacakonay.so", &format!("{} dizin={}", module_path().display(), root.join("store").display()))
+        } else {
+            panic!("unexpected auth line in the shipped stack: {l}");
+        };
+        out.push_str(&l);
+        out.push('\n');
+    }
+    out
+}
+
+/// Once pam_faillock has locked the account, the dialogue must not reveal
+/// whether the password was right: with `auth required pam_faillock.so
+/// preauth` the stack kept going, and a right password reached the Bacak
+/// Onay code prompt (and burned a TOTP step) while a wrong one did not.
+#[test]
+fn locked_account_does_not_reveal_password_correctness() {
+    let root = std::env::temp_dir().join(format!("bacakonay-pam-faillock-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("pam.d")).unwrap();
+    std::fs::create_dir_all(root.join("tally")).unwrap();
+    let secret = Zeroizing::new(otp::generate_secret(20).unwrap());
+    let store = Store::new(root.join("store"));
+    store.save("nobody", &Enrollment { secret: secret.clone(), params: OtpParams::default(), last_step: None }).unwrap();
+    let auth = |pw: &str, code: &str| -> (c_int, Vec<String>) {
+        std::fs::write(root.join("pam.d/bacak-test"), shipped_stack(&root, pw)).unwrap();
+        let mut answers = Answers { code: code.into(), prompts: Vec::new() };
+        let c = PamConv { conv, appdata_ptr: &mut answers as *mut Answers as *mut c_void };
+        let service = CString::new("bacak-test").unwrap();
+        let user = CString::new("nobody").unwrap();
+        let dir = CString::new(root.join("pam.d").to_str().unwrap()).unwrap();
+        let mut h: *mut c_void = std::ptr::null_mut();
+        assert_eq!(unsafe { pam_start_confdir(service.as_ptr(), user.as_ptr(), &c, dir.as_ptr(), &mut h) }, PAM_SUCCESS);
+        let rc = unsafe { pam_authenticate(h, 0) };
+        unsafe { pam_end(h, rc) };
+        (rc, answers.prompts)
+    };
+    for _ in 0..3 {
+        assert_eq!(auth("pam_deny.so", "").0, PAM_AUTH_ERR);
+    }
+    let (rc_bad, wrong_pw) = auth("pam_deny.so", "000000");
+    let code = otp::totp(&secret, &OtpParams::default(), now());
+    let (rc_good, right_pw) = auth("pam_permit.so", &code);
+    let last_step = store.load("nobody").unwrap().unwrap().last_step;
+    let _ = std::fs::remove_dir_all(&root);
+    assert_eq!(rc_bad, PAM_AUTH_ERR);
+    assert_eq!(rc_good, PAM_AUTH_ERR, "a locked account logged in");
+    assert_eq!(wrong_pw, right_pw, "locked account: the dialogue differs by password correctness");
+    assert!(last_step.is_none(), "a locked attempt consumed the TOTP step");
+}
