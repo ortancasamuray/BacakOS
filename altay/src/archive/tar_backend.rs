@@ -76,7 +76,7 @@ impl Backend for TarBackend {
                 // Hard links name another member of the same archive.
                 let target = entry.link_name().map_err(ArchiveError::at(archive))?.unwrap_or_default();
                 let source = safe_join(into, &target)?;
-                let mut src = std::fs::File::open(&source).map_err(ArchiveError::at(&source))?;
+                let mut src = super::open_member_source(into, &source)?;
                 let mut out = create_member_file(into, &out_path)?;
                 io::copy(&mut src, &mut out).map_err(ArchiveError::at(&out_path))?;
             } else if kind.is_file() || kind == tar::EntryType::Continuous {
