@@ -1,38 +1,54 @@
 #!/bin/sh
 # llama.cpp'yi (Vulkan derlemesi, MIT) ve Qwen3-VL 8B modelini (Apache 2.0)
 # indirip kurar. Yaklaşık 6 GB. root olarak çalıştırın.
+#
+# Güvenlik: indirme yalnız root'un erişebildiği bir dizinde yapılır; model
+# dizini root'a aittir (servis yalnız okur), llama.cpp dosyaları root:root
+# kurulur. Eskiden root, servis kullanıcısına ait model dizinine yazıyordu ve
+# ele geçirilmiş bir servis orada bırakacağı sembolik bağla root'a istediği
+# dosyayı yazdırabiliyordu; arşivdeki sahiplik de korunuyordu (uid 1001).
 set -eu
 LLAMA_SURUM="${LLAMA_SURUM:-b12144}"
-MODEL_DEPO="https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF/resolve/main"
-MODEL_DIZIN=/var/lib/yzsunucu/model
-LLAMA_DIZIN=/opt/yzsunucu/llama
+LLAMA_URL="${LLAMA_URL:-https://github.com/ggml-org/llama.cpp/releases/download/$LLAMA_SURUM/llama-$LLAMA_SURUM-bin-ubuntu-vulkan-x64.tar.gz}"
+MODEL_DEPO="${MODEL_DEPO:-https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF/resolve/main}"
+MODEL_DIZIN="${MODEL_DIZIN:-/var/lib/yzsunucu/model}"
+LLAMA_DIZIN="${LLAMA_DIZIN:-/opt/yzsunucu/llama}"
+# Yarım kalan indirme burada sürer (-C -); yalnız root yazabilir.
+INDIRME_DIZIN="${INDIRME_DIZIN:-/var/cache/yzsunucu-indir}"
 
 [ "$(id -u)" = 0 ] || { echo "root olarak çalıştırın: sudo $0" >&2; exit 1; }
 command -v curl >/dev/null || { echo "curl gerekli: apt install curl" >&2; exit 1; }
 
-gecici=$(mktemp -d)
+install -d -m 0700 -o root -g root "$INDIRME_DIZIN"
+gecici=$(mktemp -d "$INDIRME_DIZIN/llama.XXXXXX")
 trap 'rm -rf "$gecici"' EXIT
 
 echo "llama.cpp $LLAMA_SURUM indiriliyor..."
-curl -fL --progress-bar -o "$gecici/llama.tar.gz" \
-  "https://github.com/ggml-org/llama.cpp/releases/download/$LLAMA_SURUM/llama-$LLAMA_SURUM-bin-ubuntu-vulkan-x64.tar.gz"
+curl -fL --progress-bar -o "$gecici/llama.tar.gz" "$LLAMA_URL"
 mkdir -p "$gecici/llama"
-tar -xzf "$gecici/llama.tar.gz" -C "$gecici/llama"
+tar --no-same-owner --no-same-permissions -xzf "$gecici/llama.tar.gz" -C "$gecici/llama"
 kaynak=$(dirname "$(find "$gecici/llama" -name llama-server -type f | head -1)")
 rm -rf "$LLAMA_DIZIN"
 mkdir -p "$LLAMA_DIZIN"
-cp -a "$kaynak"/. "$LLAMA_DIZIN"/
+cp -R --preserve=mode,timestamps "$kaynak"/. "$LLAMA_DIZIN"/
+chown -R root:root "$LLAMA_DIZIN"
+chmod -R go-w "$LLAMA_DIZIN"
 
-mkdir -p "$MODEL_DIZIN"
+# Model dizini root'un: servis kullanıcısı (yzsunucu grubu) yalnız okur.
+install -d -m 0750 -o root -g yzsunucu "$MODEL_DIZIN"
+find "$MODEL_DIZIN" -mindepth 1 -maxdepth 1 -type f -exec chown root:yzsunucu {} + -exec chmod 0640 {} +
 for f in Qwen3VL-8B-Instruct-Q4_K_M.gguf mmproj-Qwen3VL-8B-Instruct-F16.gguf; do
-  if [ -s "$MODEL_DIZIN/$f" ]; then
+  hedef="$MODEL_DIZIN/$f"
+  if [ -f "$hedef" ] && [ ! -L "$hedef" ] && [ -s "$hedef" ]; then
     echo "$f zaten var."
-  else
-    echo "$f indiriliyor..."
-    curl -fL --progress-bar -C - -o "$MODEL_DIZIN/$f.part" "$MODEL_DEPO/$f"
-    mv "$MODEL_DIZIN/$f.part" "$MODEL_DIZIN/$f"
+    continue
   fi
+  echo "$f indiriliyor..."
+  curl -fL --progress-bar -C - -o "$INDIRME_DIZIN/$f.part" "$MODEL_DEPO/$f"
+  rm -f "$hedef" "$hedef.yeni"
+  install -m 0640 -o root -g yzsunucu "$INDIRME_DIZIN/$f.part" "$hedef.yeni"
+  mv -f "$hedef.yeni" "$hedef"
+  rm -f "$INDIRME_DIZIN/$f.part"
 done
-chown -R yzsunucu:yzsunucu /var/lib/yzsunucu 2>/dev/null || true
 
 echo "Kuruldu. Başlatmak için: systemctl enable --now yzsunucu"
