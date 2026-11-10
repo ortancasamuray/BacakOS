@@ -387,6 +387,10 @@ pub struct UzakelPanel {
     /// showing, or an explanation of why it isn't ("Uzakel daemon
     /// çalışmıyor").
     pub status: Option<(MemoryRenderBuffer, usize, usize)>,
+    /// "Eşleşmeleri unut": revokes every paired phone (only once the
+    /// daemon is running).
+    pub forget_rect: Option<Rect>,
+    pub forget_label: Option<(MemoryRenderBuffer, usize, usize)>,
     pub close_rect: Rect,
     pub close_label: Option<(MemoryRenderBuffer, usize, usize)>,
 }
