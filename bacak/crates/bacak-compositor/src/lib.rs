@@ -43,7 +43,6 @@ pub mod launcher;
 
 #[cfg(feature = "runtime")]
 pub mod controls;
-pub mod bluetooth;
 
 #[cfg(feature = "runtime")]
 pub mod state;

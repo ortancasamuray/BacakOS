@@ -1921,7 +1921,6 @@ pub(crate) fn render_control_center(
 
     let on_for = |action: crate::state::CcAction| match action {
         crate::state::CcAction::WifiToggle => cc.wifi_on,
-        crate::state::CcAction::BtToggle => cc.bt_on,
         crate::state::CcAction::DarkToggle => state.dark_mode,
         crate::state::CcAction::EthernetSettings => cc.eth_on,
         _ => false,
@@ -2180,125 +2179,6 @@ pub(crate) fn render_wifi_panel(
         Color32F::new(0.20, 0.22, 0.27, 0.95)
     };
     cc_card(out, renderer, p.panel, panel_col, 22.0, output_scale, off_x, off_y);
-}
-
-/// Render the native Bluetooth picker: header + on/off switch, device list, and
-/// (when active) a modal pairing dialog. Same three-pass front-to-back order.
-pub(crate) fn render_bt_panel(
-    state: &BacakState,
-    renderer: &mut GlesRenderer,
-    output: OutputId,
-    output_scale: i32,
-    off_x: i32,
-    off_y: i32,
-    out: &mut Vec<BacakElements>,
-) {
-    let Some(p) = state.bt_panel.as_ref() else { return };
-    if p.output != output {
-        return;
-    }
-    let row_col = Color32F::new(1.0, 1.0, 1.0, 0.08);
-    let connected = Color32F::new(0.42, 0.78, 0.80, 0.96);
-    let off_col = Color32F::new(0.92, 0.30, 0.30, 0.30);
-    let accent = Color32F::new(0.30, 0.62, 0.78, 0.95);
-
-    // --- pass 1: labels (front) ---
-    cc_blit_label(out, renderer, &p.title, p.panel.x + 18.0, p.panel.y + 14.0, output_scale, off_x, off_y);
-    cc_blit_label(out, renderer, &p.status, p.panel.x + 18.0, p.panel.y + 46.0, output_scale, off_x, off_y);
-    // Header switch knob.
-    {
-        let s = p.switch_rect;
-        let knob = s.h - 6.0;
-        let kx = if p.powered { s.x + s.w - knob - 3.0 } else { s.x + 3.0 };
-        cc_card(out, renderer, Rect::new(kx, s.y + 3.0, knob, knob), Color32F::new(1.0, 1.0, 1.0, 0.98), knob / 2.0, output_scale, off_x, off_y);
-    }
-    for row in &p.rows {
-        let r = row.rect;
-        let is_header = matches!(row.action, crate::state::BtAction::Header);
-        // Header label sits at the left, small; rows stack name + meta.
-        if let Some((_, _, h)) = &row.label {
-            let ly = r.y + (r.h - *h as f32) / 2.0;
-            let lx = if is_header { r.x + 4.0 } else { r.x + 14.0 };
-            cc_blit_label(out, renderer, &row.label, lx, ly, output_scale, off_x, off_y);
-        }
-        if let Some((_, _, h)) = &row.meta {
-            // Meta as a small second line under the name (left-aligned).
-            let my = r.y + r.h - *h as f32 - 7.0;
-            cc_blit_label(out, renderer, &row.meta, r.x + 14.0, my, output_scale, off_x, off_y);
-        }
-        // "Unut" button label on a paired row.
-        if let Some((fr, flbl)) = &row.forget {
-            if let Some((_, w, h)) = flbl {
-                let lx = fr.x + (fr.w - *w as f32) / 2.0;
-                let ly = fr.y + (fr.h - *h as f32) / 2.0;
-                cc_blit_label(out, renderer, flbl, lx, ly, output_scale, off_x, off_y);
-            }
-        }
-        // "Gönder" button label on a connected paired row.
-        if let Some((sr, slbl)) = &row.send {
-            if let Some((_, w, h)) = slbl {
-                let lx = sr.x + (sr.w - *w as f32) / 2.0;
-                let ly = sr.y + (sr.h - *h as f32) / 2.0;
-                cc_blit_label(out, renderer, slbl, lx, ly, output_scale, off_x, off_y);
-            }
-        }
-    }
-
-    // --- pass 2: cards (headers get no card) ---
-    for row in &p.rows {
-        if matches!(row.action, crate::state::BtAction::Header) {
-            continue;
-        }
-        let col = if row.connected { connected } else { row_col };
-        cc_card(out, renderer, row.rect, col, 12.0, output_scale, off_x, off_y);
-        // "Unut" ve "Gönder" sub-butonları hafif arka plan tonu alır.
-        if let Some((fr, _)) = &row.forget {
-            cc_card(out, renderer, *fr, Color32F::new(0.0, 0.0, 0.0, 0.18), 12.0, output_scale, off_x, off_y);
-        }
-        if let Some((sr, _)) = &row.send {
-            cc_card(out, renderer, *sr, Color32F::new(0.0, 0.12, 0.25, 0.22), 12.0, output_scale, off_x, off_y);
-        }
-    }
-    {
-        let s = p.switch_rect;
-        let track = if p.powered { accent } else { Color32F::new(1.0, 1.0, 1.0, 0.16) };
-        cc_card(out, renderer, s, track, s.h / 2.0, output_scale, off_x, off_y);
-    }
-
-    // --- pass 3: panel backdrop ---
-    let panel_col = if state.dark_mode {
-        Color32F::new(0.05, 0.08, 0.13, 0.95)
-    } else {
-        Color32F::new(0.20, 0.22, 0.27, 0.95)
-    };
-    cc_card(out, renderer, p.panel, panel_col, 22.0, output_scale, off_x, off_y);
-
-    // --- pairing dialog (modal overlay, drawn on top of everything) ---
-    if p.dialog.is_some() {
-        // Geometry computed in `bt_open_dialog` so render and hit-test agree.
-        let dlg = p.dlg_rect;
-        // front: labels + buttons
-        cc_blit_label(out, renderer, &p.dialog_title, dlg.x + 16.0, dlg.y + 16.0, output_scale, off_x, off_y);
-        cc_blit_label(out, renderer, &p.dialog_body, dlg.x + 16.0, dlg.y + 52.0, output_scale, off_x, off_y);
-        // centred button labels
-        for (lbl, r) in [(&p.dlg_ok_label, p.dlg_ok_rect), (&p.dlg_cancel_label, p.dlg_cancel_rect)] {
-            if let Some((_, w, h)) = lbl {
-                let lx = r.x + (r.w - *w as f32) / 2.0;
-                let ly = r.y + (r.h - *h as f32) / 2.0;
-                cc_blit_label(out, renderer, lbl, lx, ly, output_scale, off_x, off_y);
-            }
-        }
-        // button cards
-        cc_card(out, renderer, p.dlg_ok_rect, accent, 12.0, output_scale, off_x, off_y);
-        cc_card(out, renderer, p.dlg_cancel_rect, off_col, 12.0, output_scale, off_x, off_y);
-        // dialog backdrop
-        let dbg = if state.dark_mode {
-            Color32F::new(0.10, 0.13, 0.18, 0.99)
-        } else {
-            Color32F::new(0.16, 0.18, 0.23, 0.99)
-        };
-        cc_card(out, renderer, dlg, dbg, 18.0, output_scale, off_x, off_y);
-    }
 }
 
 /// Render the audio output device picker when open. Simple vertical list of

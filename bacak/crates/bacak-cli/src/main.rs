@@ -73,7 +73,7 @@ enum Cmd {
         op: OskOp,
     },
 
-    /// Device controls — audio, Wi-Fi, Bluetooth (uses the in-memory mock).
+    /// Device controls — audio, Wi-Fi (uses the in-memory mock).
     Device {
         #[command(subcommand)]
         op: DeviceOp,
@@ -187,11 +187,6 @@ enum DeviceOp {
         #[command(subcommand)]
         op: NetOp,
     },
-    /// Bluetooth controls.
-    Bt {
-        #[command(subcommand)]
-        op: BtOp,
-    },
 }
 
 #[derive(Subcommand)]
@@ -225,22 +220,6 @@ enum NetOp {
     },
     /// Disconnect from the current network.
     Disconnect,
-}
-
-#[derive(Subcommand)]
-enum BtOp {
-    /// Print Bluetooth state and known devices.
-    State,
-    /// Enable or disable the Bluetooth radio.
-    Toggle { state: Toggle },
-    /// Start or stop discovery.
-    Scan { state: Toggle },
-    /// Pair with a device by MAC.
-    Pair { mac: String },
-    /// Connect to a device by MAC.
-    Connect { mac: String },
-    /// Disconnect a device by MAC.
-    Disconnect { mac: String },
 }
 
 #[derive(Subcommand)]
@@ -751,7 +730,6 @@ fn cmd_device(op: DeviceOp, as_json: bool) -> Result<()> {
     match op {
         DeviceOp::Sound { op } => cmd_sound(&p, op, as_json),
         DeviceOp::Net   { op } => cmd_net(&p, op, as_json),
-        DeviceOp::Bt    { op } => cmd_bt(&p, op, as_json),
     }
 }
 
@@ -855,62 +833,6 @@ fn cmd_net(p: &MockProvider, op: NetOp, as_json: bool) -> Result<()> {
         NetOp::Disconnect => {
             p.wifi_disconnect()?;
             print_or_json(as_json, &p.wifi_state()?, || "Disconnected".into())?;
-        }
-    }
-    Ok(())
-}
-
-fn cmd_bt(p: &MockProvider, op: BtOp, as_json: bool) -> Result<()> {
-    match op {
-        BtOp::State => {
-            let s = p.bt_state()?;
-            if as_json {
-                println!("{}", serde_json::to_string_pretty(&s)?);
-            } else {
-                println!(
-                    "Bluetooth:    {}",
-                    if s.enabled { "on" } else { "off" }
-                );
-                println!("Discovering:  {}", if s.discovering { "yes" } else { "no" });
-                println!("Device name:  {}\n", s.device_name);
-                println!("{:<22} {:<12} {:<8} {:<10} {}", "Name", "Kind", "Paired", "Connected", "Battery");
-                for d in &s.devices {
-                    println!(
-                        "{:<22} {:<12} {:<8} {:<10} {}",
-                        d.name,
-                        format!("{:?}", d.kind),
-                        if d.paired { "yes" } else { "no" },
-                        if d.connected { "yes" } else { "no" },
-                        d.battery.map(|b| format!("{b}%")).unwrap_or_else(|| "—".into()),
-                    );
-                }
-            }
-        }
-        BtOp::Toggle { state } => {
-            let on = state.as_bool();
-            p.set_bt_enabled(on)?;
-            print_or_json(as_json, &p.bt_state()?, || {
-                format!("Bluetooth {}", if on { "enabled" } else { "disabled" })
-            })?;
-        }
-        BtOp::Scan { state } => {
-            let on = state.as_bool();
-            p.bt_scan(on)?;
-            print_or_json(as_json, &p.bt_state()?, || {
-                format!("Scan {}", if on { "started" } else { "stopped" })
-            })?;
-        }
-        BtOp::Pair { mac } => {
-            p.bt_pair(&mac).with_context(|| format!("pair({mac})"))?;
-            print_or_json(as_json, &p.bt_state()?, || format!("Paired {mac}"))?;
-        }
-        BtOp::Connect { mac } => {
-            p.bt_connect(&mac).with_context(|| format!("connect({mac})"))?;
-            print_or_json(as_json, &p.bt_state()?, || format!("Connected {mac}"))?;
-        }
-        BtOp::Disconnect { mac } => {
-            p.bt_disconnect(&mac).with_context(|| format!("disconnect({mac})"))?;
-            print_or_json(as_json, &p.bt_state()?, || format!("Disconnected {mac}"))?;
         }
     }
     Ok(())

@@ -646,17 +646,6 @@ fn forward_input(
                             }
                         }
                     }
-                    // Bluetooth PIN / passkey entry from a physical keyboard.
-                    if state.bt_pin_active() && !mods.ctrl && !mods.logo && !mods.alt {
-                        if let Some(raw) = raw {
-                            let utf = smithay::input::keyboard::xkb::keysym_to_utf8(
-                                keysym.modified_sym(),
-                            );
-                            if state.bt_pin_key(raw, &utf) {
-                                return FilterResult::Intercept(());
-                            }
-                        }
-                    }
                     FilterResult::Forward
                 },
             );
