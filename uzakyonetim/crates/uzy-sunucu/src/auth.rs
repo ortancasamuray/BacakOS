@@ -99,7 +99,28 @@ impl LoginLimiter {
     }
 
     fn keys(ip: IpAddr, user: &str) -> [String; 2] {
-        [format!("ip:{ip}"), format!("u:{}", user.to_lowercase())]
+        // The name is client-supplied: bound what a key can hold.
+        let user: String = user.to_lowercase().chars().take(64).collect();
+        [format!("ip:{ip}"), format!("u:{user}")]
+    }
+
+    /// Checks the limit and counts this attempt in one step; false if the
+    /// limit is already reached. The login check is slow (Argon2) and runs
+    /// after an `.await`: with a separate blocked()/fail() pair, concurrent
+    /// requests all passed the check before any failure was counted, so a
+    /// burst could try far more than `max` TOTP codes. Call `success` when
+    /// the attempt succeeds; a failure needs nothing more.
+    pub fn try_acquire(&self, ip: IpAddr, user: &str) -> bool {
+        let mut m = self.map.lock().unwrap();
+        m.retain(|_, (_, t)| t.elapsed() < Self::WINDOW);
+        let keys = Self::keys(ip, user);
+        if keys.iter().any(|k| m.get(k).is_some_and(|(n, _)| *n >= self.max)) {
+            return false;
+        }
+        for k in keys {
+            m.entry(k).or_insert((0, Instant::now())).0 += 1;
+        }
+        true
     }
 
     pub fn blocked(&self, ip: IpAddr, user: &str) -> bool {
@@ -208,6 +229,28 @@ mod tests {
         assert!(l.blocked(ip, "a"));
         assert!(l.blocked(ip, "baska"), "aynı IP'den başka kullanıcı da engellenmeli");
         assert!(l.blocked("10.0.0.10".parse().unwrap(), "A"), "aynı kullanıcı başka IP'den de engellenmeli");
+    }
+
+    /// Concurrent attempts must not get past the limit: each one is counted
+    /// before the slow check runs.
+    #[test]
+    fn try_acquire_counts_before_the_check() {
+        let l = std::sync::Arc::new(LoginLimiter::default());
+        let ip: IpAddr = "10.0.0.9".parse().unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(40));
+        let handles: Vec<_> = (0..40)
+            .map(|_| {
+                let (l, b) = (l.clone(), barrier.clone());
+                std::thread::spawn(move || {
+                    b.wait();
+                    l.try_acquire(ip, "yonetici")
+                })
+            })
+            .collect();
+        let allowed = handles.into_iter().map(|h| h.join().unwrap()).filter(|ok| *ok).count();
+        assert_eq!(allowed, 5, "a burst of 40 got {allowed} attempts past a limit of 5");
+        l.success(ip, "yonetici");
+        assert!(l.try_acquire(ip, "yonetici"), "success must clear the count");
     }
 
     #[test]

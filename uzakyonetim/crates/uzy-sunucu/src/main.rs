@@ -46,6 +46,9 @@ pub struct Config {
     pub panel_anahtar: Option<PathBuf>,
 }
 
+/// Pre-auth Argon2 verifications at once (~19 MiB each).
+pub const ARGON_ESZAMANLI: usize = 4;
+
 pub struct App {
     pub db: db::Db,
     pub ca: Mutex<ca::Ca>,
@@ -57,6 +60,8 @@ pub struct App {
     pub login_limit: auth::LoginLimiter,
     /// "Parolamı unuttum" attempts: code only, so stricter than `login_limit`.
     pub recover_limit: auth::LoginLimiter,
+    /// Concurrent pre-auth password verifications (Argon2) allowed at once.
+    pub argon_izin: tokio::sync::Semaphore,
     pub pending_admins: admins::Pending,
     pub cfg: Config,
     pub data: PathBuf,
@@ -249,6 +254,7 @@ async fn serve() -> Result<(), String> {
         sessions: Default::default(),
         login_limit: Default::default(),
         recover_limit: auth::LoginLimiter::with_max(3),
+        argon_izin: tokio::sync::Semaphore::new(ARGON_ESZAMANLI),
         pending_admins: Default::default(),
         cfg: cfg.clone(),
         data: dir.clone(),

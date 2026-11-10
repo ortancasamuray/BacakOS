@@ -124,7 +124,14 @@ async fn login(
     let ip = peer.ip();
     // The name is whatever the client typed: keep the audit log readable.
     let kim: String = req.kullanici.chars().filter(|c| !c.is_control()).take(64).collect();
-    if app.login_limit.blocked(ip, &req.kullanici) {
+    // Pre-auth Argon2 (~19 MiB each) on the blocking pool: bound how many
+    // run at once, or a burst of logins can exhaust the server's memory.
+    // Taken before the limiter, so a refused request costs no attempt.
+    let Ok(_izin) = app.argon_izin.try_acquire() else {
+        return ApiError(StatusCode::SERVICE_UNAVAILABLE, "Sunucu meşgul, birkaç saniye sonra tekrar deneyin.".into())
+            .into_response();
+    };
+    if !app.login_limit.try_acquire(ip, &req.kullanici) {
         return ApiError(StatusCode::TOO_MANY_REQUESTS, "Çok fazla hatalı deneme. 15 dakika sonra tekrar deneyin.".into())
             .into_response();
     }
@@ -134,7 +141,7 @@ async fn login(
         tokio::task::spawn_blocking(move || auth::verify_login(&app.db, &u, &p, &k)).await.unwrap_or(false)
     };
     if !ok {
-        app.login_limit.fail(ip, &req.kullanici);
+        // Already counted by try_acquire.
         app.db.audit(&kim, "-", "giris", &ip.to_string(), "red");
         return ApiError(StatusCode::UNAUTHORIZED, "Kullanıcı adı, parola ya da Bacak Onay kodu hatalı.".into())
             .into_response();

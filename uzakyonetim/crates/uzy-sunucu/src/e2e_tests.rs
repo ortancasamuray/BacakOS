@@ -35,6 +35,7 @@ async fn start() -> Fixture {
         sessions: auth::Sessions::default(),
         login_limit: Default::default(),
         recover_limit: auth::LoginLimiter::with_max(3),
+        argon_izin: tokio::sync::Semaphore::new(crate::ARGON_ESZAMANLI),
         pending_admins: Default::default(),
         cfg: Config {
             adresler: vec!["127.0.0.1".into()],
