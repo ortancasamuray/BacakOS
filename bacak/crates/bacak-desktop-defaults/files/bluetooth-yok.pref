@@ -1,0 +1,5 @@
+# BacakOS Bluetooth desteği içermez: Bluetooth yığını öneri ya da bağımlılık
+# yoluyla yeniden kurulmasın.
+Package: bluez bluez-obexd blueman pulseaudio-module-bluetooth libspa-0.2-bluetooth gnome-bluetooth*
+Pin: version *
+Pin-Priority: -1

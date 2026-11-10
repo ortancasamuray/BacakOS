@@ -18,7 +18,6 @@ use crate::wm::{OutputId, Rect};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CcAction {
     WifiToggle,
-    BtToggle,
     /// Open the Ethernet settings panel (manage + details, like Wi-Fi).
     EthernetSettings,
     DarkToggle,
@@ -74,7 +73,7 @@ pub struct CcTile {
 }
 
 /// macOS-style Control Center opened from the dock's gear button. Rebuilt fresh
-/// on each open (so it reflects live Wi-Fi/Bluetooth/volume state); toggling a
+/// on each open (so it reflects live Wi-Fi/volume state); toggling a
 /// tile mutates the snapshot fields in place — the renderer reads them directly.
 pub struct ControlCenter {
     pub output: OutputId,
@@ -86,7 +85,6 @@ pub struct ControlCenter {
     pub clock: Option<(MemoryRenderBuffer, usize, usize)>,
     // Live snapshot, captured at open and mutated by clicks.
     pub wifi_on: bool,
-    pub bt_on: bool,
     pub volume: f32,
     pub muted: bool,
     pub mic_volume: f32,
@@ -232,106 +230,6 @@ pub enum WifiMsg {
     Applied { details: crate::controls::WifiDetails, err: Option<String> },
 }
 
-// ----- Bluetooth panel -------------------------------------------------------
-
-/// One discovered/known Bluetooth device.
-#[derive(Clone)]
-pub struct BtDevice {
-    pub mac: String,
-    pub name: String,
-    pub paired: bool,
-    pub connected: bool,
-    /// Batarya yüzdesi (0-100), desteklemiyorsa None.
-    pub battery: Option<u8>,
-    /// BlueZ icon adı: "phone", "audio-headset", "input-keyboard", vb.
-    pub icon: String,
-}
-
-/// What tapping a Bluetooth row does (resolved from the device's state).
-#[derive(Clone)]
-pub enum BtAction {
-    /// Pair (+ trust + connect) a new device.
-    Pair(String),
-    /// Connect an already-paired device.
-    Connect(String),
-    /// Disconnect a connected device.
-    Disconnect(String),
-    /// Forget (unpair/remove) a paired device.
-    Forget(String),
-    /// A non-tappable section header row.
-    Header,
-    /// Start a fresh device discovery ("Cihazları Tara").
-    Scan,
-    /// Toggle the adapter via the header switch.
-    TogglePower,
-    /// Dismiss the panel.
-    Close,
-    /// Send a file to this (connected) device via bluetooth-sendto.
-    SendFile(String),
-}
-
-/// One row in the Bluetooth device list.
-pub struct BtRow {
-    pub rect: Rect,
-    pub action: BtAction,
-    pub label: Option<(MemoryRenderBuffer, usize, usize)>,
-    pub meta: Option<(MemoryRenderBuffer, usize, usize)>,
-    /// `true` for the connected device (accent highlight).
-    pub connected: bool,
-    /// For a paired row: the right-edge "Unut" (forget) hit rect + label.
-    pub forget: Option<(Rect, crate::state::Label)>,
-    /// For a connected paired row: "Dosya Gönder" hit rect + label (left of forget).
-    pub send: Option<(Rect, crate::state::Label)>,
-}
-
-/// An in-progress pairing agent prompt overlaid on the panel.
-#[derive(Clone)]
-pub enum BtDialogKind {
-    /// Confirm the displayed passkey matches the peer (yes/no).
-    ConfirmPasskey(String),
-    /// Show a passkey/PIN for the user to enter on the peer (acknowledge).
-    DisplayPasskey(String),
-    /// Type a PIN code on this side (via the keyboard).
-    EnterPin,
-    /// Type a numeric passkey on this side.
-    EnterPasskey,
-    /// Dosya yolu giriş diyaloğu — obexd OPP ile gönder.
-    SendFile { mac: String },
-}
-
-/// Native Bluetooth picker, opened from the Control-Center Bluetooth tile.
-pub struct BtPanel {
-    pub output: OutputId,
-    pub panel: Rect,
-    pub title: Option<(MemoryRenderBuffer, usize, usize)>,
-    pub status: Option<(MemoryRenderBuffer, usize, usize)>,
-    pub rows: Vec<BtRow>,
-    pub powered: bool,
-    pub switch_rect: Rect,
-    /// Latest known devices (kept so a re-render needs no re-scan).
-    pub devices: Vec<BtDevice>,
-    pub scanning: bool,
-    /// When scanning auto-stops (so the list settles and "Kapat" stops moving
-    /// under the finger). `None` when not scanning.
-    pub scan_deadline: Option<std::time::Instant>,
-    /// MAC currently being paired/connected (status spinner). While `Some`, the
-    /// list is frozen (no relayout) so pairing isn't disturbed.
-    pub busy: Option<String>,
-    /// Active pairing dialog, if any.
-    pub dialog: Option<BtDialogKind>,
-    /// Title/body of the dialog, pre-rasterised.
-    pub dialog_title: Option<(MemoryRenderBuffer, usize, usize)>,
-    pub dialog_body: Option<(MemoryRenderBuffer, usize, usize)>,
-    /// PIN/passkey typed so far (EnterPin/EnterPasskey dialogs).
-    pub pin_buf: String,
-    /// Dialog box + button rects (computed together so render and hit-test agree).
-    pub dlg_rect: Rect,
-    pub dlg_ok_rect: Rect,
-    pub dlg_cancel_rect: Rect,
-    pub dlg_ok_label: Option<(MemoryRenderBuffer, usize, usize)>,
-    pub dlg_cancel_label: Option<(MemoryRenderBuffer, usize, usize)>,
-}
-
 // ----- Audio device panel -----------------------------------------------
 
 /// What tapping an audio device row does.
@@ -401,7 +299,6 @@ pub struct UzakelPanel {
 #[derive(Clone)]
 pub struct CcSnapshot {
     pub wifi_on: bool,
-    pub bt_on: bool,
     pub eth_connected: bool,
     pub volume: f32,
     pub muted: bool,

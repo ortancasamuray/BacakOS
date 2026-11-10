@@ -1,4 +1,4 @@
-//! Network settings plugin — WiFi, Bluetooth, Ethernet panels in the
+//! Network settings plugin — WiFi and Ethernet panels in the
 //! Control Center. Enabled when `/usr/share/bacak/plugins/network.plugin`
 //! is installed (provided by the `bacak-plugin-network` package).
 use smithay::backend::renderer::gles::GlesRenderer;
@@ -31,12 +31,12 @@ impl Plugin for NetworkPlugin {
 
     fn on_pointer_press(&self, ctx: &mut PluginCtx, gx: f64, gy: f64) -> bool {
         let s = ctx.state();
-        s.wifi_panel_press(gx as f32, gy as f32) || s.bt_panel_press(gx as f32, gy as f32)
+        s.wifi_panel_press(gx as f32, gy as f32)
     }
 
     fn on_touch_press(&self, ctx: &mut PluginCtx, tx: f32, ty: f32, _slot: i32) -> bool {
         let s = ctx.state();
-        s.wifi_panel_press(tx, ty) || s.bt_panel_press(tx, ty)
+        s.wifi_panel_press(tx, ty)
     }
 
     fn render(
@@ -50,6 +50,5 @@ impl Plugin for NetworkPlugin {
         out: &mut Vec<BacakElements>,
     ) {
         crate::render::render_wifi_panel(state, renderer, output, scale, off_x, off_y, out);
-        crate::render::render_bt_panel(state, renderer, output, scale, off_x, off_y, out);
     }
 }

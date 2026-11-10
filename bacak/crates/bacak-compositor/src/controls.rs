@@ -1,7 +1,7 @@
 //! System-control shims for the Control Center tiles.
 //!
 //! Every function is *best-effort*: it shells out to a standard CLI
-//! (`nmcli`, `bluetoothctl`, `wpctl`, `systemctl`) and silently swallows
+//! (`nmcli`, `wpctl`, `systemctl`) and silently swallows
 //! a missing tool or a non-zero exit. A desktop without NetworkManager
 //! or PipeWire still runs — the matching tile just reflects no change
 //! rather than crashing the compositor.
@@ -733,21 +733,6 @@ pub fn wifi_set_static(conn: &str, ip_prefix: &str, gateway: &str, dns: &str) ->
         run_ok(IP, &["route", "replace", "default", "via", gateway, "dev", &dev]);
     }
     Ok(())
-}
-
-// ----- Bluetooth -------------------------------------------------------
-
-pub fn bt_enabled() -> bool {
-    capture("bluetoothctl", &["show"])
-        .map(|s| {
-            s.lines()
-                .any(|l| l.trim().eq_ignore_ascii_case("Powered: yes"))
-        })
-        .unwrap_or(false)
-}
-
-pub fn set_bt(on: bool) {
-    run_ok("bluetoothctl", &["power", if on { "on" } else { "off" }]);
 }
 
 // ----- Volume (PipeWire / WirePlumber) ---------------------------------
