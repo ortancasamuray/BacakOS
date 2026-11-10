@@ -12,6 +12,7 @@
 //! `uzakel`'s daemon uses.
 
 pub mod crypto;
+pub mod pairing;
 
 use serde::{Deserialize, Serialize};
 
