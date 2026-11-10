@@ -237,6 +237,12 @@ async fn handle(socket: &UdpSocket, buf: &[u8], from: SocketAddr, ctx: &mut Ctx<
                     trust.trust(from.ip(), c2s, s2c);
                     ctx.pairings.touch(&req.client_id);
                     info!(%from, "session resumed without a PIN");
+                    // The phone can now type and click in this session: say
+                    // so on screen, as the PIN pairing itself does.
+                    let msg = format!("Eşleşmiş bir telefon bağlandı ({}). Tanımıyorsanız: Denetim Merkezi → Uzakel → Eşleşmeleri unut", from.ip());
+                    std::thread::spawn(move || {
+                        let _ = Command::new("notify-send").arg("Uzakel").arg(&msg).status();
+                    });
                     ResumeResponse {
                         accepted: true,
                         daemon_nonce,

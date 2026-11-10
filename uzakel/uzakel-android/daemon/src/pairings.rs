@@ -9,6 +9,10 @@
 //!
 //! Pairings unused for [`MAX_IDLE_SECS`] (30 days) are pruned — a phone
 //! that was lost, reset or simply stopped being used drops off on its own.
+//! Every pairing also ends [`MAX_AGE_SECS`] (90 days) after it was made,
+//! however often it is used: a phone cannot keep its access alive forever
+//! just by reconnecting. The desktop can forget all pairings at once
+//! (`uzakel-daemon eslesmeleri-unut`, the Control Center Uzakel panel).
 
 use std::collections::{HashMap, VecDeque};
 use std::io::Write;
@@ -22,6 +26,7 @@ use tracing::{info, warn};
 use crate::resume::{CLIENT_ID_LEN, NONCE_LEN};
 
 pub const MAX_IDLE_SECS: u64 = 30 * 24 * 60 * 60;
+pub const MAX_AGE_SECS: u64 = 90 * 24 * 60 * 60;
 /// Remember this many recent client nonces per pairing to refuse replays.
 const RECENT_NONCES: usize = 64;
 
@@ -138,12 +143,14 @@ impl Pairings {
         }
     }
 
-    /// Drop pairings idle longer than [`MAX_IDLE_SECS`]. Returns how many.
+    /// Drop pairings idle longer than [`MAX_IDLE_SECS`] or older than
+    /// [`MAX_AGE_SECS`]. Returns how many.
     pub fn prune(&self) -> usize {
         let mut g = self.0.lock().unwrap();
-        let cutoff = now().saturating_sub(MAX_IDLE_SECS);
+        let t = now();
+        let (idle, old) = (t.saturating_sub(MAX_IDLE_SECS), t.saturating_sub(MAX_AGE_SECS));
         let before = g.map.len();
-        g.map.retain(|_, p| p.last_used >= cutoff);
+        g.map.retain(|_, p| p.last_used >= idle && p.paired_at >= old);
         let n = before - g.map.len();
         if n > 0 {
             let dead: Vec<ClientId> = g.recent.keys().filter(|k| !g.map.contains_key(*k)).copied().collect();
@@ -158,6 +165,14 @@ impl Pairings {
     #[cfg(test)]
     fn len(&self) -> usize {
         self.0.lock().unwrap().map.len()
+    }
+
+    #[cfg(test)]
+    fn age(&self, cid: &ClientId, secs: u64) {
+        let mut g = self.0.lock().unwrap();
+        if let Some(p) = g.map.get_mut(cid) {
+            p.paired_at = p.paired_at.saturating_sub(secs);
+        }
     }
 
     #[cfg(test)]
@@ -227,6 +242,20 @@ mod tests {
         assert_eq!(a.len(), 1);
         assert_eq!(Pairings::load(Some(p.clone())).len(), 1, "budama diske de yazılmalı");
         let _ = std::fs::remove_dir_all(p.parent().unwrap());
+    }
+
+    /// Reconnecting renews `last_used` but never `paired_at`: a pairing ends
+    /// after MAX_AGE_SECS even if the phone kept using it.
+    #[test]
+    fn old_pairings_end_even_when_used() {
+        let a = Pairings::load(None);
+        a.add([1; 16], [2; 32]);
+        a.add([3; 16], [4; 32]);
+        a.age(&[1; 16], MAX_AGE_SECS + 10);
+        a.touch(&[1; 16]);
+        assert_eq!(a.prune(), 1);
+        assert!(a.resume_key(&[1; 16]).is_none());
+        assert!(a.resume_key(&[3; 16]).is_some());
     }
 
     #[test]

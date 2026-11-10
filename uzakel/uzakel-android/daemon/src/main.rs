@@ -29,7 +29,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use tokio::net::{TcpListener, UdpSocket};
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 /// UDP broadcast port for discovery + PIN pairing. Deliberately *not* 5353
@@ -71,6 +71,10 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
+
+    if std::env::args().nth(1).as_deref() == Some("eslesmeleri-unut") {
+        return forget_pairings();
+    }
 
     let discovery_port = env_port("UZAKEL_DISCOVERY_PORT", DEFAULT_DISCOVERY_PORT);
     let input_port = env_port("UZAKEL_INPUT_PORT", DEFAULT_INPUT_PORT);
@@ -128,6 +132,27 @@ async fn main() -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+/// `uzakel-daemon eslesmeleri-unut`: forget every paired phone. Deletes the
+/// pairing file, then restarts the running daemon (if any) so its in-memory
+/// pairings and live sessions go too. Used by the Control Center Uzakel
+/// panel's "Eşleşmeleri unut" button.
+fn forget_pairings() -> Result<()> {
+    let path = pairings::default_path();
+    match std::fs::remove_file(&path) {
+        Ok(()) => info!(path = %path.display(), "eşleşmeler silindi"),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => info!("silinecek eşleşme yok"),
+        Err(e) => return Err(e).with_context(|| format!("{} silinemedi", path.display())),
+    }
+    let status = std::process::Command::new("systemctl")
+        .args(["--user", "try-restart", "uzakel-daemon.service"])
+        .status();
+    if !matches!(status, Ok(s) if s.success()) {
+        warn!("uzakel-daemon yeniden başlatılamadı; açık oturumlar daemon yeniden başlayana kadar sürer");
+    }
+    println!("Eşleşmiş telefonlar unutuldu.");
     Ok(())
 }
 
