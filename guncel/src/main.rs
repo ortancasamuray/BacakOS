@@ -25,9 +25,15 @@ use eklenti::{Eklenti, Plan};
 use komut::Hata;
 use std::fs::File;
 use std::os::fd::AsRawFd;
+use std::path::Path;
 use std::process::ExitCode;
 
-const KILIT: &str = "/run/lock/bacak-guncel.lock";
+/// Tek kopya kilidi. Dizin yalnız root'a yazılabilir olmalı: eskiden kilit
+/// herkesin yazabildiği /run/lock'taydı ve herhangi bir yerel kullanıcı
+/// dosyayı tutarak güncellemeleri sessizce durdurabiliyordu. Birimler
+/// RuntimeDirectory=bacak-guncel ile oluşturur; elle çalıştırmada burada
+/// oluşturulur.
+const KILIT_DIZINI: &str = "/run/bacak-guncel";
 
 const YARDIM: &str = "\
 bacak-guncel — BacakOS otomatik güncelleyici
@@ -65,9 +71,16 @@ fn main() -> ExitCode {
         hata!("root yetkisi gerekli (sudo bacak-guncel {komut})");
         return ExitCode::from(1);
     }
-    let Some(_kilit) = kilit_al() else {
-        bilgi!("başka bir bacak-guncel çalışıyor, çıkılıyor");
-        return ExitCode::SUCCESS;
+    let _kilit = match kilit_al(Path::new(KILIT_DIZINI)) {
+        Ok(Some(k)) => k,
+        Ok(None) => {
+            bilgi!("başka bir bacak-guncel çalışıyor, çıkılıyor");
+            return ExitCode::SUCCESS;
+        }
+        Err(e) => {
+            hata!("kilit alınamadı: {e}");
+            return ExitCode::from(1);
+        }
     };
     komut::sinyalleri_kur();
     let ayar = Ayar::yukle();
@@ -96,12 +109,88 @@ fn main() -> ExitCode {
     }
 }
 
-fn kilit_al() -> Option<File> {
-    let _ = std::fs::create_dir_all("/run/lock");
-    let f = File::create(KILIT).ok()?;
+/// Ok(Some): kilit alındı. Ok(None): başka bir kopya tutuyor. Err: dizin ya
+/// da dosya güvensiz veya açılamadı — sessiz "başarı" değil, hata.
+fn kilit_al(dizin: &Path) -> Result<Option<File>, String> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
+    match std::fs::DirBuilder::new().mode(0o755).create(dizin) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(format!("{}: {e}", dizin.display())),
+    }
+    // SAFETY: salt okunur sistem çağrısı.
+    let ben = unsafe { libc::geteuid() };
+    let d = std::fs::symlink_metadata(dizin).map_err(|e| format!("{}: {e}", dizin.display()))?;
+    if !d.is_dir() || d.uid() != ben || d.mode() & 0o022 != 0 {
+        return Err(format!("{} güvensiz (dizin değil, sahibi başka ya da başkalarına yazılabilir)", dizin.display()));
+    }
+    let yol = dizin.join("kilit");
+    let f = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(&yol)
+        .map_err(|e| format!("{}: {e}", yol.display()))?;
+    let m = f.metadata().map_err(|e| format!("{}: {e}", yol.display()))?;
+    if !m.is_file() || m.uid() != ben {
+        return Err(format!("{} güvensiz", yol.display()));
+    }
     // SAFETY: açık dosya tanıtıcısı üzerinde flock.
-    let r = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-    (r == 0).then_some(f)
+    if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+        return Ok(Some(f));
+    }
+    let e = std::io::Error::last_os_error();
+    if e.raw_os_error() == Some(libc::EWOULDBLOCK) {
+        Ok(None)
+    } else {
+        Err(format!("{}: {e}", yol.display()))
+    }
+}
+
+#[cfg(test)]
+mod kilit_testleri {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn gecici(ad: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("bacak-guncel-kilit-{ad}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn ikinci_kopya_beklemeden_cikar() {
+        let d = gecici("ikinci").join("kilit-dizini");
+        let ilk = kilit_al(&d).unwrap().expect("ilk kopya kilidi alamadı");
+        assert!(kilit_al(&d).unwrap().is_none(), "ikinci kopya da kilidi aldı");
+        drop(ilk);
+        assert!(kilit_al(&d).unwrap().is_some(), "kilit bırakılınca yeniden alınamadı");
+        let mod_ = std::fs::metadata(d.join("kilit")).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mod_, 0o600);
+        let _ = std::fs::remove_dir_all(d.parent().unwrap());
+    }
+
+    /// /run/lock gibi herkese yazılabilir bir dizin reddedilir: orada başka
+    /// bir kullanıcı dosyayı tutup güncellemeyi durdurabilirdi.
+    #[test]
+    fn herkese_yazilabilir_dizin_reddedilir() {
+        let d = gecici("acik");
+        std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o1777)).unwrap();
+        assert!(kilit_al(&d).is_err());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn kilit_yolundaki_sembolik_bag_izlenmez() {
+        let d = gecici("bag");
+        std::os::unix::fs::symlink(d.join("hedef"), d.join("kilit")).unwrap();
+        assert!(kilit_al(&d).is_err());
+        assert!(!d.join("hedef").exists(), "sembolik bağ izlendi");
+        let _ = std::fs::remove_dir_all(&d);
+    }
 }
 
 fn onar(eklentiler: &mut [Box<dyn Eklenti>], durum: &mut Durum, cevrimdisi: bool) -> komut::Sonuc<()> {

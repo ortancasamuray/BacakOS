@@ -13,6 +13,10 @@ Type=oneshot
 ExecStart=/usr/bin/bacak-guncel onar --cevrimdisi
 RemainAfterExit=no
 KillMode=process
+# Tek kopya kilidi /run/bacak-guncel/kilit: yalnız root yazabilir.
+RuntimeDirectory=bacak-guncel
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
 TimeoutStartSec=30min
 TimeoutStopSec=30min
 StandardOutput=journal+console
