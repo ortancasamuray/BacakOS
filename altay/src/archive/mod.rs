@@ -739,6 +739,64 @@ mod tests {
         }
     }
 
+    /// A tar hard link names an earlier member. Its source must be a regular
+    /// file inside the destination: following a symlink member planted by
+    /// the same archive copied files from anywhere the user can read
+    /// (e.g. ~/.ssh/id_rsa) into the extraction folder.
+    #[test]
+    fn tar_hard_link_never_reads_through_symlinks() {
+        let d = workdir("tar-hardlink");
+        let outside = d.join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        let secret = outside.join("secret");
+        fs::write(&secret, b"TOP-SECRET").unwrap();
+        let hard = |b: &mut tar::Builder<fs::File>, name: &str, target: &str| {
+            let mut h = tar::Header::new_gnu();
+            h.set_entry_type(tar::EntryType::Link);
+            h.set_size(0);
+            b.append_link(&mut h, name, target).unwrap();
+        };
+        let sym = |b: &mut tar::Builder<fs::File>, name: &str, target: &Path| {
+            let mut h = tar::Header::new_gnu();
+            h.set_entry_type(tar::EntryType::Symlink);
+            h.set_size(0);
+            b.append_link(&mut h, name, target).unwrap();
+        };
+        for case in ["leaf", "ancestor"] {
+            let archive = d.join(format!("{case}.tar"));
+            let mut b = tar::Builder::new(fs::File::create(&archive).unwrap());
+            if case == "leaf" {
+                sym(&mut b, "s", &secret);
+                hard(&mut b, "copy", "s");
+            } else {
+                sym(&mut b, "dir", &outside);
+                hard(&mut b, "copy", "dir/secret");
+            }
+            b.finish().unwrap();
+            let out = d.join(format!("out-{case}"));
+            fs::create_dir_all(&out).unwrap();
+            let mut noop = |_: Progress| {};
+            let err = backend_for(Format::Tar).unwrap().extract(&archive, &out, &Options::default(), &mut noop).unwrap_err();
+            assert!(matches!(err, ArchiveError::Unsafe(_)), "{case}: {err}");
+            assert!(!out.join("copy").exists(), "{case}: outside file was copied in");
+        }
+        // An ordinary hard link to an earlier regular member still works.
+        let archive = d.join("ok.tar");
+        let mut b = tar::Builder::new(fs::File::create(&archive).unwrap());
+        let mut h = tar::Header::new_gnu();
+        h.set_size(5);
+        h.set_mode(0o644);
+        b.append_data(&mut h, "a", &b"hello"[..]).unwrap();
+        hard(&mut b, "b", "a");
+        b.finish().unwrap();
+        let out = d.join("out-ok");
+        fs::create_dir_all(&out).unwrap();
+        let mut noop = |_: Progress| {};
+        backend_for(Format::Tar).unwrap().extract(&archive, &out, &Options::default(), &mut noop).unwrap();
+        assert_eq!(fs::read(out.join("b")).unwrap(), b"hello");
+        let _ = fs::remove_dir_all(&d);
+    }
+
     #[test]
     fn zip_skips_fifos() {
         let d = workdir("zip-fifo");
@@ -911,6 +969,30 @@ fn check_ancestors(dest: &Path, out_path: &Path) -> Result<(), ArchiveError> {
         }
     }
     Ok(())
+}
+
+/// Open an earlier member as the source of a hard link. It must be a regular
+/// file inside `dest`, reached without following any symlink: an archive can
+/// plant a symlink member and then hard-link to it (or through it) to copy
+/// any file the user can read into the extraction folder.
+pub(crate) fn open_member_source(dest: &Path, source: &Path) -> Result<std::fs::File, ArchiveError> {
+    use std::os::unix::fs::OpenOptionsExt;
+    check_ancestors(dest, source)?;
+    let f = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(source)
+        .map_err(|e| {
+            if e.raw_os_error() == Some(libc::ELOOP) {
+                ArchiveError::Unsafe(source.to_path_buf())
+            } else {
+                ArchiveError::at(source)(e)
+            }
+        })?;
+    if !f.metadata().map_err(ArchiveError::at(source))?.is_file() {
+        return Err(ArchiveError::Unsafe(source.to_path_buf()));
+    }
+    Ok(f)
 }
 
 /// Create the parent directories of a member that is about to be written.
