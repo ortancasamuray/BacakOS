@@ -320,7 +320,7 @@ async fn run(
                 Ok(Message::PairResponse { accepted: true, server_pubkey, confirm_tag, screen_width, screen_height }) => {
                     break (server_pubkey, confirm_tag, (screen_width, screen_height));
                 }
-                Ok(Message::PairResponse { accepted: false, .. }) => anyhow::bail!("sunucu PIN'i reddetti"),
+                Ok(Message::PairResponse { accepted: false, .. }) => anyhow::bail!("sunucu eşleşmeyi reddetti: PIN yanlış, çok fazla hatalı deneme (biraz bekleyin) ya da bilgisayara başka bir cihaz bağlı"),
                 _ => {}
             }
         }
