@@ -130,7 +130,7 @@ udev = [
 #     cargo deb --no-build -p bacak-compositor
 # ---------------------------------------------------------------------------
 [package.metadata.deb]
-revision = "43"
+revision = "44"
 maintainer = "Bacak Desktop Project <bilgi@anadolupanteri.org.tr>"
 copyright = "2026, Bacak Desktop Project"
 section = "x11"
@@ -144,7 +144,7 @@ to host the greeter and user sessions."""
 # libudev1, libsystemd0, libgudev-1.0-0, libwacom9, libcap2, libevdev2 …
 # libegl1 + libgl1-mesa-dri are dlopen'd by Mesa at runtime (not in ldd).
 # xwayland is spawned by the compositor for X11 application support.
-depends = "$auto, xkb-data, fonts-dejavu-core | fonts-dejavu, libegl1, libgl1-mesa-dri, xwayland, bluez-obexd, python3, python3-dbus, python3-gi"
+depends = "$auto, xkb-data, fonts-dejavu-core | fonts-dejavu, libegl1, libgl1-mesa-dri, xwayland"
 # lxpolkit: bacak-session starts it as the session's polkit auth agent.
 # Without it, pkexec (kur-baslat and anything else needing root) has nowhere
 # to show its prompt and fails silently — soft dependency since the session

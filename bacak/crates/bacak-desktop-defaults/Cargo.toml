@@ -11,7 +11,7 @@ repository  = { workspace = true }
 path = "src/lib.rs"
 
 [package.metadata.deb]
-revision = "5"
+revision = "6"
 maintainer = "Bacak Desktop Project <bilgi@anadolupanteri.org.tr>"
 copyright  = "2026, Bacak Desktop Project"
 section    = "x11"
@@ -25,11 +25,15 @@ kağıdı, BacakOS ikon teması, ve Firefox anasayfası www.eba.gov.tr.
 her yeni kullanıcının ev dizinine kopyalar. Firefox anasayfası ise
 /etc/firefox/policies.json ile sistem geneli (tüm profiller, yeni
 kullanıcılar dahil) ayarlanır. Web bağlantıları sistem genelinde
-Rüzgar ile açılır (/etc/xdg/mimeapps.list)."""
+Rüzgar ile açılır (/etc/xdg/mimeapps.list). BacakOS Bluetooth desteği
+içermez: Bluetooth çekirdek modülleri /etc/modprobe.d ile engellenir, Bluetooth
+paketlerinin yeniden kurulması /etc/apt/preferences.d ile önlenir."""
 depends = "bacak-icons (>= 0.1.0)"
 assets = [
     ["files/wallpaper.png",         "usr/share/backgrounds/bacakos/wallpaper.png",  "644"],
     ["files/compositor.json",       "etc/skel/.config/bacak/compositor.json",       "644"],
     ["files/firefox-policies.json", "etc/firefox/policies.json",                    "644"],
     ["files/mimeapps.list",         "etc/xdg/mimeapps.list",                        "644"],
+    ["files/bluetooth-kapali.conf", "etc/modprobe.d/bacakos-bluetooth-kapali.conf", "644"],
+    ["files/bluetooth-yok.pref",    "etc/apt/preferences.d/bacakos-bluetooth-yok",  "644"],
 ]

@@ -1,6 +1,6 @@
 [package]
 name        = "bacak-plugin-network"
-description = "Network settings plugin for Bacak compositor (WiFi, Bluetooth, Ethernet)"
+description = "Network settings plugin for Bacak compositor (WiFi, Ethernet)"
 version     = { workspace = true }
 edition     = { workspace = true }
 license     = { workspace = true }
@@ -11,13 +11,13 @@ repository  = { workspace = true }
 path = "src/lib.rs"
 
 [package.metadata.deb]
-revision = "3"
+revision = "4"
 maintainer = "Bacak Desktop Project <bilgi@anadolupanteri.org.tr>"
 copyright  = "2026, Bacak Desktop Project"
 section    = "x11"
 priority   = "optional"
 extended-description = """\
-Provides WiFi, Bluetooth and Ethernet control panels inside the Bacak
+Provides WiFi and Ethernet control panels inside the Bacak
 compositor Control Center. Install this package to enable network
 settings tiles in the quick-settings panel. A wired card the Debian
 installer left to ifupdown (plain DHCP in /etc/network/interfaces) is
