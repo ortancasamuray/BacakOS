@@ -18,6 +18,7 @@
 
 use std::net::SocketAddr;
 use std::process::Command;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use rand::Rng;
@@ -35,6 +36,41 @@ use crate::trust::TrustStore;
 /// all 10^6 values over UDP. With it, each PIN gets at most 5 guesses
 /// (≈5·10^-6 chance) before it changes.
 const MAX_WRONG_PINS: u32 = 5;
+
+/// Rotation alone does not bound guessing: each new PIN gets 5 more
+/// guesses at the same ~10^-6 odds, so ~10^6 requests still pair. After
+/// every rotation caused by wrong PINs, pairing is therefore paused —
+/// 30 s, doubling each time, at most 15 min — and requests arriving during
+/// the pause are refused without being compared. A successful pairing
+/// clears the pause. Worst case for an attacker: 5 guesses per 15 min.
+const LOCKOUT_FIRST: Duration = Duration::from_secs(30);
+const LOCKOUT_MAX: Duration = Duration::from_secs(15 * 60);
+
+#[derive(Debug, Default)]
+struct PairLockout {
+    strikes: u32,
+    until: Option<Instant>,
+}
+
+impl PairLockout {
+    fn locked(&self, now: Instant) -> bool {
+        self.until.is_some_and(|t| now < t)
+    }
+
+    /// One more batch of MAX_WRONG_PINS failures: pause pairing.
+    fn strike(&mut self, now: Instant) -> Duration {
+        self.strikes = self.strikes.saturating_add(1);
+        let wait = LOCKOUT_FIRST
+            .saturating_mul(1u32.checked_shl(self.strikes - 1).unwrap_or(u32::MAX))
+            .min(LOCKOUT_MAX);
+        self.until = Some(now + wait);
+        wait
+    }
+
+    fn reset(&mut self) {
+        *self = PairLockout::default();
+    }
+}
 
 const DAEMON_NAME_ENV: &str = "UZAKEL_DAEMON_NAME";
 
@@ -64,6 +100,7 @@ pub async fn run(socket: UdpSocket, trust: TrustStore, pairings: Pairings) -> Re
     let mut current_pin = new_pin();
     crate::pairing_state::publish(&daemon_name, discovery_port, current_pin);
     let mut wrong_pins = 0u32;
+    let mut lockout = PairLockout::default();
     let mut buf = [0u8; 512];
 
     loop {
@@ -80,6 +117,7 @@ pub async fn run(socket: UdpSocket, trust: TrustStore, pairings: Pairings) -> Re
             discovery_port,
             current_pin: &mut current_pin,
             wrong_pins: &mut wrong_pins,
+            lockout: &mut lockout,
             trust: &trust,
             pairings: &pairings,
         };
@@ -94,6 +132,7 @@ struct Ctx<'a> {
     discovery_port: u16,
     current_pin: &'a mut u32,
     wrong_pins: &'a mut u32,
+    lockout: &'a mut PairLockout,
     trust: &'a TrustStore,
     pairings: &'a Pairings,
 }
@@ -122,7 +161,11 @@ async fn handle(socket: &UdpSocket, buf: &[u8], from: SocketAddr, ctx: &mut Ctx<
         Opcode::PairRequest => {
             let payload = &buf[HEADER_LEN..];
             let req = PairRequest::decode_payload(payload)?;
-            let accepted = req.pin == *ctx.current_pin;
+            let locked = ctx.lockout.locked(Instant::now());
+            if locked {
+                warn!(%from, "pairing paused after repeated wrong PINs — request refused");
+            }
+            let accepted = !locked && req.pin == *ctx.current_pin;
 
             let response = if accepted {
                 let daemon_keypair = EphemeralKeypair::generate();
@@ -139,6 +182,7 @@ async fn handle(socket: &UdpSocket, buf: &[u8], from: SocketAddr, ctx: &mut Ctx<
                 ctx.pairings.add(material.client_id, material.resume_key);
                 info!(%from, "client paired successfully");
                 *ctx.wrong_pins = 0;
+                ctx.lockout.reset();
                 // A fresh PIN for the *next* pairing attempt, so a captured
                 // PIN can't be replayed once it's been used.
                 *ctx.current_pin = new_pin();
@@ -148,11 +192,21 @@ async fn handle(socket: &UdpSocket, buf: &[u8], from: SocketAddr, ctx: &mut Ctx<
                     daemon_pubkey,
                     confirm_tag: material.confirm_tag,
                 }
+            } else if locked {
+                PairResponse {
+                    accepted: false,
+                    daemon_pubkey: [0u8; 32],
+                    confirm_tag: [0u8; 32],
+                }
             } else {
                 warn!(%from, "pairing attempt with a wrong PIN");
                 *ctx.wrong_pins += 1;
                 if *ctx.wrong_pins >= MAX_WRONG_PINS {
-                    warn!("{MAX_WRONG_PINS} wrong PINs — rotating the PIN");
+                    let wait = ctx.lockout.strike(Instant::now());
+                    warn!(
+                        "{MAX_WRONG_PINS} wrong PINs — rotating the PIN, pairing paused for {}s",
+                        wait.as_secs()
+                    );
                     *ctx.wrong_pins = 0;
                     *ctx.current_pin = new_pin();
                     crate::pairing_state::publish(daemon_name, discovery_port, *ctx.current_pin);
@@ -216,4 +270,71 @@ fn parse_version(v: &str) -> (u8, u8, u8) {
         parts.next().unwrap_or(0),
         parts.next().unwrap_or(0),
     )
+}
+
+#[cfg(test)]
+mod lockout_tests {
+    use super::*;
+    use crate::protocol::PairRequest;
+
+    #[test]
+    fn lockout_doubles_and_caps() {
+        let mut l = PairLockout::default();
+        let t = Instant::now();
+        assert!(!l.locked(t));
+        let waits: Vec<u64> = (0..8).map(|_| l.strike(t).as_secs()).collect();
+        assert_eq!(waits, vec![30, 60, 120, 240, 480, 900, 900, 900]);
+        assert!(l.locked(t + Duration::from_secs(899)));
+        assert!(!l.locked(t + Duration::from_secs(900)));
+        l.reset();
+        assert!(!l.locked(t));
+        assert_eq!(l.strike(t).as_secs(), 30);
+    }
+
+    /// After MAX_WRONG_PINS wrong guesses even the right PIN is refused until
+    /// the pause ends; then it pairs. This is what turns ~10^6 fast guesses
+    /// into at most 5 guesses per 15 minutes.
+    #[test]
+    fn right_pin_is_refused_while_paused() {
+        std::env::set_var("PATH", ""); // no notify-send in tests
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let sock = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+            let peer = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+            let from = peer.local_addr().unwrap();
+            let trust = TrustStore::new();
+            let dir = std::env::temp_dir().join(format!("uzakel-lockout-{}", std::process::id()));
+            let pairings = Pairings::load(Some(dir.join("eslesmeler")));
+            let (mut pin, mut wrong, mut lockout) = (123_456u32, 0u32, PairLockout::default());
+            let req = |pin: u32| PairRequest { pin, client_pubkey: [9u8; 32] }.encode();
+            macro_rules! send {
+                ($p:expr) => {{
+                    let mut ctx = Ctx {
+                        daemon_name: "deneme",
+                        discovery_port: 0,
+                        current_pin: &mut pin,
+                        wrong_pins: &mut wrong,
+                        lockout: &mut lockout,
+                        trust: &trust,
+                        pairings: &pairings,
+                    };
+                    handle(&sock, &req($p), from, &mut ctx).await.unwrap();
+                }};
+            }
+            for _ in 0..MAX_WRONG_PINS {
+                let wrong_guess = (pin + 1) % 1_000_000;
+                send!(wrong_guess);
+            }
+            assert!(lockout.locked(Instant::now()), "not paused after {MAX_WRONG_PINS} wrong PINs");
+            let right = pin;
+            send!(right);
+            assert!(trust.session(from.ip()).is_none(), "paired while paused");
+            lockout.until = None; // the pause has elapsed
+            let right = pin;
+            send!(right);
+            assert!(trust.session(from.ip()).is_some(), "right PIN refused after the pause");
+            assert!(!lockout.locked(Instant::now()) && lockout.strikes == 0, "success must clear the pause");
+            let _ = std::fs::remove_dir_all(dir);
+        });
+    }
 }
