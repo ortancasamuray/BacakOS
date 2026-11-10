@@ -9,6 +9,11 @@ if [ "$1" = configure ]; then
     done
     mkdir -p /var/lib/yzsunucu/model
     chown -R yzsunucu:yzsunucu /var/lib/yzsunucu
+    # Modeller root'un, servis yalnız okur (yzsunucu-model-indir root olarak
+    # buraya yazar; servis kullanıcısına ait bir dizine yazmamalı).
+    chown root:yzsunucu /var/lib/yzsunucu/model
+    chmod 0750 /var/lib/yzsunucu/model
+    find /var/lib/yzsunucu/model -mindepth 1 -maxdepth 1 -type f -exec chown root:yzsunucu {} + -exec chmod 0640 {} +
     systemctl daemon-reload >/dev/null 2>&1 || true
     if [ -x /opt/yzsunucu/llama/llama-server ] && systemctl is-enabled yzsunucu >/dev/null 2>&1; then
         systemctl restart yzsunucu || true
