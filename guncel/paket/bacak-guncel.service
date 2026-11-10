@@ -12,6 +12,10 @@ ExecStart=/usr/bin/bacak-guncel calis
 # Kapatmada SIGTERM yalnız ana sürece gider: indirme kesilir, kurulum
 # (dpkg) bitene kadar beklenir. systemd kapatmayı en çok bu kadar erteler.
 KillMode=process
+# Tek kopya kilidi /run/bacak-guncel/kilit: yalnız root yazabilir.
+RuntimeDirectory=bacak-guncel
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
 TimeoutStopSec=30min
 # Arka planda, oturumu yavaşlatmadan.
 Nice=15
