@@ -10,7 +10,11 @@ auth     requisite      pam_nologin.so
 # Optional: fingerprint / PIN modules can be inserted here as `sufficient`.
 # auth   sufficient     pam_fprintd.so
 # Brute-force protection (counts failures, denies after the configured limit).
-auth     required       pam_faillock.so preauth
+# A locked account must stop the stack *here*: with `required` it went on, and
+# a right password reached the Bacak Onay code prompt while a wrong one did
+# not — telling a guesser at the greeter which password was right despite the
+# lock. The greeter already lists users, so failing early leaks nothing new.
+auth     [success=ok default=die] pam_faillock.so preauth
 auth     [success=1 default=bad] pam_unix.so try_first_pass
 auth     [default=die]  pam_faillock.so authfail
 # Bacak Onay (bacakonay) — TOTP second factor after the password. Users who
