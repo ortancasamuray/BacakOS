@@ -209,7 +209,9 @@ fn is_mac(s: &str) -> bool {
 /// A minimal BlueZ OBEX Object-Push agent (Python + python-dbus). Receiving a
 /// file over Bluetooth needs an agent registered with `org.bluez.obex` that
 /// authorises incoming pushes; without it BlueZ rejects the transfer and the
-/// phone reports "can't send". This one auto-accepts and saves to ~/Downloads.
+/// phone reports "can't send". This one accepts pushes only from devices
+/// already paired with this machine (anyone in radio range could otherwise
+/// drop files into ~/Downloads) and saves them there.
 /// (Pure host tooling — the compositor stays D-Bus-crate-free.)
 const OBEX_AGENT_PY: &str = r#"#!/usr/bin/env python3
 import os, sys, time, dbus, dbus.service
@@ -230,11 +232,37 @@ def log(m):
         with open(LOG, "a") as f: f.write("%.0f %s\n" % (time.time(), m))
     except Exception: pass
 
+PROPS = "org.freedesktop.DBus.Properties"
+
+class Rejected(dbus.DBusException):
+    _dbus_error_name = "org.bluez.obex.Error.Rejected"
+
+def sender_paired(b, path):
+    """(paired?, address) of the device pushing transfer `path`."""
+    t = dbus.Interface(b.get_object(BUS, path), PROPS)
+    session = t.Get("org.bluez.obex.Transfer1", "Session")
+    s = dbus.Interface(b.get_object(BUS, session), PROPS)
+    addr = str(s.Get("org.bluez.obex.Session1", "Destination")).upper()
+    om = dbus.Interface(dbus.SystemBus().get_object("org.bluez", "/"), "org.freedesktop.DBus.ObjectManager")
+    for _, ifaces in om.GetManagedObjects().items():
+        dev = ifaces.get("org.bluez.Device1")
+        if dev is not None and str(dev.get("Address", "")).upper() == addr:
+            return bool(dev.get("Paired", False)), addr
+    return False, addr
+
 class Agent(dbus.service.Object):
     @dbus.service.method("org.bluez.obex.Agent1", in_signature="o", out_signature="s")
     def AuthorizePush(self, path):
         b = dbus.SessionBus()
-        props = dbus.Interface(b.get_object(BUS, path), "org.freedesktop.DBus.Properties")
+        try:
+            paired, addr = sender_paired(b, path)
+        except Exception as e:
+            log("AuthorizePush: sender unknown (%s), refused" % e)
+            raise Rejected("sender unknown")
+        if not paired:
+            log("AuthorizePush: %s is not paired, refused" % addr)
+            raise Rejected("not paired")
+        props = dbus.Interface(b.get_object(BUS, path), PROPS)
         name = os.path.basename(str(props.Get("org.bluez.obex.Transfer1", "Name")))
         dest = os.path.join(SAVE_DIR, name or "dosya")
         base, ext = os.path.splitext(dest)
@@ -478,7 +506,7 @@ pub fn icon_to_type(icon: &str) -> &'static str {
 /// Handle to the persistent `bluetoothctl` coprocess.
 pub struct BtCtl {
     child: Child,
-    stdin: Mutex<ChildStdin>,
+    stdin: Arc<Mutex<ChildStdin>>,
     log: LogFile,
     /// Parsed events from the reader thread. Drained by the compositor each tick.
     pub rx: Receiver<BtEvent>,
@@ -501,11 +529,12 @@ impl BtCtl {
             .spawn()
             .ok()?;
         let stdout = child.stdout.take()?;
+        let stdin = Arc::new(Mutex::new(child.stdin.take()?));
         let (tx, rx) = channel();
         let rlog = log.clone();
-        std::thread::spawn(move || reader_loop(stdout, tx, rlog));
-        let stdin = child.stdin.take()?;
-        let me = BtCtl { child, stdin: Mutex::new(stdin), log, rx };
+        let rstdin = stdin.clone();
+        std::thread::spawn(move || reader_loop(stdout, tx, rlog, rstdin));
+        let me = BtCtl { child, stdin, log, rx };
         // KeyboardDisplay agent → we get passkey/PIN prompts.
         me.send("agent KeyboardDisplay");
         me.send("default-agent");
@@ -573,13 +602,84 @@ impl Drop for BtCtl {
 
 /// Read the coprocess stdout in chunks, emitting events for complete lines and
 /// for un-terminated agent prompts (which never get a newline).
+/// Bluetooth OBEX Object Push: receiving files (phones' "share via Bluetooth").
+const OBEX_OPP_UUID: &str = "00001105-0000-1000-8000-00805f9b34fb";
+
+/// "[agent] Authorize service <uuid> (yes/no):" → the service UUID.
+fn authorize_service_uuid(text: &str) -> Option<String> {
+    let s = clean(text);
+    let p = s.find("Authorize service ")?;
+    if !s.contains("(yes/no)") {
+        return None;
+    }
+    let uuid: String = s[p + "Authorize service ".len()..]
+        .chars()
+        .take_while(|c| c.is_ascii_hexdigit() || *c == '-')
+        .collect();
+    (!uuid.is_empty()).then(|| uuid.to_ascii_lowercase())
+}
+
+/// BlueZ asks to authorise a service when a paired but untrusted device
+/// connects to it. Only file receiving is allowed here — whether a file is
+/// actually accepted is decided by the OBEX agent, which takes pushes from
+/// paired devices only. Everything else (e.g. HID keyboard/mouse) is
+/// refused. Answered on the reader thread so it works while the panel is
+/// closed: unanswered, the request times out and the phone reports
+/// "file could not be sent".
+fn authorize_service_answer(uuid: &str) -> bool {
+    uuid == OBEX_OPP_UUID
+}
+
 fn reader_loop(
     mut stdout: std::process::ChildStdout,
     tx: std::sync::mpsc::Sender<BtEvent>,
     log: LogFile,
+    stdin: Arc<Mutex<ChildStdin>>,
 ) {
     let mut buf = [0u8; 4096];
     let mut acc = String::new();
+    // bluetoothctl re-prints a pending prompt after other output: answer each
+    // service once (a stray extra "yes" could answer the next prompt).
+    let mut answered: Option<(String, std::time::Instant)> = None;
+    // `agent`/`default-agent` are sent right after spawn; if bluetoothctl had
+    // not reached bluetoothd yet ("Waiting to connect to bluetoothd...") the
+    // registration fails and no agent answers BlueZ — pairing prompts and
+    // service authorisation (receiving files) then fail silently. Retry.
+    let mut agent_retries = 0u32;
+    let retry_stdin = stdin.clone();
+    let mut retry_agent = |text: &str| {
+        let c = clean(text);
+        if !(c.contains("Failed to register agent object") || c.contains("No agent is registered")) {
+            return;
+        }
+        if agent_retries >= 5 {
+            return;
+        }
+        agent_retries += 1;
+        log_line(&log, &format!("[ui] agent registration failed, retry {agent_retries}"));
+        let w = retry_stdin.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            if let Ok(mut w) = w.lock() {
+                let _ = w.write_all(b"agent KeyboardDisplay\ndefault-agent\n");
+                let _ = w.flush();
+            }
+        });
+    };
+    let mut authorize = |text: &str| -> bool {
+        let Some(uuid) = authorize_service_uuid(text) else { return false };
+        let dup = answered.as_ref().is_some_and(|(u, t)| *u == uuid && t.elapsed() < std::time::Duration::from_secs(2));
+        if !dup {
+            let yes = authorize_service_answer(&uuid);
+            log_line(&log, &format!(">> {} (authorize service {uuid})", if yes { "yes" } else { "no" }));
+            if let Ok(mut w) = stdin.lock() {
+                let _ = w.write_all(if yes { b"yes\n" } else { b"no\n" });
+                let _ = w.flush();
+            }
+            answered = Some((uuid, std::time::Instant::now()));
+        }
+        true
+    };
     loop {
         match stdout.read(&mut buf) {
             Ok(0) => break, // EOF: coprocess exited
@@ -596,6 +696,8 @@ fn reader_loop(
             let c = clean(&line);
             if !c.is_empty()
                 && (c.contains("agent")
+                    || c.contains("Agent")
+                    || c.contains("Authorize")
                     || c.contains("asskey")
                     || c.contains("PIN")
                     || c.contains("Paired")
@@ -605,6 +707,13 @@ fn reader_loop(
             {
                 log_line(&log, &format!("<< {c}"));
             }
+            if c.contains("Failed to register agent object") {
+                // Both lines of one failure arrive together; retry once for it.
+                retry_agent(&line);
+            }
+            if authorize(&line) {
+                continue;
+            }
             if let Some(ev) = parse_line(&line).or_else(|| parse_prompt(&line)) {
                 if tx.send(ev).is_err() {
                     return;
@@ -612,7 +721,9 @@ fn reader_loop(
             }
         }
         // The remaining tail has no newline — check for an un-terminated prompt.
-        if let Some(ev) = parse_prompt(&acc) {
+        if authorize(&acc) {
+            acc.clear();
+        } else if let Some(ev) = parse_prompt(&acc) {
             log_line(&log, &format!("<<tail {}", clean(&acc)));
             if tx.send(ev).is_err() {
                 return;
@@ -632,6 +743,24 @@ fn reader_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn authorize_service_prompt_is_recognised() {
+        let p = "\x1b[1;39m[agent] Authorize service 00001105-0000-1000-8000-00805F9B34FB (yes/no): \x1b[0m";
+        assert_eq!(authorize_service_uuid(p).as_deref(), Some(OBEX_OPP_UUID));
+        assert_eq!(authorize_service_uuid("[agent] Confirm passkey 123456 (yes/no):"), None);
+        assert_eq!(authorize_service_uuid("[agent] Authorize service 0000110a-0000-1000-8000-00805f9b34fb (auto)"), None);
+    }
+
+    /// Only file receiving (OBEX Object Push) is authorised; a keyboard or
+    /// mouse (HID) or anything else from an untrusted device is refused.
+    #[test]
+    fn only_object_push_is_authorised() {
+        assert!(authorize_service_answer(OBEX_OPP_UUID));
+        assert!(!authorize_service_answer("00001124-0000-1000-8000-00805f9b34fb")); // HID
+        assert!(!authorize_service_answer("00001106-0000-1000-8000-00805f9b34fb")); // OBEX FTP
+        assert!(!authorize_service_answer("0000110a-0000-1000-8000-00805f9b34fb")); // A2DP source
+    }
 
     #[test]
     fn parses_controller_and_devices() {

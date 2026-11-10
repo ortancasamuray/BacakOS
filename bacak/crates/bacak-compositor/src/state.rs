@@ -1097,6 +1097,10 @@ pub struct BacakState {
     /// Last passkey we auto-confirmed (dedup: the prompt is re-emitted many times
     /// per second; answer each distinct passkey once). Survives panel rebuilds.
     pub bt_last_pk: Option<String>,
+    /// Until when a `Paired` event may still belong to a pairing the user
+    /// started from the panel (a phone bonds under its identity address,
+    /// which can arrive after the busy phase ended). Only those are trusted.
+    pub bt_user_pair_until: Option<Instant>,
     /// MACs BlueZ has bonded (queried on open / after pair / forget). Lets a
     /// freshly-scanned already-paired device show in the "paired" section instead
     /// of offering a (failing) re-pair.
@@ -1664,6 +1668,7 @@ impl BacakState {
             remote_desktop_panel: None,
             btctl: None,
             bt_last_pk: None,
+            bt_user_pair_until: None,
             bt_paired: std::collections::HashSet::new(),
             wifi_rx: None,
             desktop_settings: None,
@@ -6168,10 +6173,13 @@ impl BacakState {
         let devices = self.bt_known_devices();
         if let Some(bt) = self.btctl.as_ref() {
             if powered {
-                // Be discoverable + pairable so a phone can initiate pairing with
-                // us (incoming requests auto-confirm via the agent), and scan.
-                bt.send("pairable on");
-                bt.send("discoverable on");
+                // Pairing is started from this panel only: not discoverable and
+                // not pairable, so nearby devices can neither find the board nor
+                // start a pairing (unsolicited requests are refused anyway —
+                // see bt_poll). Outgoing pairing and already paired devices
+                // (e.g. a phone sending a file) are unaffected. Then scan.
+                bt.send("pairable off");
+                bt.send("discoverable off");
                 bt.scan(true);
             }
         }
@@ -6993,8 +7001,9 @@ impl BacakState {
         if let Some(bt) = self.btctl.as_ref() {
             bt.power(new_on);
             if new_on {
-                bt.send("pairable on");
-                bt.send("discoverable on");
+                // As in open_bt_panel: pairing is started from the panel only.
+                bt.send("pairable off");
+                bt.send("discoverable off");
             } else {
                 bt.send("discoverable off");
                 bt.scan(false);
@@ -7364,6 +7373,7 @@ impl BacakState {
                 if let Some(p) = self.bt_panel.as_mut() {
                     p.busy = None;
                 }
+                self.bt_user_pair_until = Some(Instant::now() + std::time::Duration::from_secs(30));
                 // Re-query BlueZ: a phone/earbuds advertises a random MAC but
                 // bonds under its *identity* address, so the just-paired device
                 // would be invisible if we trusted the stale scan list.
@@ -7398,7 +7408,7 @@ impl BacakState {
         let mut dialog: Option<BtDialogKind> = None;
         let mut relayout = false;
         let mut status: Option<String> = None;
-        let mut confirm: Option<String> = None; // distinct passkey to auto-yes
+        let mut confirm: Option<String> = None; // distinct unsolicited passkey to refuse
         let mut paired_now: Option<String> = None; // a pairing completed (e.g. incoming)
         let last_pk = self.bt_last_pk.clone();
         let paired_set = self.bt_paired.clone();
@@ -7433,8 +7443,12 @@ impl BacakState {
                         d.paired = paired;
                     }
                     if paired {
-                        if let Some(bt) = self.btctl.as_ref() {
-                            bt.trust(&mac);
+                        // Trust (auto-connect without authorisation) only a
+                        // bond that follows a pairing the user started here.
+                        if self.bt_user_pair_until.is_some_and(|t| Instant::now() < t) {
+                            if let Some(bt) = self.btctl.as_ref() {
+                                bt.trust(&mac);
+                            }
                         }
                         paired_now = Some(mac);
                         status = Some("Eşleşti".into());
@@ -7451,8 +7465,11 @@ impl BacakState {
                     relayout = true;
                 }
                 BtEvent::ConfirmPasskey { passkey, .. } => {
-                    // Auto-confirm (the interactive tap can't be delivered during
-                    // the BlueZ exchange — see the busy path); dedup by value.
+                    // No pairing was started from this panel: an unsolicited
+                    // request from a nearby device. Refuse it — accepting it
+                    // (and trusting the device) let anyone in radio range
+                    // bond, e.g. as a keyboard. Dedup by value: bluetoothctl
+                    // re-prints the prompt after every event line.
                     if last_pk.as_deref() != Some(passkey.as_str()) {
                         confirm = Some(passkey);
                     }
@@ -7495,15 +7512,12 @@ impl BacakState {
             }
         }
         if let Some(passkey) = confirm {
-            {
-                // A modal accept dialog can't reliably receive its tap during the
-                // BlueZ exchange; auto-confirm when the compositor BT panel is open.
-                if let Some(bt) = self.btctl.as_ref() {
-                    bt.agent_yes(true);
-                }
-                self.bt_last_pk = Some(passkey.clone());
-                self.bt_set_status(&format!("Eşleşme isteği kabul edildi (kod {passkey})"));
+            // Unsolicited (see above): refused.
+            if let Some(bt) = self.btctl.as_ref() {
+                bt.agent_yes(false);
             }
+            self.bt_last_pk = Some(passkey);
+            self.bt_set_status("Dışarıdan gelen eşleşme isteği reddedildi — eşleştirmeyi bu panelden başlatın");
         } else if let Some(s) = status {
             self.bt_set_status(&s);
         }
