@@ -154,6 +154,12 @@ pub async fn create_account(user: &str, full_name: &str, password: &str, change_
     if password.chars().count() < 8 {
         return Err("parola en az 8 karakter olmalı".into());
     }
+    // chpasswd reads one `user:password` record per line: a line break in
+    // the password would let the server set any other account's password
+    // (root, admins). No control character is a legitimate password byte.
+    if password.chars().any(char::is_control) {
+        return Err("parola kontrol karakteri (satır sonu vb.) içeremez".into());
+    }
     if change_at_login && !greeter_changes_expired_passwords().await {
         return Err(format!(
             "bu makinenin giriş ekranı ilk girişte parola değiştirmeyi desteklemiyor \
@@ -254,4 +260,21 @@ pub fn totp_remove(user: &str) -> Result<Payload, String> {
     Store::system().remove(user).map_err(|e| e.to_string())?;
     log::info!("Bacak Onay kaldırıldı: {user}");
     Ok(Payload::Tamam)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A line break in the password must be refused before any command
+    /// runs: chpasswd would apply the extra `user:password` line too.
+    #[test]
+    fn password_with_control_characters_is_refused() {
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        for bad in ["Passw0rd!\nroot:pwned", "Passw0rd!\rroot:x", "Passw0rd\0xyz"] {
+            let r = rt.block_on(create_account("zzdenetimyok", "Deneme", bad, false));
+            let e = r.expect_err("control character accepted");
+            assert!(e.contains("kontrol karakteri"), "{e}");
+        }
+    }
 }

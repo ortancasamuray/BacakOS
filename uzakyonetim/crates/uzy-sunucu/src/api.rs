@@ -173,6 +173,9 @@ async fn create_account(
     if parola.chars().count() < 8 {
         return Err(bad("parola en az 8 karakter olmalı"));
     }
+    if parola.chars().any(char::is_control) {
+        return Err(bad("parola kontrol karakteri (satır sonu vb.) içeremez"));
+    }
     let cmd = Command::HesapAc {
         kullanici: req.kullanici.clone(),
         tam_ad: req.tam_ad.clone(),
