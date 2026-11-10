@@ -165,7 +165,8 @@ fn enrolled_user_needs_the_right_code_once() {
 
     let (rc, prompts) = f.auth("ali", &code);
     assert_eq!(rc, PAM_SUCCESS);
-    assert_eq!(prompts, vec!["Bacak Onay kodu: ".to_string()]);
+    // The QR-login hint (PAM_TEXT_INFO "bacakonay:qr") precedes the prompt.
+    assert_eq!(prompts, vec!["bacakonay:qr".to_string(), "Bacak Onay kodu: ".to_string()]);
 
     // Same code again → replay, rejected (and pam_deny/"authfail" runs).
     let (rc, prompts) = f.auth("ali", &code);
@@ -203,5 +204,5 @@ fn custom_prompt_text() {
     let code = otp::totp(&secret, &OtpParams::default(), now());
     let (rc, prompts) = f.auth("deniz", &code);
     assert_eq!(rc, PAM_SUCCESS);
-    assert_eq!(prompts, vec!["Doğrulama kodu: ".to_string()]);
+    assert_eq!(prompts, vec!["bacakonay:qr".to_string(), "Doğrulama kodu: ".to_string()]);
 }
