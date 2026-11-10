@@ -48,30 +48,122 @@ struct HostCheck {
     key_changed: Arc<AtomicBool>,
 }
 
+/// What to do with a server's host key, decided against `known_hosts`.
+#[derive(Debug, PartialEq)]
+enum HostKey {
+    /// Matches a recorded key.
+    Known,
+    /// The host has no record at all: trust on first use, then record it.
+    Learn,
+    /// The host has records and none of them is this key — refuse. This
+    /// includes a key of another algorithm (e.g. ECDSA where ed25519 is
+    /// recorded): treating that as a new host let a man-in-the-middle pick
+    /// an algorithm the victim had no record for.
+    Changed,
+    /// known_hosts exists but cannot be read or parsed — refuse rather than
+    /// trust a key nothing can contradict.
+    Unreadable(String),
+}
+
+fn decide_host_key(host: &str, port: u16, key: &russh::keys::PublicKey, path: &std::path::Path) -> HostKey {
+    // russh reports an unopenable file as "no records"; tell missing (first
+    // use) apart from unreadable (refuse).
+    match std::fs::File::open(path) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return HostKey::Learn,
+        Err(e) => return HostKey::Unreadable(e.to_string()),
+    }
+    match russh::keys::known_hosts::known_host_keys_path(host, port, path) {
+        Ok(recorded) if recorded.iter().any(|(_, k)| k == key) => HostKey::Known,
+        Ok(recorded) if recorded.is_empty() => HostKey::Learn,
+        Ok(_) => HostKey::Changed,
+        Err(e) => HostKey::Unreadable(e.to_string()),
+    }
+}
+
 impl client::Handler for HostCheck {
     type Error = russh::Error;
 
     async fn check_server_key(&mut self, key: &PublicKeyOrCertificate) -> Result<bool, Self::Error> {
         let key = key.public_key();
-        match russh::keys::check_known_hosts(&self.host, self.port, &key) {
-            Ok(true) => Ok(true),
-            Ok(false) => {
-                if let Err(e) = russh::keys::known_hosts::learn_known_hosts(&self.host, self.port, &key) {
+        let Some(path) = dirs::home_dir().map(|h| h.join(".ssh").join("known_hosts")) else {
+            log::warn!("known_hosts: no home directory");
+            return Ok(false);
+        };
+        match decide_host_key(&self.host, self.port, &key, &path) {
+            HostKey::Known => Ok(true),
+            HostKey::Learn => match russh::keys::known_hosts::learn_known_hosts_path(&self.host, self.port, &key, &path) {
+                Ok(()) => Ok(true),
+                Err(e) => {
+                    // Unrecorded trust would be re-granted blindly every time.
                     log::warn!("could not record {}'s host key: {e}", self.host);
+                    Ok(false)
                 }
-                Ok(true)
-            }
-            Err(russh::keys::Error::KeyChanged { line }) => {
-                log::warn!("{}: host key differs from known_hosts line {line}", self.host);
+            },
+            HostKey::Changed => {
+                log::warn!("{}: host key does not match known_hosts", self.host);
                 self.key_changed.store(true, Ordering::Relaxed);
                 Ok(false)
             }
-            // An unreadable known_hosts: no record to contradict this key.
-            Err(e) => {
+            HostKey::Unreadable(e) => {
                 log::warn!("known_hosts: {e}");
-                Ok(true)
+                Ok(false)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod host_key_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    const A_ED: &str = "AAAAC3NzaC1lZDI1NTE5AAAAIPJbsHJ8jZMmU6n4e+32Rt/5XFky6li7U5g5881ay2bQ";
+    const A_ECDSA: &str = "AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBP979IyH7Ltks0SoUPM8xH/KnhDNy1ISojhD6N8PthiiZdjkbhAwxgNM71WiJmxJQ0tLEi/vE1zEAgyWxtZJmMU=";
+    const B_ED: &str = "AAAAC3NzaC1lZDI1NTE5AAAAINBZ5n4xBkzexdSuEQ3SQ7UijtXqrp0VYkoxXEOaxGhd";
+
+    fn key(b64: &str) -> russh::keys::PublicKey {
+        russh::keys::parse_public_key_base64(b64).unwrap()
+    }
+
+    fn known_hosts(tag: &str, body: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("altay-kh-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let p = d.join("known_hosts");
+        std::fs::write(&p, body).unwrap();
+        p
+    }
+
+    #[test]
+    fn recorded_host_refuses_other_keys_of_any_algorithm() {
+        let p = known_hosts("algo", &format!("nas.local ssh-ed25519 {A_ED}\n"));
+        assert_eq!(decide_host_key("nas.local", 22, &key(A_ED), &p), HostKey::Known);
+        assert_eq!(decide_host_key("nas.local", 22, &key(B_ED), &p), HostKey::Changed);
+        // Another algorithm used to be learned silently.
+        assert_eq!(decide_host_key("nas.local", 22, &key(A_ECDSA), &p), HostKey::Changed);
+        // A different host (or port) has no record yet.
+        assert_eq!(decide_host_key("other.local", 22, &key(A_ECDSA), &p), HostKey::Learn);
+        assert_eq!(decide_host_key("nas.local", 2222, &key(B_ED), &p), HostKey::Learn);
+        let _ = std::fs::remove_dir_all(p.parent().unwrap());
+    }
+
+    #[test]
+    fn missing_file_learns_unreadable_or_corrupt_refuses() {
+        let p = known_hosts("missing", "");
+        std::fs::remove_file(&p).unwrap();
+        assert_eq!(decide_host_key("nas.local", 22, &key(A_ED), &p), HostKey::Learn);
+
+        let p = known_hosts("corrupt", "nas.local ssh-ed25519 !!notbase64!!\n");
+        assert!(matches!(decide_host_key("nas.local", 22, &key(B_ED), &p), HostKey::Unreadable(_)));
+
+        let p = known_hosts("unreadable", &format!("nas.local ssh-ed25519 {A_ED}\n"));
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // root can read anything; only meaningful for an ordinary user.
+        if std::fs::File::open(&p).is_err() {
+            assert!(matches!(decide_host_key("nas.local", 22, &key(B_ED), &p), HostKey::Unreadable(_)));
+        }
+        let _ = std::fs::remove_dir_all(p.parent().unwrap());
     }
 }
 
