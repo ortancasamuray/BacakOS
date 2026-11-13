@@ -73,6 +73,9 @@ pub enum ToolbarAction {
     /// Adds what's on screen behind the board (the browser, a video, any
     /// app) as a new page to write on.
     CaptureScreen,
+    /// Frame part of the PDF page: it goes to a new page as a picture
+    /// that can be moved and resized.
+    CropToPage,
     /// Steps through the curated background+grid presets.
     CycleBackground,
     PrevPage,
@@ -120,6 +123,10 @@ pub struct ToolbarState {
     pub graph_visible: bool,
     pub ask_visible: bool,
     pub solid_visible: bool,
+    /// "Alanı yeni sayfaya al" waits for its frame.
+    pub crop_armed: bool,
+    /// The page has a PDF image to cut from (glyph dims otherwise).
+    pub crop_available: bool,
     /// Undo/Redo glyphs dim when the page has nothing to take back/redo.
     pub can_undo: bool,
     pub can_redo: bool,
@@ -191,6 +198,7 @@ const ENTRIES: &[Entry] = &[
     Entry::Direct(ToolbarAction::ToggleTextBox),
     Entry::Direct(ToolbarAction::OpenBrowser),
     Entry::Direct(ToolbarAction::CaptureScreen),
+    Entry::Direct(ToolbarAction::CropToPage),
     Entry::Group(&[
         ToolbarAction::ToggleZone,
         ToolbarAction::CycleBackground,
@@ -207,8 +215,8 @@ const ENTRIES: &[Entry] = &[
 /// Local index right before which a thin separator is drawn: tool-select
 /// (0-3) | brush/color/undo/redo/clear (4-8) | drafting/widget/view groups
 /// (9-11) + function graph, solids, "Sor" (12-14) | text/browser/screen
-/// grab (15-17) | page group (18) | minimize (19).
-const SEPARATOR_BEFORE: [usize; 5] = [4, 9, 15, 18, 19];
+/// grab/PDF area to a page (15-18) | page group (19) | minimize (20).
+const SEPARATOR_BEFORE: [usize; 5] = [4, 9, 15, 19, 20];
 
 /// Bottom-center floating toolbar. Screen-space, never affected by canvas
 /// pan/zoom, recomputed each frame from the current window size (though
@@ -437,6 +445,7 @@ fn is_active(action: ToolbarAction, state: &ToolbarState) -> bool {
         ToolbarAction::ToggleGraph => state.graph_visible,
         ToolbarAction::ToggleSolid => state.solid_visible,
         ToolbarAction::ToggleAsk => state.ask_visible,
+        ToolbarAction::CropToPage => state.crop_armed,
         ToolbarAction::NewBoard => state.new_board_armed,
         ToolbarAction::DeletePage => state.delete_page_armed,
         ToolbarAction::OpenFile => state.opener_visible,
@@ -779,6 +788,22 @@ fn draw_glyph(
                 push_line(corner, corner + Vec2::new(0.0, dy * l), 3.0, COLOR_GLYPH, out_vertices, out_indices);
             }
             push_circle(center, r * 0.3, COLOR_GLYPH, 14, out_vertices, out_indices);
+        }
+        ToolbarAction::CropToPage => {
+            // A dashed frame on a page, an arrow out to a new page.
+            let color = if state.crop_available { COLOR_GLYPH } else { COLOR_GLYPH_DISABLED };
+            let tl = center + Vec2::new(-r * 1.05, -r * 0.95);
+            let (w, h) = (r * 1.3, r * 1.1);
+            let frame = [tl, tl + Vec2::new(w, 0.0), tl + Vec2::new(w, h), tl + Vec2::new(0.0, h), tl];
+            for dash in crate::ink::dash_polyline(&frame, 4.0, 3.0) {
+                push_line(dash[0], dash[dash.len() - 1], 2.0, color, out_vertices, out_indices);
+            }
+            let from = tl + Vec2::new(w * 0.6, h * 0.6);
+            let to = center + Vec2::new(r * 0.95, r * 0.9);
+            push_line(from, to, 2.5, color, out_vertices, out_indices);
+            let d = (to - from).normalize() * r * 0.45;
+            push_line(to, to - d + d.perp() * 0.7, 2.5, color, out_vertices, out_indices);
+            push_line(to, to - d - d.perp() * 0.7, 2.5, color, out_vertices, out_indices);
         }
         ToolbarAction::ExportPdf => {
             // A little page outline with a downward export arrow.

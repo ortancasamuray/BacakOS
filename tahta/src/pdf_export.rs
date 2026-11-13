@@ -69,7 +69,7 @@ fn local_timestamp() -> String {
     }
 }
 
-fn build_pdf(pages: &[Page], page_size: Vec2) -> Vec<u8> {
+pub(crate) fn build_pdf(pages: &[Page], page_size: Vec2) -> Vec<u8> {
     let (w, h) = (page_size.x, page_size.y);
     let page_count = pages.len().max(1);
     let empty_page = Page::new();
@@ -81,6 +81,8 @@ fn build_pdf(pages: &[Page], page_size: Vec2) -> Vec<u8> {
         page_obj: u32,
         contents_obj: u32,
         image_obj: Option<u32>,
+        /// One Image XObject per placed picture (`/Im1`, `/Im2`, …).
+        picture_objs: Vec<u32>,
     }
     let mut planned = Vec::with_capacity(page_count);
     let mut next_obj = 3u32;
@@ -94,7 +96,15 @@ fn build_pdf(pages: &[Page], page_size: Vec2) -> Vec<u8> {
             next_obj += 1;
             obj
         });
-        planned.push(PlannedPage { page_obj, contents_obj, image_obj });
+        let picture_objs = page
+            .pictures
+            .iter()
+            .map(|_| {
+                next_obj += 1;
+                next_obj - 1
+            })
+            .collect();
+        planned.push(PlannedPage { page_obj, contents_obj, image_obj, picture_objs });
     }
     let total_objects = (next_obj - 1) as usize;
 
@@ -119,10 +129,14 @@ fn build_pdf(pages: &[Page], page_size: Vec2) -> Vec<u8> {
         let page = pages.get(i).unwrap_or(&empty_page);
         let content = page_content(page, w, h, p.image_obj);
 
-        let xobject_res = match p.image_obj {
-            Some(obj) => format!("/XObject << /Im0 {obj} 0 R >> "),
-            None => String::new(),
-        };
+        let mut xobjects = String::new();
+        if let Some(obj) = p.image_obj {
+            xobjects.push_str(&format!("/Im0 {obj} 0 R "));
+        }
+        for (k, obj) in p.picture_objs.iter().enumerate() {
+            xobjects.push_str(&format!("/Im{} {obj} 0 R ", k + 1));
+        }
+        let xobject_res = if xobjects.is_empty() { String::new() } else { format!("/XObject << {xobjects}>> ") };
         offsets[p.page_obj as usize] = out.len();
         out.extend_from_slice(
             format!(
@@ -139,7 +153,12 @@ fn build_pdf(pages: &[Page], page_size: Vec2) -> Vec<u8> {
         out.extend_from_slice(content.as_bytes());
         out.extend_from_slice(b"\nendstream\nendobj\n");
 
-        if let (Some(obj), Some(image)) = (p.image_obj, &page.pdf_image) {
+        let images = p
+            .image_obj
+            .zip(page.pdf_image.as_ref())
+            .into_iter()
+            .chain(p.picture_objs.iter().copied().zip(page.pictures.iter().map(|q| &q.image)));
+        for (obj, image) in images {
             let rgb: Vec<u8> = image.rgba.chunks_exact(4).flat_map(|px| [px[0], px[1], px[2]]).collect();
             let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
             encoder.write_all(&rgb).expect("zlib encode into Vec never fails");
@@ -197,6 +216,18 @@ fn page_content(page: &Page, w: f32, h: f32, image_obj: Option<u32>) -> String {
                 draw_vertical_grid(&mut s, w, h);
             }
         }
+    }
+
+    // Placed pictures (canvas space, like the ink) under the ink.
+    for (k, p) in page.pictures.iter().enumerate() {
+        s.push_str(&format!(
+            "q\n{:.2} 0 0 {:.2} {:.2} {:.2} cm\n/Im{} Do\nQ\n",
+            p.size.x,
+            p.size.y,
+            p.pos.x,
+            h - p.pos.y - p.size.y,
+            k + 1
+        ));
     }
 
     for stroke in &page.strokes {
