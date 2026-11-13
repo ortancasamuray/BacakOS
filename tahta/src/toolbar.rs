@@ -68,6 +68,14 @@ pub enum ToolbarAction {
     ToggleSolid,
     /// Shows/hides the draggable periodic table panel (`periodic.rs`).
     TogglePeriodic,
+    /// Shows/hides the draggable atom model panel (`atom.rs`).
+    ToggleAtom,
+    /// Shows/hides the draggable 3D molecule panel (`molecule.rs`).
+    ToggleMolecule,
+    /// Shows/hides the equation balancing / mole panel (`reaction.rs`).
+    ToggleReaction,
+    /// Shows/hides the lab equipment panel (`lab.rs`).
+    ToggleLab,
     /// "Sor": frame part of the board, ask the school's YZsunucu.
     ToggleAsk,
     /// Opens EBA in the system browser (see `masaustu.rs`).
@@ -126,6 +134,10 @@ pub struct ToolbarState {
     pub ask_visible: bool,
     pub solid_visible: bool,
     pub periodic_visible: bool,
+    pub atom_visible: bool,
+    pub molecule_visible: bool,
+    pub reaction_visible: bool,
+    pub lab_visible: bool,
     /// "Alanı yeni sayfaya al" waits for its frame.
     pub crop_armed: bool,
     /// The page has a PDF image to cut from (glyph dims otherwise).
@@ -197,7 +209,8 @@ const ENTRIES: &[Entry] = &[
     Entry::Group(&[ToolbarAction::ToggleSpotlight, ToolbarAction::ToggleMagnifier]),
     Entry::Direct(ToolbarAction::ToggleGraph),
     Entry::Direct(ToolbarAction::ToggleSolid),
-    Entry::Direct(ToolbarAction::TogglePeriodic),
+    // Chemistry.
+    Entry::Group(&[ToolbarAction::TogglePeriodic, ToolbarAction::ToggleAtom, ToolbarAction::ToggleMolecule, ToolbarAction::ToggleReaction, ToolbarAction::ToggleLab]),
     Entry::Direct(ToolbarAction::ToggleAsk),
     Entry::Direct(ToolbarAction::ToggleTextBox),
     Entry::Direct(ToolbarAction::OpenBrowser),
@@ -450,6 +463,10 @@ fn is_active(action: ToolbarAction, state: &ToolbarState) -> bool {
         ToolbarAction::ToggleGraph => state.graph_visible,
         ToolbarAction::ToggleSolid => state.solid_visible,
         ToolbarAction::TogglePeriodic => state.periodic_visible,
+        ToolbarAction::ToggleAtom => state.atom_visible,
+        ToolbarAction::ToggleMolecule => state.molecule_visible,
+        ToolbarAction::ToggleReaction => state.reaction_visible,
+        ToolbarAction::ToggleLab => state.lab_visible,
         ToolbarAction::ToggleAsk => state.ask_visible,
         ToolbarAction::CropToPage => state.crop_armed,
         ToolbarAction::NewBoard => state.new_board_armed,
@@ -809,6 +826,62 @@ fn draw_glyph(
                 push_rect(tl + Vec2::new(cx * u * 1.2, cy * u * 1.2), Vec2::splat(u), COLOR_GLYPH, out_vertices, out_indices);
             }
             push_rect(tl + Vec2::new(u * 1.2, u * 4.0), Vec2::new(u * 4.6, u * 0.8), COLOR_GLYPH, out_vertices, out_indices);
+        }
+        ToolbarAction::ToggleLab => {
+            // An Erlenmeyer flask with liquid.
+            let t = center.y - r;
+            let b = center.y + r;
+            let pts = [
+                Vec2::new(center.x - r * 0.25, t),
+                Vec2::new(center.x - r * 0.25, t + r * 0.7),
+                Vec2::new(center.x - r * 0.95, b),
+                Vec2::new(center.x + r * 0.95, b),
+                Vec2::new(center.x + r * 0.25, t + r * 0.7),
+                Vec2::new(center.x + r * 0.25, t),
+            ];
+            for w in pts.windows(2) {
+                push_line(w[0], w[1], 2.0, COLOR_GLYPH, out_vertices, out_indices);
+            }
+            push_line(Vec2::new(center.x - r * 0.6, center.y + r * 0.35), Vec2::new(center.x + r * 0.6, center.y + r * 0.35), 2.0, COLOR_GLYPH, out_vertices, out_indices);
+        }
+        ToolbarAction::ToggleReaction => {
+            // "A + B → C": two dots, a plus, an arrow, a dot.
+            let y = center.y;
+            push_circle(Vec2::new(center.x - r * 1.05, y), r * 0.22, COLOR_GLYPH, 10, out_vertices, out_indices);
+            push_line(Vec2::new(center.x - r * 0.72, y), Vec2::new(center.x - r * 0.38, y), 1.8, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(Vec2::new(center.x - r * 0.55, y - r * 0.17), Vec2::new(center.x - r * 0.55, y + r * 0.17), 1.8, COLOR_GLYPH, out_vertices, out_indices);
+            push_circle(Vec2::new(center.x - r * 0.1, y), r * 0.22, COLOR_GLYPH, 10, out_vertices, out_indices);
+            let (a, b) = (Vec2::new(center.x + r * 0.2, y), Vec2::new(center.x + r * 0.7, y));
+            push_line(a, b, 2.0, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(b, b + Vec2::new(-r * 0.2, -r * 0.15), 2.0, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(b, b + Vec2::new(-r * 0.2, r * 0.15), 2.0, COLOR_GLYPH, out_vertices, out_indices);
+            push_circle(Vec2::new(center.x + r * 1.0, y), r * 0.22, COLOR_GLYPH, 10, out_vertices, out_indices);
+        }
+        ToolbarAction::ToggleMolecule => {
+            // A bent molecule: a big ball with two small ones on sticks.
+            let o = center + Vec2::new(0.0, -r * 0.25);
+            for dx in [-1.0f32, 1.0] {
+                let h = center + Vec2::new(dx * r * 0.85, r * 0.6);
+                push_line(o, h, 2.5, COLOR_GLYPH, out_vertices, out_indices);
+                push_circle(h, r * 0.28, COLOR_GLYPH, 12, out_vertices, out_indices);
+            }
+            push_circle(o, r * 0.45, COLOR_GLYPH, 16, out_vertices, out_indices);
+        }
+        ToolbarAction::ToggleAtom => {
+            // Nucleus with two crossed elliptical orbits.
+            push_circle(center, r * 0.22, COLOR_GLYPH, 12, out_vertices, out_indices);
+            for rot in [0.5f32, -0.5] {
+                let (s, c) = rot.sin_cos();
+                const STEPS: usize = 24;
+                for i in 0..STEPS {
+                    let pt = |k: usize| {
+                        let t = k as f32 / STEPS as f32 * std::f32::consts::TAU;
+                        let p = Vec2::new(r * 1.05 * t.cos(), r * 0.42 * t.sin());
+                        center + Vec2::new(p.x * c - p.y * s, p.x * s + p.y * c)
+                    };
+                    push_line(pt(i), pt(i + 1), 1.8, COLOR_GLYPH, out_vertices, out_indices);
+                }
+            }
         }
         ToolbarAction::CropToPage => {
             // A dashed frame on a page, an arrow out to a new page.

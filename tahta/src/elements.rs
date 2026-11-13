@@ -352,6 +352,63 @@ pub fn configuration(z: u32) -> Vec<(u32, u32, u32)> {
     out.into_iter().filter(|e| e.2 > 0).map(|(n, l, k)| (n, l, k as u32)).collect()
 }
 
+/// Plain Madelung filling of `electrons` electrons (anions).
+fn madelung(electrons: u32) -> Vec<(u32, u32, u32)> {
+    let mut left = electrons;
+    let mut out = Vec::new();
+    for &(n, l) in &ORDER {
+        if left == 0 {
+            break;
+        }
+        let k = left.min(4 * l + 2);
+        out.push((n, l, k));
+        left -= k;
+    }
+    out
+}
+
+/// Configuration of the ion of `z` with charge `charge`: a cation loses
+/// electrons from the outermost shell first (Fe²⁺: 4s before 3d), an
+/// anion fills on in Madelung order (O²⁻: 2p⁶).
+pub fn ion_configuration(z: u32, charge: i32) -> Vec<(u32, u32, u32)> {
+    let electrons = (z as i32 - charge).max(0) as u32;
+    if charge <= 0 {
+        return if charge == 0 { configuration(z) } else { madelung(electrons) };
+    }
+    let mut config = configuration(z);
+    for _ in 0..charge.min(z as i32) {
+        if let Some(i) = (0..config.len()).max_by_key(|&i| (config[i].0, config[i].1)) {
+            config[i].2 -= 1;
+            if config[i].2 == 0 {
+                config.remove(i);
+            }
+        }
+    }
+    config
+}
+
+/// Electrons per shell for a configuration.
+pub fn shells_of(config: &[(u32, u32, u32)]) -> Vec<u32> {
+    let mut out = vec![0; 7];
+    for &(n, _, k) in config {
+        out[n as usize - 1] += k;
+    }
+    while out.last() == Some(&0) {
+        out.pop();
+    }
+    out
+}
+
+/// "²⁺", "⁻", "" for a charge.
+pub fn charge_superscript(charge: i32) -> String {
+    let sign = if charge > 0 { "⁺" } else { "⁻" };
+    match charge.abs() {
+        0 => String::new(),
+        1 => sign.to_string(),
+        n => format!("{}{sign}", superscript(n as u32)),
+    }
+}
+
 pub fn subshell_letter(l: u32) -> char {
     ['s', 'p', 'd', 'f'][l as usize]
 }
@@ -369,6 +426,10 @@ fn format_subshells(subshells: &[(u32, u32, u32)]) -> String {
         .map(|&(n, l, k)| format!("{n}{}{}", subshell_letter(l), superscript(k)))
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+pub fn format_configuration(config: &[(u32, u32, u32)]) -> String {
+    format_subshells(config)
 }
 
 pub fn configuration_text(z: u32) -> String {
@@ -430,6 +491,18 @@ mod tests {
             assert_eq!(configuration(z).iter().map(|e| e.2).sum::<u32>(), z, "{}", symbol(z));
             assert!(configuration(z).iter().all(|&(_, l, k)| k <= 4 * l + 2), "{}", symbol(z));
         }
+    }
+
+    #[test]
+    fn ions_lose_outer_electrons_first_and_anions_fill_on() {
+        assert_eq!(format_configuration(&ion_configuration(26, 2)), "1s² 2s² 2p⁶ 3s² 3p⁶ 3d⁶");
+        assert_eq!(format_configuration(&ion_configuration(26, 3)), "1s² 2s² 2p⁶ 3s² 3p⁶ 3d⁵");
+        assert_eq!(format_configuration(&ion_configuration(11, 1)), "1s² 2s² 2p⁶");
+        assert_eq!(format_configuration(&ion_configuration(8, -2)), "1s² 2s² 2p⁶");
+        assert_eq!(shells_of(&ion_configuration(17, -1)), vec![2, 8, 8]);
+        assert!(ion_configuration(1, 1).is_empty());
+        assert_eq!(charge_superscript(2), "²⁺");
+        assert_eq!(charge_superscript(-1), "⁻");
     }
 
     #[test]
