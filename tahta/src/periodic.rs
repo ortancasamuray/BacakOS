@@ -540,7 +540,7 @@ impl Periodic {
 
 /// Nucleus radius and the shell radii for a Bohr model of `count`
 /// shells within `radius`.
-fn bohr_rings(radius: f32, count: usize) -> (f32, Vec<f32>) {
+pub(crate) fn bohr_rings(radius: f32, count: usize) -> (f32, Vec<f32>) {
     let nucleus = (radius * 0.2).clamp(14.0, 34.0);
     let first = nucleus + (radius - nucleus) / (count as f32 + 0.5);
     let step = if count > 1 { (radius - first) / (count as f32 - 1.0) } else { 0.0 };
@@ -549,7 +549,7 @@ fn bohr_rings(radius: f32, count: usize) -> (f32, Vec<f32>) {
 
 /// Evenly spread electrons on a ring, each shell turned a little so the
 /// dots don't line up radially.
-fn electron_positions(center: Vec2, r: f32, count: u32, shell: usize) -> Vec<Vec2> {
+pub(crate) fn electron_positions(center: Vec2, r: f32, count: u32, shell: usize) -> Vec<Vec2> {
     let start = -std::f32::consts::FRAC_PI_2 + shell as f32 * 0.35;
     (0..count)
         .map(|k| {
@@ -559,7 +559,7 @@ fn electron_positions(center: Vec2, r: f32, count: u32, shell: usize) -> Vec<Vec
         .collect()
 }
 
-fn circle_points(center: Vec2, r: f32, segments: usize) -> Vec<Vec2> {
+pub(crate) fn circle_points(center: Vec2, r: f32, segments: usize) -> Vec<Vec2> {
     (0..=segments)
         .map(|i| {
             let a = i as f32 / segments as f32 * std::f32::consts::TAU;

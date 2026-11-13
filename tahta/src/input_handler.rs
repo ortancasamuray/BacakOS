@@ -158,6 +158,26 @@ enum PointerRole {
     PeriodicMove { grab_offset: Vec2 },
     /// Touch landed on a periodic table cell/button; already applied.
     PeriodicPress,
+    /// Dragging the atom model panel by its header.
+    AtomMove { grab_offset: Vec2 },
+    /// Touch landed on an atom panel button; already applied.
+    AtomPress,
+    /// Dragging the molecule panel by its header.
+    MoleculeMove { grab_offset: Vec2 },
+    /// Finger on the molecule's 3D view: turns it.
+    MoleculeView { last_pos: Vec2 },
+    /// Touch landed on a molecule panel button; already applied.
+    MoleculePress,
+    /// Dragging the reaction panel by its header.
+    ReactionMove { grab_offset: Vec2 },
+    /// Touch landed on a reaction panel key/row; already applied.
+    ReactionPress,
+    /// Dragging the lab panel by its header.
+    LabMove { grab_offset: Vec2 },
+    /// Dragging the lab panel's liquid level slider.
+    LabSlider,
+    /// Touch landed on a lab panel card/button; already applied.
+    LabPress,
     /// Framing a handwritten formula for the graph panel's "Tahtadan oku".
     FormulaPick,
     /// Dragging the "Sor" card by its header.
@@ -169,6 +189,10 @@ enum PointerRole {
     /// Dragging the selected stamped figure. The undo checkpoint is taken
     /// on the first real movement, so a tap leaves no empty undo step.
     SelectionMove { last_pos: Vec2, started: bool },
+    /// Dragging the selected figure's corner handle: scales it about the
+    /// frame's opposite (top-left) corner `anchor`; `diag` is the frame's
+    /// diagonal at the start, `scale` the factor applied so far.
+    SelectionResize { anchor: Vec2, diag: Vec2, scale: f32, started: bool },
     /// Dragging the selected picture; checkpoint on first real movement.
     PictureMove { last_pos: Vec2, started: bool },
     /// Dragging one of the selected picture's corners: `anchor` is the
@@ -252,6 +276,13 @@ fn resize_from_anchor(anchor: Vec2, dir: Vec2, finger: Vec2, aspect: f32) -> (Ve
     (tl, size)
 }
 
+/// The selected figure's resize handle (its frame's bottom-right
+/// corner): drawn radius, and how close a finger must land.
+const SELECTION_RESIZE_R: f32 = 13.0;
+const SELECTION_RESIZE_GRAB: f32 = 32.0;
+/// Smallest a figure can be scaled to, relative to its size when grabbed.
+const SELECTION_MIN_SCALE: f32 = 0.15;
+
 /// Radius of the selected figure's move handle.
 const SELECTION_HANDLE_R: f32 = 20.0;
 
@@ -320,6 +351,14 @@ pub struct InputHandler {
     periodic: Option<crate::periodic::Periodic>,
     /// Like `graph_stash`: the table reopens on the same element and mode.
     periodic_stash: Option<crate::periodic::Periodic>,
+    atom: Option<crate::atom::Atom>,
+    atom_stash: Option<crate::atom::Atom>,
+    molecule: Option<crate::molecule::Molecule>,
+    molecule_stash: Option<crate::molecule::Molecule>,
+    reaction: Option<crate::reaction::Reaction>,
+    reaction_stash: Option<crate::reaction::Reaction>,
+    lab: Option<crate::lab::Lab>,
+    lab_stash: Option<crate::lab::Lab>,
     /// The stamped figure (`Stroke::group`) currently selected for moving:
     /// set right after "Tahtaya bas", or by tapping a figure with the Hand
     /// tool; a touch outside its frame lets go.
@@ -425,6 +464,14 @@ impl InputHandler {
             solid_stash: None,
             periodic: None,
             periodic_stash: None,
+            atom: None,
+            atom_stash: None,
+            molecule: None,
+            molecule_stash: None,
+            reaction: None,
+            reaction_stash: None,
+            lab: None,
+            lab_stash: None,
             selection: None,
             formula_pick: false,
             formula_rect: None,
@@ -784,6 +831,8 @@ impl InputHandler {
             || self.stopwatch.as_ref().is_some_and(|s| s.is_running())
             || self.loading.is_some()
             || self.ask.as_ref().is_some_and(|c| c.is_waiting())
+            || self.atom.as_ref().is_some_and(|a| a.is_animating(now))
+            || self.molecule.as_ref().is_some_and(|m| m.is_animating())
             || self.pages[self.current_page]
                 .strokes
                 .iter()
@@ -908,6 +957,10 @@ impl InputHandler {
             }
             ToolbarAction::ToggleSolid => self.toggle_solid(),
             ToolbarAction::TogglePeriodic => self.toggle_periodic(),
+            ToolbarAction::ToggleAtom => self.toggle_atom(),
+            ToolbarAction::ToggleMolecule => self.toggle_molecule(),
+            ToolbarAction::ToggleReaction => self.toggle_reaction(),
+            ToolbarAction::ToggleLab => self.toggle_lab(),
             ToolbarAction::OpenBrowser => match crate::masaustu::open_browser(crate::masaustu::BROWSER_HOME) {
                 // The fullscreen board would cover the browser window: step
                 // aside like "return to desktop" (back via the dock).
@@ -1255,6 +1308,89 @@ impl InputHandler {
             }
         }
 
+        // Same UI-panel priority for the lab panel.
+        if let Some(panel) = &mut self.lab {
+            if panel.contains(position) {
+                let role = match panel.press_at(position) {
+                    crate::lab::LabPress::Move => PointerRole::LabMove { grab_offset: position - panel.position },
+                    crate::lab::LabPress::Slider => PointerRole::LabSlider,
+                    crate::lab::LabPress::Close => {
+                        self.toggle_lab();
+                        PointerRole::LabPress
+                    }
+                    crate::lab::LabPress::Stamp => {
+                        self.stamp_lab(now);
+                        PointerRole::LabPress
+                    }
+                    crate::lab::LabPress::Other => PointerRole::LabPress,
+                };
+                self.sessions.insert(id, PointerSession { role, start_pos: position, start_time: now });
+                return;
+            }
+        }
+
+        // Same UI-panel priority for the reaction panel.
+        if let Some(panel) = &mut self.reaction {
+            if panel.contains(position) {
+                let role = match panel.press_at(position) {
+                    crate::reaction::ReactionPress::Move => PointerRole::ReactionMove { grab_offset: position - panel.position },
+                    crate::reaction::ReactionPress::Close => {
+                        self.toggle_reaction();
+                        PointerRole::ReactionPress
+                    }
+                    crate::reaction::ReactionPress::Stamp => {
+                        self.stamp_reaction(now);
+                        PointerRole::ReactionPress
+                    }
+                    crate::reaction::ReactionPress::Other => PointerRole::ReactionPress,
+                };
+                self.sessions.insert(id, PointerSession { role, start_pos: position, start_time: now });
+                return;
+            }
+        }
+
+        // Same UI-panel priority for the molecule panel (drawn on top of
+        // the other chemistry panels).
+        if let Some(mol) = &mut self.molecule {
+            if mol.contains(position) {
+                let role = match mol.press_at(position, now) {
+                    crate::molecule::MoleculePress::Move => PointerRole::MoleculeMove { grab_offset: position - mol.position },
+                    crate::molecule::MoleculePress::View => PointerRole::MoleculeView { last_pos: position },
+                    crate::molecule::MoleculePress::Close => {
+                        self.toggle_molecule();
+                        PointerRole::MoleculePress
+                    }
+                    crate::molecule::MoleculePress::Stamp => {
+                        self.stamp_molecule(now);
+                        PointerRole::MoleculePress
+                    }
+                    crate::molecule::MoleculePress::Other => PointerRole::MoleculePress,
+                };
+                self.sessions.insert(id, PointerSession { role, start_pos: position, start_time: now });
+                return;
+            }
+        }
+
+        // Same UI-panel priority for the atom model (drawn over the table).
+        if let Some(atom) = &mut self.atom {
+            if atom.contains(position) {
+                let role = match atom.press_at(position, now) {
+                    crate::atom::AtomPress::Move => PointerRole::AtomMove { grab_offset: position - atom.position },
+                    crate::atom::AtomPress::Close => {
+                        self.toggle_atom();
+                        PointerRole::AtomPress
+                    }
+                    crate::atom::AtomPress::Stamp => {
+                        self.stamp_atom(now);
+                        PointerRole::AtomPress
+                    }
+                    crate::atom::AtomPress::Other => PointerRole::AtomPress,
+                };
+                self.sessions.insert(id, PointerSession { role, start_pos: position, start_time: now });
+                return;
+            }
+        }
+
         // Same UI-panel priority for the periodic table.
         if let Some(table) = &mut self.periodic {
             if table.contains(position) {
@@ -1268,7 +1404,14 @@ impl InputHandler {
                         self.stamp_periodic();
                         PointerRole::PeriodicPress
                     }
-                    crate::periodic::PeriodicPress::Other => PointerRole::PeriodicPress,
+                    crate::periodic::PeriodicPress::Other => {
+                        // The atom panel follows the table's element.
+                        let z = table.selected();
+                        if let Some(atom) = &mut self.atom {
+                            atom.set_element(z);
+                        }
+                        PointerRole::PeriodicPress
+                    }
                 };
                 self.sessions.insert(id, PointerSession { role, start_pos: position, start_time: now });
                 return;
@@ -1313,6 +1456,11 @@ impl InputHandler {
         // other touch only lets go of it (consumed, so letting go never
         // leaves a stray dot).
         if let Some((_, bounds)) = self.selection_bounds() {
+            if position.distance(bounds.1) <= SELECTION_RESIZE_GRAB {
+                let role = PointerRole::SelectionResize { anchor: bounds.0, diag: bounds.1 - bounds.0, scale: 1.0, started: false };
+                self.sessions.insert(id, PointerSession { role, start_pos: position, start_time: now });
+                return;
+            }
             let inside = position.cmpge(bounds.0).all() && position.cmple(bounds.1).all();
             if inside || position.distance(selection_handle(bounds, self.screen_size)) <= SELECTION_HANDLE_R + 8.0 {
                 let role = PointerRole::SelectionMove { last_pos: position, started: false };
@@ -1553,6 +1701,8 @@ impl InputHandler {
 
         let mut do_erase = false;
         let mut move_selection: Option<(Vec2, bool)> = None;
+        // (anchor, factor, first real movement) for a resize step.
+        let mut scale_selection: Option<(Vec2, f32, bool)> = None;
         // (new screen rect or move delta, first real movement)
         let mut picture_change: Option<(PictureChange, bool)> = None;
         match &mut session.role {
@@ -1699,6 +1849,42 @@ impl InputHandler {
                     solid.set_slider(position.x);
                 }
             }
+            PointerRole::LabMove { grab_offset } => {
+                let grab_offset = *grab_offset;
+                if let Some(panel) = &mut self.lab {
+                    panel.drag_to(position, grab_offset);
+                }
+            }
+            PointerRole::LabSlider => {
+                if let Some(panel) = &mut self.lab {
+                    panel.set_slider(position.x);
+                }
+            }
+            PointerRole::ReactionMove { grab_offset } => {
+                let grab_offset = *grab_offset;
+                if let Some(panel) = &mut self.reaction {
+                    panel.drag_to(position, grab_offset);
+                }
+            }
+            PointerRole::MoleculeMove { grab_offset } => {
+                let grab_offset = *grab_offset;
+                if let Some(mol) = &mut self.molecule {
+                    mol.drag_to(position, grab_offset);
+                }
+            }
+            PointerRole::MoleculeView { last_pos } => {
+                let delta = position - *last_pos;
+                *last_pos = position;
+                if let Some(mol) = &mut self.molecule {
+                    mol.rotate_by(delta);
+                }
+            }
+            PointerRole::AtomMove { grab_offset } => {
+                let grab_offset = *grab_offset;
+                if let Some(atom) = &mut self.atom {
+                    atom.drag_to(position, grab_offset);
+                }
+            }
             PointerRole::PeriodicMove { grab_offset } => {
                 let grab_offset = *grab_offset;
                 if let Some(table) = &mut self.periodic {
@@ -1733,6 +1919,17 @@ impl InputHandler {
                     *last_pos = position;
                 }
             }
+            PointerRole::SelectionResize { anchor, diag, scale, started } => {
+                let first = !*started && position.distance(session.start_pos) > 3.0;
+                if first {
+                    *started = true;
+                }
+                if *started {
+                    let target = ((position - *anchor).dot(*diag) / diag.length_squared().max(1.0)).max(SELECTION_MIN_SCALE);
+                    scale_selection = Some((*anchor, target / *scale, first));
+                    *scale = target;
+                }
+            }
             PointerRole::PictureMove { last_pos, started } => {
                 let first = !*started && position.distance(session.start_pos) > 3.0;
                 if first {
@@ -1761,6 +1958,10 @@ impl InputHandler {
             | PointerRole::GraphPress
             | PointerRole::AskPress
             | PointerRole::PeriodicPress
+            | PointerRole::AtomPress
+            | PointerRole::MoleculePress
+            | PointerRole::ReactionPress
+            | PointerRole::LabPress
             | PointerRole::SolidPress => {}
         }
         if do_erase {
@@ -1768,6 +1969,12 @@ impl InputHandler {
         }
         if let Some((change, first)) = picture_change {
             self.change_picture(change, first);
+        }
+        if let (Some((anchor, factor, first)), Some(group)) = (scale_selection, self.selection) {
+            if first {
+                self.checkpoint();
+            }
+            self.scale_group(group, anchor, factor);
         }
         if let (Some((delta, first)), Some(group)) = (move_selection, self.selection) {
             if first {
@@ -1800,6 +2007,7 @@ impl InputHandler {
                 }
                 PointerRole::CompassDrag { .. } => self.commit_compass_circle(),
                 PointerRole::SelectionMove { started: true, .. }
+                | PointerRole::SelectionResize { started: true, .. }
                 | PointerRole::PictureMove { started: true, .. }
                 | PointerRole::PictureResize { started: true, .. } => self.mark_dirty(),
                 PointerRole::FormulaPick if self.crop_pick => self.finish_crop_pick(now),
@@ -1953,6 +2161,90 @@ impl InputHandler {
         self.toggle_periodic();
         let now = self.last_input_at.unwrap_or(0.0);
         self.toast = Some((format!("{} tahtaya eklendi · sürükleyerek taşıyın", crate::elements::name(z)), now + 3.5));
+    }
+
+    fn toggle_lab(&mut self) {
+        self.lab = match self.lab.take() {
+            Some(panel) => {
+                self.lab_stash = Some(panel);
+                None
+            }
+            None => Some(self.lab_stash.take().unwrap_or_else(|| crate::lab::Lab::new(self.screen_size))),
+        };
+    }
+
+    fn stamp_lab(&mut self, now: f64) {
+        let Some(panel) = &self.lab else { return };
+        let name = panel.selected_name();
+        let lines = panel.stamp_lines(self.screen_size, self.stamp_ink());
+        self.commit_ink(lines);
+        self.toggle_lab();
+        self.toast = Some((format!("{name} tahtaya eklendi · köşeden boyutlandırın"), now + 3.5));
+    }
+
+    fn toggle_reaction(&mut self) {
+        self.reaction = match self.reaction.take() {
+            Some(panel) => {
+                self.reaction_stash = Some(panel);
+                None
+            }
+            None => Some(self.reaction_stash.take().unwrap_or_else(|| crate::reaction::Reaction::new(self.screen_size))),
+        };
+    }
+
+    fn stamp_reaction(&mut self, now: f64) {
+        let Some(panel) = &self.reaction else { return };
+        match panel.stamp_lines(self.screen_size, self.stamp_ink()) {
+            Some(lines) => {
+                self.commit_ink(lines);
+                self.toggle_reaction();
+                self.toast = Some(("Denklem tahtaya eklendi · sürükleyerek taşıyın".to_string(), now + 3.5));
+            }
+            None => self.toast = Some(("Önce denklemi düzeltin: denkleştirilemedi".to_string(), now + 3.0)),
+        }
+    }
+
+    fn toggle_molecule(&mut self) {
+        self.molecule = match self.molecule.take() {
+            Some(mol) => {
+                self.molecule_stash = Some(mol);
+                None
+            }
+            None => Some(self.molecule_stash.take().unwrap_or_else(|| crate::molecule::Molecule::new(self.screen_size))),
+        };
+    }
+
+    fn stamp_molecule(&mut self, now: f64) {
+        let Some(mol) = &self.molecule else { return };
+        let lines = mol.stamp_lines(self.screen_size, self.stamp_ink(), now);
+        self.commit_ink(lines);
+        self.toggle_molecule();
+        self.toast = Some(("Molekül tahtaya eklendi · sürükleyerek taşıyın".to_string(), now + 3.5));
+    }
+
+    fn toggle_atom(&mut self) {
+        self.atom = match self.atom.take() {
+            Some(atom) => {
+                self.atom_stash = Some(atom);
+                None
+            }
+            None => {
+                let z = self.periodic.as_ref().map_or(8, |t| t.selected());
+                let mut atom = self.atom_stash.take().unwrap_or_else(|| crate::atom::Atom::new(self.screen_size, z));
+                if self.periodic.is_some() {
+                    atom.set_element(z);
+                }
+                Some(atom)
+            }
+        };
+    }
+
+    fn stamp_atom(&mut self, now: f64) {
+        let Some(atom) = &self.atom else { return };
+        let lines = atom.stamp_lines(self.screen_size, self.stamp_ink(), now);
+        self.commit_ink(lines);
+        self.toggle_atom();
+        self.toast = Some(("Atom modeli tahtaya eklendi · sürükleyerek taşıyın".to_string(), now + 3.5));
     }
 
     fn stamp_ink(&self) -> [f32; 4] {
@@ -2137,6 +2429,19 @@ impl InputHandler {
         }
         let pad = Vec2::splat(14.0);
         Some((group, (min * self.view_scale + self.view_offset - pad, max * self.view_scale + self.view_offset + pad)))
+    }
+
+    /// Scales every stroke of `group` (points and pen width) by `factor`
+    /// about the screen-space point `anchor`.
+    fn scale_group(&mut self, group: u32, anchor: Vec2, factor: f32) {
+        let a = self.to_canvas(anchor);
+        for s in self.pages[self.current_page].strokes.iter_mut().filter(|s| s.group == group) {
+            let s = Arc::make_mut(s);
+            for p in &mut s.points {
+                *p = a + (*p - a) * factor;
+            }
+            s.width *= factor;
+        }
     }
 
     /// Moves every stroke of `group` by a screen-space delta.
@@ -2433,6 +2738,17 @@ impl InputHandler {
             for dash in crate::ink::dash_polyline(&frame, 10.0, 6.0) {
                 push_line(dash[0], dash[dash.len() - 1], 2.0, accent, &mut normal_v, &mut normal_i);
             }
+            // Resize handle on the bottom-right corner: a diagonal
+            // double arrow.
+            push_circle(br, SELECTION_RESIZE_R + 2.0, [0.97, 0.97, 0.99, 1.0], 20, &mut normal_v, &mut normal_i);
+            push_circle(br, SELECTION_RESIZE_R, accent, 20, &mut normal_v, &mut normal_i);
+            let d = Vec2::splat(SELECTION_RESIZE_R * 0.5);
+            let w = [0.97, 0.97, 0.99, 1.0];
+            push_line(br - d, br + d, 2.0, w, &mut normal_v, &mut normal_i);
+            for (tip, sgn) in [(br + d, 1.0f32), (br - d, -1.0)] {
+                push_line(tip, tip - Vec2::new(sgn * 5.0, 0.0), 2.0, w, &mut normal_v, &mut normal_i);
+                push_line(tip, tip - Vec2::new(0.0, sgn * 5.0), 2.0, w, &mut normal_v, &mut normal_i);
+            }
             // Move handle: a filled circle with four arrows.
             let c = selection_handle((tl, br), self.screen_size);
             push_circle(c, SELECTION_HANDLE_R, accent, 24, &mut normal_v, &mut normal_i);
@@ -2469,6 +2785,10 @@ impl InputHandler {
             graph_visible: self.graph.is_some(),
             solid_visible: self.solid.is_some(),
             periodic_visible: self.periodic.is_some(),
+            atom_visible: self.atom.is_some(),
+            molecule_visible: self.molecule.is_some(),
+            reaction_visible: self.reaction.is_some(),
+            lab_visible: self.lab.is_some(),
             ask_visible: self.ask.is_some() || self.ask_pick,
             crop_armed: self.crop_pick,
             crop_available: page.pdf_image.is_some(),
@@ -2502,6 +2822,18 @@ impl InputHandler {
         }
         if let Some(table) = &self.periodic {
             table.render(&self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
+        }
+        if let Some(atom) = &self.atom {
+            atom.render(now, &self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
+        }
+        if let Some(panel) = &self.lab {
+            panel.render(&self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
+        }
+        if let Some(panel) = &self.reaction {
+            panel.render(&self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
+        }
+        if let Some(mol) = &self.molecule {
+            mol.render(now, &self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
         }
         if let Some(card) = &self.ask {
             card.render(now, &self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
@@ -2637,6 +2969,23 @@ mod tests {
         assert!(h.pages[1].pictures.is_empty());
         h.undo();
         assert_eq!(h.pages[1].pictures.len(), 1);
+    }
+
+    #[test]
+    fn stamped_figures_resize_from_their_corner() {
+        let mut h = InputHandler::new(SCREEN, Arc::new(crate::font_atlas::FontAtlas::new()));
+        h.commit_ink(vec![crate::ink::InkLine { points: vec![Vec2::new(100.0, 100.0), Vec2::new(300.0, 200.0)], color: [1.0; 4], width: 2.0 }]);
+        let (_, (tl, br)) = h.selection_bounds().unwrap();
+        let mut t = 1.0;
+        // Drag the corner out to twice the frame's diagonal.
+        drag(&mut h, br, tl + (br - tl) * 2.0, &mut t);
+        let s = &h.pages[0].strokes[0];
+        let (a, b) = (s.points[0], s.points[s.points.len() - 1]);
+        assert!(((b - a).length() / Vec2::new(200.0, 100.0).length() - 2.0).abs() < 0.02, "{a:?} {b:?}");
+        assert!((s.width - 4.0).abs() < 0.05);
+        assert!(h.selection.is_some(), "still selected");
+        h.undo();
+        assert_eq!(h.pages[0].strokes[0].points[0], Vec2::new(100.0, 100.0));
     }
 
     #[test]

@@ -3,6 +3,7 @@
 
 mod app;
 mod ask;
+mod atom;
 mod board;
 mod brush;
 mod calculator;
@@ -16,8 +17,10 @@ mod graph;
 mod handwriting;
 mod ink;
 mod input_handler;
+mod lab;
 mod magnifier;
 mod masaustu;
+mod molecule;
 mod opener;
 mod palm;
 mod pdf;
@@ -25,6 +28,7 @@ mod pdf_export;
 mod periodic;
 mod persist;
 mod prediction;
+mod reaction;
 mod protractor;
 mod renderer;
 mod ruler;
