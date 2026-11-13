@@ -24,6 +24,16 @@ pub struct PdfImage {
     pub width: u32,
     pub height: u32,
     pub rgba: Vec<u8>,
+    /// The PDF page this image was drawn from, so a part of it can be
+    /// drawn again sharper when it's cut out (`pdf::render_region`).
+    /// `None` for screen grabs and cut-outs.
+    pub source: Option<PdfSource>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PdfSource {
+    pub path: std::path::PathBuf,
+    pub page: i32,
 }
 
 impl PdfImage {
@@ -34,12 +44,73 @@ impl PdfImage {
             .map(|d| d.as_nanos() as u64)
             .unwrap_or(0);
         let key = nanos ^ ((std::process::id() as u64) << 32) ^ id;
-        Self { id, key, width, height, rgba }
+        Self { id, key, width, height, rgba, source: None }
+    }
+
+    pub fn with_source(mut self, source: Option<PdfSource>) -> Self {
+        self.source = source;
+        self
     }
 
     /// An image read back from a board file, keeping its saved `key`.
     pub fn restored(key: u64, width: u32, height: u32, rgba: Vec<u8>) -> Self {
-        Self { id: next_image_id(), key, width, height, rgba }
+        Self { id: next_image_id(), key, width, height, rgba, source: None }
+    }
+}
+
+/// Largest centered rect of a `width`×`height` image that fits within
+/// `screen_size` (letterboxed), in screen-space pixels — where a PDF page
+/// image is drawn (`renderer`), and how a frame on it maps back to its
+/// pixels (`crop_image`).
+pub fn letterbox_rect(width: u32, height: u32, screen_size: Vec2) -> (Vec2, Vec2) {
+    let image_aspect = width as f32 / height.max(1) as f32;
+    let screen_aspect = screen_size.x / screen_size.y;
+    let size = if image_aspect > screen_aspect {
+        Vec2::new(screen_size.x, screen_size.x / image_aspect)
+    } else {
+        Vec2::new(screen_size.y * image_aspect, screen_size.y)
+    };
+    ((screen_size - size) / 2.0, size)
+}
+
+/// Pixel bounds `[x0, y0, x1, y1)` of `image` under the screen-space
+/// frame `(a, b)`, with `image` drawn letterboxed on a `screen_size`
+/// screen. `None` when the frame misses the image or covers less than a
+/// few pixels of it.
+pub fn crop_bounds(image: &PdfImage, (a, b): (Vec2, Vec2), screen_size: Vec2) -> Option<[u32; 4]> {
+    let (top_left, size) = letterbox_rect(image.width, image.height, screen_size);
+    let dims = Vec2::new(image.width as f32, image.height as f32);
+    let px = dims / size;
+    let lo = ((a.min(b) - top_left) * px).clamp(Vec2::ZERO, dims).floor();
+    let hi = ((a.max(b) - top_left) * px).clamp(Vec2::ZERO, dims).ceil();
+    let [x0, y0, x1, y1] = [lo.x as u32, lo.y as u32, hi.x as u32, hi.y as u32];
+    (x1 >= x0 + 8 && y1 >= y0 + 8).then_some([x0, y0, x1, y1])
+}
+
+/// The pixels of `image` within `crop_bounds`.
+pub fn crop_image(image: &PdfImage, frame: (Vec2, Vec2), screen_size: Vec2) -> Option<PdfImage> {
+    let [x0, y0, x1, y1] = crop_bounds(image, frame, screen_size)?.map(|v| v as usize);
+    let stride = image.width as usize * 4;
+    let mut rgba = Vec::with_capacity((x1 - x0) * (y1 - y0) * 4);
+    for y in y0..y1 {
+        rgba.extend_from_slice(&image.rgba[y * stride + x0 * 4..y * stride + x1 * 4]);
+    }
+    Some(PdfImage::new((x1 - x0) as u32, (y1 - y0) as u32, rgba))
+}
+
+/// An image placed on a page — a part cut out of a PDF page — that can be
+/// moved and resized. Canvas space, like ink, so it pans/zooms with it.
+#[derive(Clone)]
+pub struct Picture {
+    pub image: Arc<PdfImage>,
+    pub pos: Vec2,
+    pub size: Vec2,
+}
+
+impl Picture {
+    /// Screen-space (top-left, size) under the given pan/zoom.
+    pub fn screen_rect(&self, view_offset: Vec2, view_scale: f32) -> (Vec2, Vec2) {
+        (self.pos * view_scale + view_offset, self.size * view_scale)
     }
 }
 
@@ -111,6 +182,7 @@ struct Snapshot {
     strokes: Vec<Arc<Stroke>>,
     background: BoardBackground,
     grid: GridPattern,
+    pictures: Vec<Picture>,
 }
 
 pub struct Page {
@@ -122,6 +194,9 @@ pub struct Page {
     /// When set, this page is a PDF import: the image replaces the flat
     /// background/grid entirely and ink is annotated on top of it.
     pub pdf_image: Option<Arc<PdfImage>>,
+    /// Images placed on the page, drawn above the background and under
+    /// the ink, in order (last on top). Undoable like ink.
+    pub pictures: Vec<Picture>,
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
 }
@@ -136,17 +211,23 @@ impl Page {
     }
 
     pub fn with(background: BoardBackground, grid: GridPattern, pdf_image: Option<Arc<PdfImage>>) -> Self {
-        Self { strokes: Vec::new(), background, grid, pdf_image, undo: Vec::new(), redo: Vec::new() }
+        Self { strokes: Vec::new(), background, grid, pdf_image, pictures: Vec::new(), undo: Vec::new(), redo: Vec::new() }
     }
 
     fn snapshot(&self) -> Snapshot {
-        Snapshot { strokes: self.strokes.clone(), background: self.background, grid: self.grid }
+        Snapshot {
+            strokes: self.strokes.clone(),
+            background: self.background,
+            grid: self.grid,
+            pictures: self.pictures.clone(),
+        }
     }
 
     fn restore(&mut self, s: Snapshot) {
         self.strokes = s.strokes;
         self.background = s.background;
         self.grid = s.grid;
+        self.pictures = s.pictures;
     }
 
     /// Record the current state as an undo step — call right before any
@@ -278,6 +359,35 @@ mod tests {
         add_stroke(&mut p, 3.0);
         assert!(!p.can_redo());
         assert!(!p.redo());
+    }
+
+    #[test]
+    fn crop_maps_the_frame_onto_the_letterboxed_image() {
+        let screen = Vec2::new(400.0, 400.0);
+        assert_eq!(letterbox_rect(40, 20, screen), (Vec2::new(0.0, 100.0), Vec2::new(400.0, 200.0)));
+        let big: Vec<u8> = (0..(40 * 20)).flat_map(|i: u32| [(i % 40) as u8, (i / 40) as u8, 0, 255]).collect();
+        let img = PdfImage::new(40, 20, big);
+        assert!(crop_image(&img, (Vec2::new(10.0, 10.0), Vec2::new(390.0, 90.0)), screen).is_none(), "above the image");
+        // 10 px per image pixel; frame image pixels x 10..30, y 5..20,
+        // reaching past the image's bottom (clamped).
+        let c = crop_image(&img, (Vec2::new(300.0, 1000.0), Vec2::new(100.0, 150.0)), screen).unwrap();
+        assert_eq!((c.width, c.height), (20, 15));
+        assert_eq!(&c.rgba[0..2], &[10, 5]);
+        assert_eq!(&c.rgba[c.rgba.len() - 4..c.rgba.len() - 2], &[29, 19]);
+    }
+
+    #[test]
+    fn pictures_are_part_of_undo() {
+        let mut p = Page::new();
+        let img = Arc::new(PdfImage::new(1, 1, vec![0; 4]));
+        p.checkpoint();
+        p.pictures.push(Picture { image: img, pos: Vec2::ZERO, size: Vec2::splat(10.0) });
+        p.checkpoint();
+        p.pictures[0].size = Vec2::splat(30.0);
+        assert!(p.undo());
+        assert_eq!(p.pictures[0].size, Vec2::splat(10.0));
+        assert!(p.undo());
+        assert!(p.pictures.is_empty());
     }
 
     #[test]

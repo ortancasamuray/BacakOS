@@ -19,6 +19,13 @@ use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
 use crate::board::PdfImage;
+
+/// A placed picture as drawn this frame: image + screen-space
+/// (top-left, size).
+pub type ScreenPicture = (std::sync::Arc<PdfImage>, Vec2, Vec2);
+
+/// Pictures the vertex buffer holds before it has to grow.
+const PICTURE_CAPACITY: usize = 8;
 use crate::font_atlas::{FontAtlas, GlyphVertex};
 use crate::stroke::Vertex;
 
@@ -178,6 +185,10 @@ pub struct Renderer {
     page_textures: HashMap<u64, (wgpu::Texture, wgpu::BindGroup)>,
     page_quad_vertex: wgpu::Buffer,
     page_quad_index: wgpu::Buffer,
+    /// Four vertices per placed picture (`board::Picture`), drawn with
+    /// `page_quad_index` and a base vertex; grown when a page has more.
+    picture_vertex: wgpu::Buffer,
+    picture_capacity: usize,
 
     /// Offscreen render target the whole "page content" (background/page
     /// image/ink, not UI chrome) is re-rendered into every frame the
@@ -442,6 +453,8 @@ impl Renderer {
             usage: wgpu::BufferUsages::INDEX,
         });
 
+        let picture_vertex = Self::create_picture_buffer(&device, PICTURE_CAPACITY);
+
         let (content_texture, content_view, content_bind_group) =
             Self::create_content_texture(&device, &page_texture_bgl, &page_sampler, surface_format, config.width, config.height);
         let (highlight_texture, highlight_view, highlight_bind_group) =
@@ -607,6 +620,8 @@ impl Renderer {
             page_textures: HashMap::new(),
             page_quad_vertex,
             page_quad_index,
+            picture_vertex,
+            picture_capacity: PICTURE_CAPACITY,
             content_texture,
             content_view,
             content_bind_group,
@@ -704,18 +719,28 @@ impl Renderer {
     }
 
 
-    /// Largest centered rect of `image`'s aspect ratio that fits within
-    /// `screen_size` (letterboxed), in screen-space pixels.
-    fn letterbox_rect(image: &PdfImage, screen_size: Vec2) -> (Vec2, Vec2) {
-        let image_aspect = image.width as f32 / image.height as f32;
-        let screen_aspect = screen_size.x / screen_size.y;
-        let size = if image_aspect > screen_aspect {
-            Vec2::new(screen_size.x, screen_size.x / image_aspect)
-        } else {
-            Vec2::new(screen_size.y * image_aspect, screen_size.y)
-        };
-        let top_left = (screen_size - size) / 2.0;
-        (top_left, size)
+    fn create_picture_buffer(device: &wgpu::Device, quads: usize) -> wgpu::Buffer {
+        device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("tahta_picture_vertex"),
+            size: (quads * 4 * std::mem::size_of::<TexVertex>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        })
+    }
+
+    /// Draws the placed pictures (already uploaded by `render`).
+    fn draw_pictures<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, pictures: &[ScreenPicture]) {
+        if pictures.is_empty() {
+            return;
+        }
+        pass.set_pipeline(&self.page_pipeline);
+        pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+        pass.set_vertex_buffer(0, self.picture_vertex.slice(..));
+        pass.set_index_buffer(self.page_quad_index.slice(..), wgpu::IndexFormat::Uint32);
+        for (i, (image, _, _)) in pictures.iter().enumerate() {
+            pass.set_bind_group(1, &self.page_textures[&image.id].1, &[]);
+            pass.draw_indexed(0..6, (i * 4) as i32, 0..1);
+        }
     }
 
     pub fn resize(&mut self, new_size: PhysicalSize<u32>) {
@@ -774,6 +799,7 @@ impl Renderer {
         glyph: (&[GlyphVertex], &[u32]),
         content_ranges: (usize, usize),
         page_image: Option<&PdfImage>,
+        pictures: &[ScreenPicture],
         magnifier_lens: Option<(Vec2, f32, f32)>,
     ) -> Result<(), wgpu::SurfaceError> {
         let (background_index_count, content_index_count) = content_ranges;
@@ -809,7 +835,7 @@ impl Renderer {
         if let Some(image) = page_image {
             self.ensure_page_texture(image);
             let screen_size = Vec2::new(self.config.width as f32, self.config.height as f32);
-            let (top_left, size) = Self::letterbox_rect(image, screen_size);
+            let (top_left, size) = crate::board::letterbox_rect(image.width, image.height, screen_size);
             let verts = [
                 TexVertex { position: [top_left.x, top_left.y], uv: [0.0, 0.0] },
                 TexVertex { position: [top_left.x, top_left.y + size.y], uv: [0.0, 1.0] },
@@ -817,6 +843,24 @@ impl Renderer {
                 TexVertex { position: [top_left.x + size.x, top_left.y + size.y], uv: [1.0, 1.0] },
             ];
             self.queue.write_buffer(&self.page_quad_vertex, 0, bytemuck::cast_slice(&verts));
+        }
+
+        if !pictures.is_empty() {
+            if pictures.len() > self.picture_capacity {
+                self.picture_capacity = pictures.len().next_power_of_two();
+                self.picture_vertex = Self::create_picture_buffer(&self.device, self.picture_capacity);
+            }
+            let mut verts = Vec::with_capacity(pictures.len() * 4);
+            for (image, tl, size) in pictures {
+                self.ensure_page_texture(image);
+                verts.extend_from_slice(&[
+                    TexVertex { position: [tl.x, tl.y], uv: [0.0, 0.0] },
+                    TexVertex { position: [tl.x, tl.y + size.y], uv: [0.0, 1.0] },
+                    TexVertex { position: [tl.x + size.x, tl.y], uv: [1.0, 0.0] },
+                    TexVertex { position: [tl.x + size.x, tl.y + size.y], uv: [1.0, 1.0] },
+                ]);
+            }
+            self.queue.write_buffer(&self.picture_vertex, 0, bytemuck::cast_slice(&verts));
         }
 
         if let Some((center, radius, zoom)) = magnifier_lens {
@@ -884,6 +928,7 @@ impl Renderer {
                 content_pass.draw_indexed(0..6, 0, 0..1);
             }
             self.normal_batch.draw_range(&mut content_pass, &self.normal_pipeline, &self.uniform_bind_group, 0..background_index_count as u32);
+            self.draw_pictures(&mut content_pass, pictures);
             if has_highlight {
                 content_pass.set_pipeline(&self.highlight_composite_pipeline);
                 content_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
@@ -930,6 +975,8 @@ impl Renderer {
             // Highlighter next (Max-blended) so it sits "under" — visually
             // behind — freshly drawn ink and UI chrome painted after it.
             self.normal_batch.draw_range(&mut pass, &self.normal_pipeline, &self.uniform_bind_group, 0..background_index_count as u32);
+            // Placed pictures: on the background, under marker and ink.
+            self.draw_pictures(&mut pass, pictures);
             if has_highlight {
                 pass.set_pipeline(&self.highlight_composite_pipeline);
                 pass.set_bind_group(0, &self.uniform_bind_group, &[]);

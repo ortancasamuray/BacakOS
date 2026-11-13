@@ -21,13 +21,15 @@ use flate2::write::ZlibEncoder;
 use flate2::Compression;
 use glam::Vec2;
 
-use crate::board::{BoardBackground, GridPattern, PdfImage};
+use crate::board::{BoardBackground, GridPattern, PdfImage, Picture};
 use crate::brush::BrushType;
 use crate::stroke::Stroke;
 
-/// v2 adds each stroke's `group` (stamped figures); v1 files still load,
-/// their ink ungrouped.
-const MAGIC: &[u8; 8] = b"TAHTA\0\0\x02";
+/// v2 adds each stroke's `group` (stamped figures), v3 the PDF page
+/// image's source (file + page) and each page's placed pictures (after
+/// its strokes); older files still load.
+const MAGIC: &[u8; 8] = b"TAHTA\0\0\x03";
+const MAGIC_V2: &[u8; 8] = b"TAHTA\0\0\x02";
 const MAGIC_V1: &[u8; 8] = b"TAHTA\0\0\x01";
 const BOARD_FILE: &str = "tahta.bin";
 
@@ -37,6 +39,7 @@ pub struct PageData {
     pub grid: GridPattern,
     pub pdf_image: Option<Arc<PdfImage>>,
     pub strokes: Vec<Arc<Stroke>>,
+    pub pictures: Vec<Picture>,
 }
 
 pub struct BoardData {
@@ -72,8 +75,9 @@ pub fn backup_dir() -> PathBuf {
 pub fn save(dir: &Path, board: &BoardData) -> anyhow::Result<()> {
     std::fs::create_dir_all(dir).with_context(|| format!("{} oluşturulamadı", dir.display()))?;
     let mut keep = vec![BOARD_FILE.to_string()];
-    for page in &board.pages {
-        if let Some(img) = &page.pdf_image {
+    let images = board.pages.iter().flat_map(|p| p.pdf_image.iter().chain(p.pictures.iter().map(|q| &q.image)));
+    for img in images {
+        {
             let name = image_file(img.key);
             if !dir.join(&name).exists() {
                 let mut raw = Vec::with_capacity(8 + img.rgba.len());
@@ -82,7 +86,9 @@ pub fn save(dir: &Path, board: &BoardData) -> anyhow::Result<()> {
                 raw.extend_from_slice(&img.rgba);
                 write_atomic(&dir.join(&name), &zlib(&raw)?)?;
             }
-            keep.push(name);
+            if !keep.contains(&name) {
+                keep.push(name);
+            }
         }
     }
     write_atomic(&dir.join(BOARD_FILE), &zlib(&encode(board))?)?;
@@ -112,7 +118,7 @@ pub fn load(dir: &Path) -> anyhow::Result<Option<BoardData>> {
         let mut r = Reader { buf: &raw, pos: 0 };
         let (w, h) = (r.u32()?, r.u32()?);
         let rgba = r.take(w as usize * h as usize * 4)?.to_vec();
-        Ok(Arc::new(PdfImage::restored(key, w, h, rgba)))
+        Ok(PdfImage::restored(key, w, h, rgba))
     })
     .map(Some)
 }
@@ -216,6 +222,17 @@ fn encode(board: &BoardData) -> Vec<u8> {
             Some(img) => {
                 w.push(1);
                 w.extend_from_slice(&img.key.to_le_bytes());
+                match &img.source {
+                    Some(src) => {
+                        use std::os::unix::ffi::OsStrExt;
+                        let path = src.path.as_os_str().as_bytes();
+                        w.push(1);
+                        w.extend_from_slice(&src.page.to_le_bytes());
+                        w.extend_from_slice(&(path.len() as u32).to_le_bytes());
+                        w.extend_from_slice(path);
+                    }
+                    None => w.push(0),
+                }
             }
             None => w.push(0),
         }
@@ -235,18 +252,36 @@ fn encode(board: &BoardData) -> Vec<u8> {
                 w.extend_from_slice(&t.to_le_bytes());
             }
         }
+        w.extend_from_slice(&(page.pictures.len() as u32).to_le_bytes());
+        for p in &page.pictures {
+            w.extend_from_slice(&p.image.key.to_le_bytes());
+            for f in [p.pos.x, p.pos.y, p.size.x, p.size.y] {
+                w.extend_from_slice(&f.to_le_bytes());
+            }
+        }
     }
     w
 }
 
 fn decode(
     raw: &[u8],
-    mut image: impl FnMut(u64) -> anyhow::Result<Arc<PdfImage>>,
+    mut load_image: impl FnMut(u64) -> anyhow::Result<PdfImage>,
 ) -> anyhow::Result<BoardData> {
+    // Each image file is read once, however many pages/pictures use it.
+    let mut cache: std::collections::HashMap<u64, Arc<PdfImage>> = std::collections::HashMap::new();
+    let mut image = |key: u64, source: Option<crate::board::PdfSource>| -> anyhow::Result<Arc<PdfImage>> {
+        if let Some(img) = cache.get(&key) {
+            return Ok(img.clone());
+        }
+        let img = Arc::new(load_image(key)?.with_source(source));
+        cache.insert(key, img.clone());
+        Ok(img)
+    };
     let mut r = Reader { buf: raw, pos: 0 };
-    let v1 = match r.take(MAGIC.len())? {
-        m if m == MAGIC => false,
-        m if m == MAGIC_V1 => true,
+    let version = match r.take(MAGIC.len())? {
+        m if m == MAGIC => 3,
+        m if m == MAGIC_V2 => 2,
+        m if m == MAGIC_V1 => 1,
         _ => bail!("tahta dosyası değil ya da desteklenmeyen sürüm"),
     };
     let current_page = r.u32()? as usize;
@@ -258,8 +293,17 @@ fn decode(
         let pdf_image = match r.u8()? {
             1 => {
                 let key = r.u64()?;
+                let source = if version >= 3 && r.u8()? == 1 {
+                    use std::os::unix::ffi::OsStrExt;
+                    let page = r.u32()? as i32;
+                    let len = r.u32()? as usize;
+                    let path = std::ffi::OsStr::from_bytes(r.take(len)?).into();
+                    Some(crate::board::PdfSource { path, page })
+                } else {
+                    None
+                };
                 // A missing scan shouldn't cost the ink drawn on it.
-                match image(key) {
+                match image(key, source) {
                     Ok(img) => Some(img),
                     Err(e) => {
                         log::warn!("sayfa görüntüsü yüklenemedi ({key:016x}): {e:#}");
@@ -273,7 +317,7 @@ fn decode(
         let mut strokes = Vec::new();
         for _ in 0..n_strokes {
             let brush = brush_from(r.u8()?);
-            let group = if v1 { 0 } else { r.u32()? };
+            let group = if version == 1 { 0 } else { r.u32()? };
             let color = [r.f32()?, r.f32()?, r.f32()?, r.f32()?];
             let width = r.f32()?;
             let n = r.u32()? as usize;
@@ -287,7 +331,18 @@ fn decode(
             }
             strokes.push(Arc::new(s));
         }
-        pages.push(PageData { background, grid, pdf_image, strokes });
+        let mut pictures = Vec::new();
+        if version >= 3 {
+            for _ in 0..r.u32()? {
+                let key = r.u64()?;
+                let (pos, size) = (Vec2::new(r.f32()?, r.f32()?), Vec2::new(r.f32()?, r.f32()?));
+                match image(key, None) {
+                    Ok(image) => pictures.push(Picture { image, pos, size }),
+                    Err(e) => log::warn!("resim yüklenemedi ({key:016x}): {e:#}"),
+                }
+            }
+        }
+        pages.push(PageData { background, grid, pdf_image, strokes, pictures });
     }
     Ok(BoardData { current_page, pages })
 }
@@ -342,7 +397,8 @@ mod tests {
     #[test]
     fn board_round_trips_without_laser_or_erased_strokes() {
         let dir = temp_dir("roundtrip");
-        let img = Arc::new(PdfImage::new(2, 1, vec![1, 2, 3, 4, 5, 6, 7, 8]));
+        let source = crate::board::PdfSource { path: "/home/öğretmen/Belgeler/ders.pdf".into(), page: 3 };
+        let img = Arc::new(PdfImage::new(2, 1, vec![1, 2, 3, 4, 5, 6, 7, 8]).with_source(Some(source.clone())));
         let board = BoardData {
             current_page: 1,
             pages: vec![
@@ -350,6 +406,7 @@ mod tests {
                     background: BoardBackground::Green,
                     grid: GridPattern::Lined,
                     pdf_image: None,
+                    pictures: Vec::new(),
                     strokes: vec![
                         stroke(BrushType::Calligraphy, &[(0.0, 0.0), (10.0, 5.0), (20.0, 0.0)]),
                         stroke(BrushType::LaserPointer, &[(1.0, 1.0), (9.0, 9.0)]),
@@ -361,6 +418,8 @@ mod tests {
                     grid: GridPattern::Plain,
                     pdf_image: Some(img.clone()),
                     strokes: vec![stroke(BrushType::Highlighter, &[(3.0, 4.0), (30.0, 40.0)])],
+                    // The same image placed again: stored once.
+                    pictures: vec![Picture { image: img.clone(), pos: Vec2::new(5.0, 6.0), size: Vec2::new(70.0, 35.0) }],
                 },
             ],
         };
@@ -379,6 +438,10 @@ mod tests {
         let back_img = back.pages[1].pdf_image.as_ref().unwrap();
         assert_eq!((back_img.key, back_img.width, back_img.height), (img.key, 2, 1));
         assert_eq!(back_img.rgba, img.rgba);
+        assert_eq!(back_img.source, Some(source));
+        let pic = &back.pages[1].pictures[0];
+        assert_eq!((pic.image.key, pic.pos, pic.size), (img.key, Vec2::new(5.0, 6.0), Vec2::new(70.0, 35.0)));
+        assert!(back.pages[0].pictures.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -392,6 +455,7 @@ mod tests {
                 background: BoardBackground::White,
                 grid: GridPattern::Plain,
                 pdf_image: None,
+                pictures: Vec::new(),
                 strokes: vec![Arc::new(grouped), stroke(BrushType::Ballpoint, &[(1.0, 1.0), (2.0, 2.0)])],
             }],
         };
@@ -426,6 +490,7 @@ mod tests {
             grid: GridPattern::Plain,
             pdf_image: img,
             strokes: Vec::new(),
+            pictures: Vec::new(),
         };
         let img = Arc::new(PdfImage::new(1, 1, vec![9, 9, 9, 9]));
         save(&dir, &BoardData { current_page: 0, pages: vec![page(Some(img.clone()))] }).unwrap();

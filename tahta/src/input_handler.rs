@@ -165,12 +165,87 @@ enum PointerRole {
     /// Dragging the selected stamped figure. The undo checkpoint is taken
     /// on the first real movement, so a tap leaves no empty undo step.
     SelectionMove { last_pos: Vec2, started: bool },
+    /// Dragging the selected picture; checkpoint on first real movement.
+    PictureMove { last_pos: Vec2, started: bool },
+    /// Dragging one of the selected picture's corners: `anchor` is the
+    /// opposite corner (screen space), which stays put; aspect is kept.
+    PictureResize { anchor: Vec2, dir: Vec2, started: bool },
     /// Touch landed on the toolbar; consumed, never reaches the canvas.
     Toolbar,
     /// Flagged by the palm-rejection heuristic, or consumed by a
     /// two-finger-tap gesture / the open radial menu / the open "Aç"
     /// panel; ignored until lift.
     Palm,
+}
+
+/// Selected picture: drawn radius of its corner handles, and how far
+/// from a corner a finger still grabs it.
+const PICTURE_CORNER_R: f32 = 12.0;
+const PICTURE_CORNER_GRAB: f32 = 34.0;
+/// Smallest a picture can be resized to (screen pixels, shorter side).
+const PICTURE_MIN_SIZE: f32 = 40.0;
+
+/// What a touch on/around the selected picture grabs.
+#[derive(Debug, PartialEq)]
+enum PictureGrab {
+    Delete,
+    /// Corner `k` (0 top-left, 1 top-right, 2 bottom-right, 3 bottom-left).
+    Corner(usize),
+    Body,
+    Outside,
+}
+
+fn picture_corners((tl, size): (Vec2, Vec2)) -> [Vec2; 4] {
+    [tl, tl + Vec2::new(size.x, 0.0), tl + size, tl + Vec2::new(0.0, size.y)]
+}
+
+/// Screen-space frame (top-left, bottom-right) of a picture rect, for the
+/// delete button's placement (shared with stamped figures' move handle).
+fn picture_frame((tl, size): (Vec2, Vec2)) -> (Vec2, Vec2) {
+    (tl, tl + size)
+}
+
+fn picture_grab(rect: (Vec2, Vec2), position: Vec2, screen_size: Vec2) -> PictureGrab {
+    if position.distance(selection_handle(picture_frame(rect), screen_size)) <= SELECTION_HANDLE_R + 8.0 {
+        return PictureGrab::Delete;
+    }
+    let corners = picture_corners(rect);
+    let nearest = (0..4).min_by(|&a, &b| corners[a].distance(position).total_cmp(&corners[b].distance(position))).unwrap();
+    if corners[nearest].distance(position) <= PICTURE_CORNER_GRAB {
+        return PictureGrab::Corner(nearest);
+    }
+    let (tl, br) = picture_frame(rect);
+    if position.cmpge(tl).all() && position.cmple(br).all() {
+        PictureGrab::Body
+    } else {
+        PictureGrab::Outside
+    }
+}
+
+/// Where a picture fits on a fresh page: as large as it can be within
+/// most of the screen above the toolbar, centered there, aspect kept.
+/// The area is below the toast band (so the delete button above the
+/// picture stays reachable) and above the toolbar and its page dots.
+fn fit_picture(width: u32, height: u32, screen_size: Vec2) -> (Vec2, Vec2) {
+    let (top, bottom) = (150.0, screen_size.y - 130.0);
+    let area = Vec2::new(screen_size.x * 0.8, (bottom - top).max(100.0));
+    let natural = Vec2::new(width as f32, height as f32);
+    let scale = (area.x / natural.x).min(area.y / natural.y);
+    let size = natural * scale;
+    let center = Vec2::new(screen_size.x / 2.0, (top + bottom) / 2.0);
+    (center - size / 2.0, size)
+}
+
+/// New screen rect for a corner drag: the opposite corner `anchor` stays,
+/// the size follows the finger projected onto the diagonal in the
+/// corner's direction `dir` (±1 per axis), keeping `aspect` (w / h).
+fn resize_from_anchor(anchor: Vec2, dir: Vec2, finger: Vec2, aspect: f32) -> (Vec2, Vec2) {
+    let diagonal = Vec2::new(aspect, 1.0);
+    let t = ((finger - anchor) * dir).dot(diagonal) / diagonal.length_squared();
+    let min_t = PICTURE_MIN_SIZE / aspect.min(1.0);
+    let size = diagonal * t.max(min_t);
+    let tl = Vec2::new(if dir.x > 0.0 { anchor.x } else { anchor.x - size.x }, if dir.y > 0.0 { anchor.y } else { anchor.y - size.y });
+    (tl, size)
 }
 
 /// Radius of the selected figure's move handle.
@@ -183,6 +258,12 @@ fn selection_handle((tl, br): (Vec2, Vec2), screen_size: Vec2) -> Vec2 {
     let above = tl.y - SELECTION_HANDLE_R - 8.0;
     let y = if above >= SELECTION_HANDLE_R + 4.0 { above } else { br.y + SELECTION_HANDLE_R + 8.0 };
     Vec2::new(x, y)
+}
+
+/// One drag step on the selected picture (screen space).
+enum PictureChange {
+    Move(Vec2),
+    Resize { anchor: Vec2, dir: Vec2, finger: Vec2 },
 }
 
 /// What `InputHandler::loading` will do with its page images.
@@ -244,6 +325,12 @@ pub struct InputHandler {
     /// `formula_rect` and the `FormulaPick` session with "Tahtadan oku").
     ask_pick: bool,
     ask: Option<crate::ask::AskCard>,
+    /// "Alanı yeni sayfaya al" armed: the next drag frames part of the
+    /// page image (shares `formula_rect` and the `FormulaPick` session).
+    crop_pick: bool,
+    /// Selected placed picture, as (page, index) — shows its frame,
+    /// corner handles and delete button.
+    picture_selection: Option<(usize, usize)>,
     /// The "Aç" panel, while open (modal, see `opener.rs`).
     opener: Option<crate::opener::Opener>,
     /// Page images being made on their own thread — a PDF picked in the
@@ -334,6 +421,8 @@ impl InputHandler {
             formula_rect: None,
             ask_pick: false,
             ask: None,
+            crop_pick: false,
+            picture_selection: None,
             opener: None,
             loading: None,
             zone_enabled: false,
@@ -567,7 +656,9 @@ impl InputHandler {
     /// Hand the board about to be replaced to `app.rs` as the backup —
     /// unless it's blank, which would only push out a backup worth more.
     fn keep_as_backup(&mut self) {
-        let blank = self.pages.len() == 1 && self.pages[0].pdf_image.is_none() && self.pages[0].strokes.is_empty();
+        let blank = self.pages.len() == 1 && self.pages[0].pdf_image.is_none()
+            && self.pages[0].strokes.is_empty()
+            && self.pages[0].pictures.is_empty();
         if !blank {
             self.replaced_board = Some(self.board_data());
         }
@@ -630,6 +721,7 @@ impl InputHandler {
                     grid: p.grid,
                     pdf_image: p.pdf_image.clone(),
                     strokes: p.strokes.clone(),
+                    pictures: p.pictures.clone(),
                 })
                 .collect(),
         }
@@ -643,6 +735,7 @@ impl InputHandler {
             .map(|p| {
                 let mut page = Page::with(p.background, p.grid, p.pdf_image);
                 page.strokes = p.strokes;
+                page.pictures = p.pictures;
                 page
             })
             .collect();
@@ -651,6 +744,7 @@ impl InputHandler {
         }
         self.current_page = data.current_page.min(pages.len() - 1);
         self.pages = pages;
+        self.picture_selection = None;
         self.dirty = false;
     }
 
@@ -799,6 +893,7 @@ impl InputHandler {
                 if self.ask.take().is_none() {
                     self.ask_pick = !self.ask_pick;
                     self.formula_pick = false;
+                    self.crop_pick = false;
                     self.toast = self.ask_pick.then(|| ("Sorunun çevresine bir dikdörtgen çizin".to_string(), now + 4.0));
                 }
             }
@@ -816,6 +911,20 @@ impl InputHandler {
                     self.toast = Some(("Tarayıcı açılamadı".to_string(), now + 2.5));
                 }
             },
+            ToolbarAction::CropToPage => {
+                let now = self.last_input_at.unwrap_or(0.0);
+                if self.crop_pick {
+                    self.crop_pick = false;
+                    self.toast = None;
+                } else if self.pages[self.current_page].pdf_image.is_some() {
+                    self.crop_pick = true;
+                    self.ask_pick = false;
+                    self.formula_pick = false;
+                    self.toast = Some(("Almak istediğiniz alanın çevresine bir dikdörtgen çizin".to_string(), now + 4.0));
+                } else {
+                    self.toast = Some(("Bu sayfada PDF yok · önce Aç'tan bir PDF açın".to_string(), now + 3.0));
+                }
+            }
             ToolbarAction::CaptureScreen => {
                 if self.loading.is_none() {
                     self.start_loading(Loading::Screen, crate::masaustu::capture_screen);
@@ -829,10 +938,12 @@ impl InputHandler {
                 page.grid = grid;
             }
             ToolbarAction::PrevPage => {
+                self.crop_pick = false;
                 self.current_page = self.current_page.saturating_sub(1);
                 self.mark_dirty();
             }
             ToolbarAction::NextPage => {
+                self.crop_pick = false;
                 self.current_page += 1;
                 if self.current_page >= self.pages.len() {
                     self.pages.push(Page::new());
@@ -841,6 +952,7 @@ impl InputHandler {
             }
             ToolbarAction::GoToPage(page) => {
                 if page < self.pages.len() && page != self.current_page {
+                    self.crop_pick = false;
                     self.release_drawing_pointers();
                     self.current_page = page;
                     self.mark_dirty();
@@ -863,6 +975,7 @@ impl InputHandler {
                         self.current_page = 0;
                     }
                     self.selection = None;
+                    self.picture_selection = None;
                     self.mark_dirty();
                     self.save_now = true;
                     self.toast = Some(("Sayfa silindi · geri almak için Aç → Önceki tahta".to_string(), now + 3.5));
@@ -1133,11 +1246,38 @@ impl InputHandler {
         }
 
         // "Tahtadan oku": this drag frames the handwritten formula.
-        if self.formula_pick || self.ask_pick {
+        if self.formula_pick || self.ask_pick || self.crop_pick {
             self.formula_rect = Some((position, position));
             self.sessions.insert(id, PointerSession { role: PointerRole::FormulaPick, start_pos: position, start_time: now });
             return;
         }
+
+        // A selected picture: corners resize, the body moves, the red
+        // button deletes; any other touch only lets go of it.
+        if let Some((index, rect)) = self.selected_picture_rect() {
+            let role = match picture_grab(rect, position, self.screen_size) {
+                PictureGrab::Delete => {
+                    self.checkpoint();
+                    self.pages[self.current_page].pictures.remove(index);
+                    self.picture_selection = None;
+                    PointerRole::Palm
+                }
+                PictureGrab::Corner(k) => {
+                    let corners = picture_corners(rect);
+                    let anchor = corners[(k + 2) % 4];
+                    let dir = (corners[k] - anchor).signum();
+                    PointerRole::PictureResize { anchor, dir, started: false }
+                }
+                PictureGrab::Body => PointerRole::PictureMove { last_pos: position, started: false },
+                PictureGrab::Outside => {
+                    self.picture_selection = None;
+                    PointerRole::Palm
+                }
+            };
+            self.sessions.insert(id, PointerSession { role, start_pos: position, start_time: now });
+            return;
+        }
+        self.picture_selection = None;
 
         // A selected stamped figure: its frame or handle grabs it; any
         // other touch only lets go of it (consumed, so letting go never
@@ -1383,6 +1523,8 @@ impl InputHandler {
 
         let mut do_erase = false;
         let mut move_selection: Option<(Vec2, bool)> = None;
+        // (new screen rect or move delta, first real movement)
+        let mut picture_change: Option<(PictureChange, bool)> = None;
         match &mut session.role {
             PointerRole::Drawing { stroke_index, predictor, edge_snap } => {
                 let point_screen = match edge_snap {
@@ -1555,6 +1697,25 @@ impl InputHandler {
                     *last_pos = position;
                 }
             }
+            PointerRole::PictureMove { last_pos, started } => {
+                let first = !*started && position.distance(session.start_pos) > 3.0;
+                if first {
+                    *started = true;
+                }
+                if *started {
+                    picture_change = Some((PictureChange::Move(position - *last_pos), first));
+                    *last_pos = position;
+                }
+            }
+            PointerRole::PictureResize { anchor, dir, started } => {
+                let first = !*started && position.distance(session.start_pos) > 3.0;
+                if first {
+                    *started = true;
+                }
+                if *started {
+                    picture_change = Some((PictureChange::Resize { anchor: *anchor, dir: *dir, finger: position }, first));
+                }
+            }
             PointerRole::Toolbar
             | PointerRole::Palm
             | PointerRole::CalculatorPress
@@ -1567,6 +1728,9 @@ impl InputHandler {
         }
         if do_erase {
             self.erase_at(position, self.eraser_radius);
+        }
+        if let Some((change, first)) = picture_change {
+            self.change_picture(change, first);
         }
         if let (Some((delta, first)), Some(group)) = (move_selection, self.selection) {
             if first {
@@ -1598,18 +1762,33 @@ impl InputHandler {
                     self.mark_dirty();
                 }
                 PointerRole::CompassDrag { .. } => self.commit_compass_circle(),
-                PointerRole::SelectionMove { started: true, .. } => self.mark_dirty(),
+                PointerRole::SelectionMove { started: true, .. }
+                | PointerRole::PictureMove { started: true, .. }
+                | PointerRole::PictureResize { started: true, .. } => self.mark_dirty(),
+                PointerRole::FormulaPick if self.crop_pick => self.finish_crop_pick(now),
                 PointerRole::FormulaPick if self.ask_pick => self.finish_ask_pick(now),
                 PointerRole::FormulaPick => self.finish_formula_pick(now),
                 // A Hand-tool tap (no real pan) on a stamped figure selects it.
                 PointerRole::Panning { last_pos } if last_pos.distance(session.start_pos) < 10.0 => {
                     let (offset, scale) = (self.view_offset, self.view_scale);
-                    self.selection = self.pages[self.current_page]
+                    let page = &self.pages[self.current_page];
+                    self.selection = page
                         .strokes
                         .iter()
                         .rev()
                         .find(|s| s.group != 0 && s.hit_test(session.start_pos, 14.0, offset, scale))
                         .map(|s| s.group);
+                    // Otherwise a placed picture under the finger (topmost).
+                    if self.selection.is_none() {
+                        self.picture_selection = page
+                            .pictures
+                            .iter()
+                            .rposition(|p| {
+                                let (tl, br) = picture_frame(p.screen_rect(offset, scale));
+                                session.start_pos.cmpge(tl).all() && session.start_pos.cmple(br).all()
+                            })
+                            .map(|i| (self.current_page, i));
+                    }
                 }
                 PointerRole::SolidView { moved, .. } => {
                     if moved <= crate::solid::TAP_SLOP {
@@ -1811,6 +1990,78 @@ impl InputHandler {
         }
     }
 
+    /// The teacher framed part of the PDF page: cut it out and put it on a
+    /// new page right after this one, large and selected so it can be
+    /// moved and resized at once (a mere tap just cancels).
+    fn finish_crop_pick(&mut self, now: f64) {
+        self.crop_pick = false;
+        let Some(frame) = self.formula_rect.take() else { return };
+        if (frame.1 - frame.0).abs().min_element() < 20.0 {
+            self.toast = None;
+            return;
+        }
+        let Some(image) = self.pages[self.current_page].pdf_image.clone() else { return };
+        let Some(bounds) = board::crop_bounds(&image, frame, self.screen_size) else {
+            self.toast = Some(("Çerçeve PDF sayfasının dışında".to_string(), now + 3.0));
+            return;
+        };
+        let [x0, y0, x1, y1] = bounds;
+        let (pos, size) = fit_picture(x1 - x0, y1 - y0, self.screen_size);
+        // Drawn again from the PDF at (a bit above) the size it's shown
+        // at, so it stays sharp; the page image's own pixels otherwise
+        // (screen grabs, a PDF that has since moved).
+        let sharp = image.source.as_ref().and_then(|source| {
+            let (w, h) = (image.width as f32, image.height as f32);
+            let fractions = [x0 as f32 / w, y0 as f32 / h, x1 as f32 / w, y1 as f32 / h];
+            let long_side = (size.max_element() * 1.5).clamp(64.0, 3200.0) as u32;
+            crate::pdf::render_region(source, fractions, long_side)
+                .map_err(|e| log::warn!("alan PDF'den yeniden çizilemedi: {e:#}"))
+                .ok()
+        });
+        let Some(cut) = sharp.or_else(|| board::crop_image(&image, frame, self.screen_size)) else { return };
+        self.release_drawing_pointers();
+        let mut page = Page::new();
+        page.pictures.push(board::Picture { image: Arc::new(cut), pos, size });
+        self.current_page += 1;
+        self.pages.insert(self.current_page, page);
+        // `pos`/`size` are screen space for an unpanned, unzoomed view.
+        self.view_offset = Vec2::ZERO;
+        self.view_scale = 1.0;
+        self.selection = None;
+        self.picture_selection = Some((self.current_page, 0));
+        self.mark_dirty();
+        self.toast = Some(("Alan yeni sayfaya alındı · köşelerden boyutlandırın".to_string(), now + 4.0));
+    }
+
+    /// Index and screen rect (top-left, size) of the selected picture —
+    /// `None` when none is selected or it's gone (undone, another page).
+    fn selected_picture_rect(&self) -> Option<(usize, (Vec2, Vec2))> {
+        let (page, index) = self.picture_selection?;
+        if page != self.current_page {
+            return None;
+        }
+        let picture = self.pages[page].pictures.get(index)?;
+        Some((index, picture.screen_rect(self.view_offset, self.view_scale)))
+    }
+
+    fn change_picture(&mut self, change: PictureChange, first: bool) {
+        let Some((index, _)) = self.selected_picture_rect() else { return };
+        if first {
+            self.checkpoint();
+        }
+        let (offset, scale) = (self.view_offset, self.view_scale);
+        let picture = &mut self.pages[self.current_page].pictures[index];
+        match change {
+            PictureChange::Move(delta) => picture.pos += delta / scale,
+            PictureChange::Resize { anchor, dir, finger } => {
+                let aspect = picture.size.x / picture.size.y.max(1e-3);
+                let (tl, size) = resize_from_anchor(anchor, dir, finger, aspect);
+                picture.pos = (tl - offset) / scale;
+                picture.size = size / scale;
+            }
+        }
+    }
+
     /// Screen-space frame (top-left, bottom-right) around the selected
     /// figure on the current page — `None` when nothing is selected or the
     /// figure is gone (undone, cleared, erased, another page).
@@ -1996,6 +2247,7 @@ impl InputHandler {
         Vec<Vertex>,
         Vec<u32>,
         Option<Arc<board::PdfImage>>,
+        Vec<crate::renderer::ScreenPicture>,
         (usize, usize),
         Vec<crate::font_atlas::GlyphVertex>,
         Vec<u32>,
@@ -2099,6 +2351,25 @@ impl InputHandler {
                 push_line(dash[0], dash[dash.len() - 1], 2.5, [0.98, 0.55, 0.15, 1.0], &mut normal_v, &mut normal_i);
             }
         }
+        if let Some((_, rect)) = self.selected_picture_rect() {
+            let accent = [0.23, 0.51, 0.96, 1.0];
+            let white = [0.97, 0.97, 0.99, 1.0];
+            let (tl, br) = picture_frame(rect);
+            let frame = [tl, Vec2::new(br.x, tl.y), br, Vec2::new(tl.x, br.y), tl];
+            for dash in crate::ink::dash_polyline(&frame, 10.0, 6.0) {
+                push_line(dash[0], dash[dash.len() - 1], 2.0, accent, &mut normal_v, &mut normal_i);
+            }
+            for c in picture_corners(rect) {
+                push_circle(c, PICTURE_CORNER_R + 2.0, white, 20, &mut normal_v, &mut normal_i);
+                push_circle(c, PICTURE_CORNER_R, accent, 20, &mut normal_v, &mut normal_i);
+            }
+            // Delete button: a red circle with a white ×.
+            let c = selection_handle((tl, br), self.screen_size);
+            push_circle(c, SELECTION_HANDLE_R, [0.86, 0.24, 0.22, 1.0], 24, &mut normal_v, &mut normal_i);
+            let a = SELECTION_HANDLE_R * 0.42;
+            push_line(c - Vec2::splat(a), c + Vec2::splat(a), 2.5, white, &mut normal_v, &mut normal_i);
+            push_line(c + Vec2::new(a, -a), c + Vec2::new(-a, a), 2.5, white, &mut normal_v, &mut normal_i);
+        }
         if let Some((_, (tl, br))) = self.selection_bounds() {
             let accent = [0.23, 0.51, 0.96, 1.0];
             let frame = [tl, Vec2::new(br.x, tl.y), br, Vec2::new(tl.x, br.y), tl];
@@ -2141,6 +2412,8 @@ impl InputHandler {
             graph_visible: self.graph.is_some(),
             solid_visible: self.solid.is_some(),
             ask_visible: self.ask.is_some() || self.ask_pick,
+            crop_armed: self.crop_pick,
+            crop_available: page.pdf_image.is_some(),
             can_undo: page.can_undo(),
             can_redo: page.can_redo(),
             new_board_armed: self.new_board_armed_until.is_some(),
@@ -2192,12 +2465,130 @@ impl InputHandler {
             }
         }
 
-        (normal_v, normal_i, highlight_v, highlight_i, page.pdf_image.clone(), (background_index_count, content_index_count), glyph_v, glyph_i)
+        let pictures = page
+            .pictures
+            .iter()
+            .map(|p| {
+                let (tl, size) = p.screen_rect(self.view_offset, self.view_scale);
+                (p.image.clone(), tl, size)
+            })
+            .collect();
+
+        (normal_v, normal_i, highlight_v, highlight_i, page.pdf_image.clone(), pictures, (background_index_count, content_index_count), glyph_v, glyph_i)
     }
 
     /// `(center, radius, zoom)` for the renderer to draw the magnifier's
     /// texture-sampled lens, or `None` when the widget isn't open.
     pub fn magnifier_lens(&self) -> Option<(Vec2, f32, f32)> {
         self.magnifier.as_ref().map(|m| m.lens())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SCREEN: Vec2 = Vec2::new(1600.0, 1000.0);
+
+    fn handler_with_pdf_page() -> InputHandler {
+        let mut h = InputHandler::new(SCREEN, Arc::new(crate::font_atlas::FontAtlas::new()));
+        // 160×100 page image: drawn letterboxed it fills the screen, 10
+        // screen px per image pixel; red = column, green = row.
+        let rgba: Vec<u8> = (0..160 * 100u32).flat_map(|i| [(i % 160) as u8, (i / 160) as u8, 0, 255]).collect();
+        h.set_pdf_pages(vec![Arc::new(board::PdfImage::new(160, 100, rgba))]);
+        h
+    }
+
+    fn drag(h: &mut InputHandler, from: Vec2, to: Vec2, t: &mut f64) {
+        h.touch_started(1, from, *t);
+        for k in 1..=4 {
+            *t += 0.02;
+            h.touch_moved(1, from.lerp(to, k as f32 / 4.0), *t);
+        }
+        *t += 0.02;
+        h.touch_ended(1, *t);
+    }
+
+    #[test]
+    fn resize_keeps_the_anchor_and_aspect() {
+        let anchor = Vec2::new(100.0, 100.0);
+        // Bottom-right corner pulled to (500, 300) on a 2:1 picture.
+        let (tl, size) = resize_from_anchor(anchor, Vec2::ONE, Vec2::new(500.0, 300.0), 2.0);
+        assert_eq!((tl, size), (anchor, Vec2::new(400.0, 200.0)));
+        // Off the diagonal: projected onto it (reach 400×100 → 360×180).
+        let (_, size) = resize_from_anchor(anchor, Vec2::ONE, Vec2::new(500.0, 200.0), 2.0);
+        assert_eq!(size, Vec2::new(360.0, 180.0));
+        // Top-left corner (dir -1,-1): grows up/left, anchor is bottom-right.
+        let (tl, size) = resize_from_anchor(anchor, -Vec2::ONE, Vec2::new(-100.0, -100.0), 1.0);
+        assert_eq!((tl + size, size), (anchor, Vec2::splat(200.0)));
+        // Pushed past the anchor: never smaller than the minimum.
+        let (_, size) = resize_from_anchor(anchor, Vec2::ONE, Vec2::ZERO, 1.0);
+        assert_eq!(size, Vec2::splat(PICTURE_MIN_SIZE));
+    }
+
+    #[test]
+    fn framed_pdf_area_goes_to_a_new_page_as_a_resizable_picture() {
+        let mut h = handler_with_pdf_page();
+        let mut t = 1.0;
+        h.apply_toolbar_action(ToolbarAction::CropToPage, Zone::Left);
+        assert!(h.crop_pick);
+        // Image pixels x 20..60, y 10..30.
+        drag(&mut h, Vec2::new(200.0, 100.0), Vec2::new(600.0, 300.0), &mut t);
+        assert!(!h.crop_pick && h.formula_rect.is_none());
+        assert_eq!((h.pages.len(), h.current_page), (2, 1), "a new page after the PDF page");
+        assert!(h.pages[0].strokes.is_empty(), "the frame drew no ink");
+        let pic = h.pages[1].pictures[0].clone();
+        assert_eq!((pic.image.width, pic.image.height), (40, 20));
+        assert_eq!(&pic.image.rgba[0..2], &[20, 10]);
+        assert!((pic.size.x / pic.size.y - 2.0).abs() < 1e-3);
+        assert!(pic.size.x > 1000.0, "shown large: {:?}", pic.size);
+        assert_eq!(h.picture_selection, Some((1, 0)));
+
+        // Bottom-right corner dragged up-left along the diagonal:
+        // smaller, top-left stays.
+        let br = pic.pos + pic.size;
+        drag(&mut h, br, br - Vec2::new(400.0, 200.0), &mut t);
+        let p = &h.pages[1].pictures[0];
+        assert!(p.pos.distance(pic.pos) < 1e-2);
+        assert!((p.size.x - (pic.size.x - 400.0)).abs() < 1e-2 && (p.size.x / p.size.y - 2.0).abs() < 1e-3);
+
+        // The body moves it.
+        let (pos, size) = (p.pos, p.size);
+        drag(&mut h, pos + size / 2.0, pos + size / 2.0 + Vec2::new(50.0, 30.0), &mut t);
+        assert_eq!(h.pages[1].pictures[0].pos, pos + Vec2::new(50.0, 30.0));
+
+        // Undo walks back the move and the resize; a touch outside lets go.
+        h.undo();
+        assert_eq!(h.pages[1].pictures[0].pos, pos);
+        h.undo();
+        assert_eq!(h.pages[1].pictures[0].size, pic.size);
+        drag(&mut h, Vec2::new(5.0, 5.0), Vec2::new(5.0, 5.0), &mut t);
+        assert_eq!(h.picture_selection, None);
+        assert!(h.pages[1].strokes.is_empty(), "letting go drew nothing");
+
+        // Hand-tool tap selects it again; the red button deletes it.
+        h.active_tool = Tool::Hand;
+        let p = h.pages[1].pictures[0].clone();
+        drag(&mut h, p.pos + p.size / 2.0, p.pos + p.size / 2.0, &mut t);
+        assert_eq!(h.picture_selection, Some((1, 0)));
+        let del = selection_handle((p.pos, p.pos + p.size), SCREEN);
+        drag(&mut h, del, del, &mut t);
+        assert!(h.pages[1].pictures.is_empty());
+        h.undo();
+        assert_eq!(h.pages[1].pictures.len(), 1);
+    }
+
+    #[test]
+    fn crop_needs_a_pdf_page_and_a_real_frame() {
+        let mut h = InputHandler::new(SCREEN, Arc::new(crate::font_atlas::FontAtlas::new()));
+        h.apply_toolbar_action(ToolbarAction::CropToPage, Zone::Left);
+        assert!(!h.crop_pick, "no PDF on a plain page");
+
+        let mut h = handler_with_pdf_page();
+        let mut t = 1.0;
+        h.apply_toolbar_action(ToolbarAction::CropToPage, Zone::Left);
+        drag(&mut h, Vec2::new(300.0, 300.0), Vec2::new(305.0, 302.0), &mut t);
+        assert_eq!(h.pages.len(), 1, "a tap cancels");
+        assert!(!h.crop_pick);
     }
 }
