@@ -154,6 +154,10 @@ enum PointerRole {
     SolidSlider,
     /// Touch landed on a solid button; already applied.
     SolidPress,
+    /// Dragging the periodic table panel by its header.
+    PeriodicMove { grab_offset: Vec2 },
+    /// Touch landed on a periodic table cell/button; already applied.
+    PeriodicPress,
     /// Framing a handwritten formula for the graph panel's "Tahtadan oku".
     FormulaPick,
     /// Dragging the "Sor" card by its header.
@@ -313,6 +317,9 @@ pub struct InputHandler {
     solid: Option<crate::solid::Solid>,
     /// Like `graph_stash`, for the solid panel.
     solid_stash: Option<crate::solid::Solid>,
+    periodic: Option<crate::periodic::Periodic>,
+    /// Like `graph_stash`: the table reopens on the same element and mode.
+    periodic_stash: Option<crate::periodic::Periodic>,
     /// The stamped figure (`Stroke::group`) currently selected for moving:
     /// set right after "Tahtaya bas", or by tapping a figure with the Hand
     /// tool; a touch outside its frame lets go.
@@ -416,6 +423,8 @@ impl InputHandler {
             graph_stash: None,
             solid: None,
             solid_stash: None,
+            periodic: None,
+            periodic_stash: None,
             selection: None,
             formula_pick: false,
             formula_rect: None,
@@ -898,6 +907,7 @@ impl InputHandler {
                 }
             }
             ToolbarAction::ToggleSolid => self.toggle_solid(),
+            ToolbarAction::TogglePeriodic => self.toggle_periodic(),
             ToolbarAction::OpenBrowser => match crate::masaustu::open_browser(crate::masaustu::BROWSER_HOME) {
                 // The fullscreen board would cover the browser window: step
                 // aside like "return to desktop" (back via the dock).
@@ -1239,6 +1249,26 @@ impl InputHandler {
                         PointerRole::SolidPress
                     }
                     crate::solid::SolidPress::Other => PointerRole::SolidPress,
+                };
+                self.sessions.insert(id, PointerSession { role, start_pos: position, start_time: now });
+                return;
+            }
+        }
+
+        // Same UI-panel priority for the periodic table.
+        if let Some(table) = &mut self.periodic {
+            if table.contains(position) {
+                let role = match table.press_at(position) {
+                    crate::periodic::PeriodicPress::Move => PointerRole::PeriodicMove { grab_offset: position - table.position },
+                    crate::periodic::PeriodicPress::Close => {
+                        self.toggle_periodic();
+                        PointerRole::PeriodicPress
+                    }
+                    crate::periodic::PeriodicPress::Stamp => {
+                        self.stamp_periodic();
+                        PointerRole::PeriodicPress
+                    }
+                    crate::periodic::PeriodicPress::Other => PointerRole::PeriodicPress,
                 };
                 self.sessions.insert(id, PointerSession { role, start_pos: position, start_time: now });
                 return;
@@ -1669,6 +1699,12 @@ impl InputHandler {
                     solid.set_slider(position.x);
                 }
             }
+            PointerRole::PeriodicMove { grab_offset } => {
+                let grab_offset = *grab_offset;
+                if let Some(table) = &mut self.periodic {
+                    table.drag_to(position, grab_offset);
+                }
+            }
             PointerRole::FormulaPick => {
                 if let Some((_, end)) = &mut self.formula_rect {
                     *end = position;
@@ -1724,6 +1760,7 @@ impl InputHandler {
             | PointerRole::TextBoxPress
             | PointerRole::GraphPress
             | PointerRole::AskPress
+            | PointerRole::PeriodicPress
             | PointerRole::SolidPress => {}
         }
         if do_erase {
@@ -1898,6 +1935,26 @@ impl InputHandler {
 
     /// Axis/edge/number color for stamped figures: dark on the white
     /// board, chalk on the dark ones.
+    fn toggle_periodic(&mut self) {
+        self.periodic = match self.periodic.take() {
+            Some(table) => {
+                self.periodic_stash = Some(table);
+                None
+            }
+            None => Some(self.periodic_stash.take().unwrap_or_else(|| crate::periodic::Periodic::new(self.screen_size))),
+        };
+    }
+
+    fn stamp_periodic(&mut self) {
+        let Some(table) = &self.periodic else { return };
+        let z = table.selected();
+        let lines = table.stamp_lines(self.screen_size, self.stamp_ink());
+        self.commit_ink(lines);
+        self.toggle_periodic();
+        let now = self.last_input_at.unwrap_or(0.0);
+        self.toast = Some((format!("{} tahtaya eklendi · sürükleyerek taşıyın", crate::elements::name(z)), now + 3.5));
+    }
+
     fn stamp_ink(&self) -> [f32; 4] {
         match self.pages[self.current_page].background {
             board::BoardBackground::White => [0.12, 0.12, 0.15, 1.0],
@@ -2411,6 +2468,7 @@ impl InputHandler {
             textbox_visible: self.textbox.is_some(),
             graph_visible: self.graph.is_some(),
             solid_visible: self.solid.is_some(),
+            periodic_visible: self.periodic.is_some(),
             ask_visible: self.ask.is_some() || self.ask_pick,
             crop_armed: self.crop_pick,
             crop_available: page.pdf_image.is_some(),
@@ -2441,6 +2499,9 @@ impl InputHandler {
         }
         if let Some(solid) = &self.solid {
             solid.render(&self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
+        }
+        if let Some(table) = &self.periodic {
+            table.render(&self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
         }
         if let Some(card) = &self.ask {
             card.render(now, &self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);

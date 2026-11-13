@@ -66,6 +66,8 @@ pub enum ToolbarAction {
     ToggleGraph,
     /// Shows/hides the draggable 3D solid + section panel (`solid.rs`).
     ToggleSolid,
+    /// Shows/hides the draggable periodic table panel (`periodic.rs`).
+    TogglePeriodic,
     /// "Sor": frame part of the board, ask the school's YZsunucu.
     ToggleAsk,
     /// Opens EBA in the system browser (see `masaustu.rs`).
@@ -123,6 +125,7 @@ pub struct ToolbarState {
     pub graph_visible: bool,
     pub ask_visible: bool,
     pub solid_visible: bool,
+    pub periodic_visible: bool,
     /// "Alanı yeni sayfaya al" waits for its frame.
     pub crop_armed: bool,
     /// The page has a PDF image to cut from (glyph dims otherwise).
@@ -194,6 +197,7 @@ const ENTRIES: &[Entry] = &[
     Entry::Group(&[ToolbarAction::ToggleSpotlight, ToolbarAction::ToggleMagnifier]),
     Entry::Direct(ToolbarAction::ToggleGraph),
     Entry::Direct(ToolbarAction::ToggleSolid),
+    Entry::Direct(ToolbarAction::TogglePeriodic),
     Entry::Direct(ToolbarAction::ToggleAsk),
     Entry::Direct(ToolbarAction::ToggleTextBox),
     Entry::Direct(ToolbarAction::OpenBrowser),
@@ -214,9 +218,10 @@ const ENTRIES: &[Entry] = &[
 
 /// Local index right before which a thin separator is drawn: tool-select
 /// (0-3) | brush/color/undo/redo/clear (4-8) | drafting/widget/view groups
-/// (9-11) + function graph, solids, "Sor" (12-14) | text/browser/screen
-/// grab/PDF area to a page (15-18) | page group (19) | minimize (20).
-const SEPARATOR_BEFORE: [usize; 5] = [4, 9, 15, 19, 20];
+/// (9-11) + function graph, solids, periodic table, "Sor" (12-15) |
+/// text/browser/screen grab/PDF area to a page (16-19) | page group (20) |
+/// minimize (21).
+const SEPARATOR_BEFORE: [usize; 5] = [4, 9, 16, 20, 21];
 
 /// Bottom-center floating toolbar. Screen-space, never affected by canvas
 /// pan/zoom, recomputed each frame from the current window size (though
@@ -444,6 +449,7 @@ fn is_active(action: ToolbarAction, state: &ToolbarState) -> bool {
         ToolbarAction::ToggleTextBox => state.textbox_visible,
         ToolbarAction::ToggleGraph => state.graph_visible,
         ToolbarAction::ToggleSolid => state.solid_visible,
+        ToolbarAction::TogglePeriodic => state.periodic_visible,
         ToolbarAction::ToggleAsk => state.ask_visible,
         ToolbarAction::CropToPage => state.crop_armed,
         ToolbarAction::NewBoard => state.new_board_armed,
@@ -788,6 +794,21 @@ fn draw_glyph(
                 push_line(corner, corner + Vec2::new(0.0, dy * l), 3.0, COLOR_GLYPH, out_vertices, out_indices);
             }
             push_circle(center, r * 0.3, COLOR_GLYPH, 14, out_vertices, out_indices);
+        }
+        ToolbarAction::TogglePeriodic => {
+            // The table's silhouette: tall outer columns, a low middle,
+            // and the f-block strip below.
+            let u = r * 0.36;
+            let tl = center + Vec2::new(-r * 1.15, -r * 1.0);
+            let cells: [(f32, f32); 12] = [
+                (0.0, 0.0), (0.0, 1.0), (0.0, 2.0), (1.0, 1.0), (1.0, 2.0),
+                (2.0, 2.0), (3.0, 2.0), (4.0, 2.0),
+                (5.0, 0.0), (5.0, 1.0), (5.0, 2.0), (4.0, 1.0),
+            ];
+            for (cx, cy) in cells {
+                push_rect(tl + Vec2::new(cx * u * 1.2, cy * u * 1.2), Vec2::splat(u), COLOR_GLYPH, out_vertices, out_indices);
+            }
+            push_rect(tl + Vec2::new(u * 1.2, u * 4.0), Vec2::new(u * 4.6, u * 0.8), COLOR_GLYPH, out_vertices, out_indices);
         }
         ToolbarAction::CropToPage => {
             // A dashed frame on a page, an arrow out to a new page.
