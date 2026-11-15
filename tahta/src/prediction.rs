@@ -6,6 +6,14 @@
 
 use glam::Vec2;
 
+/// A real sample older than this means the pointer stopped: no prediction.
+const STALE_SECS: f64 = 0.04;
+/// Shortest time span a velocity is measured over.
+const MIN_VELOCITY_DT: f64 = 0.004;
+/// Upper bound on how far ahead of the last real sample the tail reaches
+/// (canvas px) — a few pixels hide latency; more reads as a stray line.
+const MAX_PREDICT_DIST: f32 = 12.0;
+
 /// A single timestamped input sample (mouse or touch position).
 #[derive(Clone, Copy, Debug)]
 pub struct TouchSample {
@@ -66,49 +74,81 @@ impl TouchPredictor {
 
     /// Produce a short run of extrapolated points for the current frame
     /// (1-3 points depending on available history), most-recent-real-sample
-    /// excluded. Empty if there isn't enough history yet.
-    pub fn predict(&self) -> Vec<Vec2> {
+    /// excluded. Empty if there isn't enough history yet, or if the last
+    /// real sample is older than [`STALE_SECS`] at `now` — a finger that
+    /// paused must not keep a tail pointing where it was heading.
+    pub fn predict(&self, now: f64) -> Vec<Vec2> {
         let (Some(p1), Some(p2)) = (self.history[1], self.history[2]) else {
             return Vec::new();
         };
+        if now - p2.timestamp > STALE_SECS {
+            return Vec::new();
+        }
 
-        let dt1 = (p2.timestamp - p1.timestamp).max(1.0 / 1000.0);
-        let velocity = (p2.position - p1.position) / dt1 as f32;
+        // Digitizers often deliver several samples in one burst (same
+        // millisecond); a velocity over such a tiny dt is wildly inflated.
+        // Measure over the oldest sample we have when the last gap is short.
+        let base = match self.history[0] {
+            Some(p0) if p2.timestamp - p1.timestamp < MIN_VELOCITY_DT => p0,
+            _ => p1,
+        };
+        let dt = p2.timestamp - base.timestamp;
+        if dt < MIN_VELOCITY_DT {
+            return Vec::new();
+        }
+        let velocity = (p2.position - base.position) / dt as f32;
 
         if velocity.length() < self.velocity_threshold {
             return Vec::new();
         }
 
-        let acceleration = if let Some(p0) = self.history[0] {
-            let dt0 = (p1.timestamp - p0.timestamp).max(1.0 / 1000.0);
-            let velocity_prev = (p1.position - p0.position) / dt0 as f32;
-
-            // Reversal guard: if direction flips sharply, the pointer likely
-            // just changed course — don't trust acceleration to fling it.
-            if velocity.length() > 0.0
-                && velocity_prev.length() > 0.0
-                && velocity.dot(velocity_prev) < 0.0
-            {
-                Vec2::ZERO
-            } else {
-                let dt_avg = ((dt0 + dt1) * 0.5).max(1.0 / 1000.0) as f32;
-                (velocity - velocity_prev) / dt_avg
-            }
-        } else {
-            Vec2::ZERO
-        };
-
+        // Velocity only: the acceleration term flung the tail far past the
+        // pen on every sudden stop or turn (letter ends, corners).
         let lookahead_s = self.lookahead_ms / 1000.0;
         let steps = 3usize;
         let mut out = Vec::with_capacity(steps);
-
         for i in 1..=steps {
-            let dt = lookahead_s * (i as f32 / steps as f32);
-            let raw_offset = velocity * dt + 0.5 * acceleration * dt * dt;
-            let damped_offset = raw_offset * self.damping;
-            out.push(p2.position + damped_offset);
+            let t = lookahead_s * (i as f32 / steps as f32);
+            let offset = (velocity * t * self.damping).clamp_length_max(MAX_PREDICT_DIST);
+            out.push(p2.position + offset);
         }
-
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fed(samples: &[(f32, f64)]) -> TouchPredictor {
+        let mut p = TouchPredictor::new(16.0);
+        for &(x, t) in samples {
+            p.push_sample(TouchSample { position: Vec2::new(x, 0.0), timestamp: t });
+        }
+        p
+    }
+
+    #[test]
+    fn paused_finger_has_no_tail() {
+        let p = fed(&[(0.0, 0.0), (10.0, 0.01), (20.0, 0.02)]);
+        assert!(!p.predict(0.025).is_empty());
+        assert!(p.predict(0.2).is_empty());
+    }
+
+    #[test]
+    fn burst_samples_do_not_fling() {
+        // Two samples 0.1 ms apart would read as 30 000 px/s.
+        let p = fed(&[(0.0, 0.0), (17.0, 0.0200), (20.0, 0.0201)]);
+        for q in p.predict(0.021) {
+            assert!(q.x - 20.0 <= MAX_PREDICT_DIST + 0.01, "{q:?}");
+        }
+    }
+
+    #[test]
+    fn tail_is_bounded() {
+        let p = fed(&[(0.0, 0.0), (400.0, 0.008), (800.0, 0.016)]);
+        for q in p.predict(0.017) {
+            assert!(q.x - 800.0 <= MAX_PREDICT_DIST + 0.01);
+        }
     }
 }

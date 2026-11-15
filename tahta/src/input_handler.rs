@@ -2651,7 +2651,7 @@ impl InputHandler {
                 .values()
                 .find_map(|s| match &s.role {
                     PointerRole::Drawing { stroke_index, predictor, .. } if *stroke_index == index => {
-                        Some(predictor.predict())
+                        Some(predictor.predict(now))
                     }
                     _ => None,
                 })
