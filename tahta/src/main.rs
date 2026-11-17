@@ -7,6 +7,7 @@ mod atom;
 mod board;
 mod brush;
 mod calculator;
+mod circuit;
 mod dice;
 mod digits;
 mod elements;

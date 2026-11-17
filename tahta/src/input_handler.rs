@@ -194,6 +194,14 @@ enum PointerRole {
     ForceDrag { index: usize },
     /// Touch landed on a force panel button; already applied.
     ForcePress,
+    /// Dragging the circuit panel by its header.
+    CircuitMove { grab_offset: Vec2 },
+    /// Dragging the circuit panel's value slider.
+    CircuitSlider,
+    /// Laying/erasing wire along the circuit grid.
+    CircuitPaint,
+    /// Touch landed on a circuit panel button/edge; already applied.
+    CircuitPress,
     /// Framing a handwritten formula for the graph panel's "Tahtadan oku".
     FormulaPick,
     /// Dragging the "Sor" card by its header.
@@ -379,6 +387,8 @@ pub struct InputHandler {
     motion_stash: Option<crate::motion::Motion>,
     force: Option<crate::force::Force>,
     force_stash: Option<crate::force::Force>,
+    circuit: Option<crate::circuit::Circuit>,
+    circuit_stash: Option<crate::circuit::Circuit>,
     /// The stamped figure (`Stroke::group`) currently selected for moving:
     /// set right after "Tahtaya bas", or by tapping a figure with the Hand
     /// tool; a touch outside its frame lets go.
@@ -496,6 +506,8 @@ impl InputHandler {
             motion_stash: None,
             force: None,
             force_stash: None,
+            circuit: None,
+            circuit_stash: None,
             selection: None,
             formula_pick: false,
             formula_rect: None,
@@ -859,6 +871,7 @@ impl InputHandler {
             || self.molecule.as_ref().is_some_and(|m| m.is_animating())
             || self.motion.as_ref().is_some_and(|m| m.is_animating(now))
             || self.force.as_ref().is_some_and(|f| f.is_animating(now))
+            || self.circuit.as_ref().is_some_and(|c| c.is_animating(now))
             || self.pages[self.current_page]
                 .strokes
                 .iter()
@@ -989,6 +1002,7 @@ impl InputHandler {
             ToolbarAction::ToggleLab => self.toggle_lab(),
             ToolbarAction::ToggleMotion => self.toggle_motion(),
             ToolbarAction::ToggleForce => self.toggle_force(),
+            ToolbarAction::ToggleCircuit => self.toggle_circuit(),
             ToolbarAction::OpenBrowser => match crate::masaustu::open_browser(crate::masaustu::BROWSER_HOME) {
                 // The fullscreen board would cover the browser window: step
                 // aside like "return to desktop" (back via the dock).
@@ -1330,6 +1344,28 @@ impl InputHandler {
                         PointerRole::SolidPress
                     }
                     crate::solid::SolidPress::Other => PointerRole::SolidPress,
+                };
+                self.sessions.insert(id, PointerSession { role, start_pos: position, start_time: now });
+                return;
+            }
+        }
+
+        // Same UI-panel priority for the circuit panel.
+        if let Some(panel) = &mut self.circuit {
+            if panel.contains(position) {
+                let role = match panel.press_at(position) {
+                    crate::circuit::CircuitPress::Move => PointerRole::CircuitMove { grab_offset: position - panel.position },
+                    crate::circuit::CircuitPress::Slider => PointerRole::CircuitSlider,
+                    crate::circuit::CircuitPress::Paint => PointerRole::CircuitPaint,
+                    crate::circuit::CircuitPress::Close => {
+                        self.toggle_circuit();
+                        PointerRole::CircuitPress
+                    }
+                    crate::circuit::CircuitPress::Stamp => {
+                        self.stamp_circuit(now);
+                        PointerRole::CircuitPress
+                    }
+                    crate::circuit::CircuitPress::Other => PointerRole::CircuitPress,
                 };
                 self.sessions.insert(id, PointerSession { role, start_pos: position, start_time: now });
                 return;
@@ -1921,6 +1957,22 @@ impl InputHandler {
                     solid.set_slider(position.x);
                 }
             }
+            PointerRole::CircuitMove { grab_offset } => {
+                let grab_offset = *grab_offset;
+                if let Some(panel) = &mut self.circuit {
+                    panel.drag_to(position, grab_offset);
+                }
+            }
+            PointerRole::CircuitSlider => {
+                if let Some(panel) = &mut self.circuit {
+                    panel.set_slider(position.x);
+                }
+            }
+            PointerRole::CircuitPaint => {
+                if let Some(panel) = &mut self.circuit {
+                    panel.paint_to(position);
+                }
+            }
             PointerRole::ForceMove { grab_offset } => {
                 let grab_offset = *grab_offset;
                 if let Some(panel) = &mut self.force {
@@ -2071,6 +2123,7 @@ impl InputHandler {
             | PointerRole::LabPress
             | PointerRole::MotionPress
             | PointerRole::ForcePress
+            | PointerRole::CircuitPress
             | PointerRole::SolidPress => {}
         }
         if do_erase {
@@ -2289,6 +2342,28 @@ impl InputHandler {
         self.commit_ink(lines);
         self.toggle_lab();
         self.toast = Some((format!("{name} tahtaya eklendi · köşeden boyutlandırın"), now + 3.5));
+    }
+
+    fn toggle_circuit(&mut self) {
+        self.circuit = match self.circuit.take() {
+            Some(panel) => {
+                self.circuit_stash = Some(panel);
+                None
+            }
+            None => Some(self.circuit_stash.take().unwrap_or_else(|| crate::circuit::Circuit::new(self.screen_size))),
+        };
+    }
+
+    fn stamp_circuit(&mut self, now: f64) {
+        let Some(panel) = &self.circuit else { return };
+        if panel.is_empty() {
+            self.toast = Some(("Önce devreyi kurun".to_string(), now + 3.0));
+            return;
+        }
+        let lines = panel.stamp_lines(self.screen_size, self.stamp_ink(), now);
+        self.commit_ink(lines);
+        self.toggle_circuit();
+        self.toast = Some(("Devre tahtaya eklendi · köşeden boyutlandırın".to_string(), now + 3.5));
     }
 
     fn toggle_force(&mut self) {
@@ -2941,6 +3016,7 @@ impl InputHandler {
             lab_visible: self.lab.is_some(),
             motion_visible: self.motion.is_some(),
             force_visible: self.force.is_some(),
+            circuit_visible: self.circuit.is_some(),
             ask_visible: self.ask.is_some() || self.ask_pick,
             crop_armed: self.crop_pick,
             crop_available: page.pdf_image.is_some(),
@@ -2991,6 +3067,9 @@ impl InputHandler {
             panel.render(now, &self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
         }
         if let Some(panel) = &self.force {
+            panel.render(now, &self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
+        }
+        if let Some(panel) = &self.circuit {
             panel.render(now, &self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
         }
         if let Some(card) = &self.ask {

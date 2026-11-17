@@ -80,6 +80,8 @@ pub enum ToolbarAction {
     ToggleMotion,
     /// Shows/hides the force / vector panel (`force.rs`).
     ToggleForce,
+    /// Shows/hides the DC circuit panel (`circuit.rs`).
+    ToggleCircuit,
     /// "Sor": frame part of the board, ask the school's YZsunucu.
     ToggleAsk,
     /// Opens EBA in the system browser (see `masaustu.rs`).
@@ -144,6 +146,7 @@ pub struct ToolbarState {
     pub lab_visible: bool,
     pub motion_visible: bool,
     pub force_visible: bool,
+    pub circuit_visible: bool,
     /// "Alanı yeni sayfaya al" waits for its frame.
     pub crop_armed: bool,
     /// The page has a PDF image to cut from (glyph dims otherwise).
@@ -218,7 +221,7 @@ const ENTRIES: &[Entry] = &[
     // Chemistry.
     Entry::Group(&[ToolbarAction::TogglePeriodic, ToolbarAction::ToggleAtom, ToolbarAction::ToggleMolecule, ToolbarAction::ToggleReaction, ToolbarAction::ToggleLab]),
     // Physics.
-    Entry::Group(&[ToolbarAction::ToggleMotion, ToolbarAction::ToggleForce]),
+    Entry::Group(&[ToolbarAction::ToggleMotion, ToolbarAction::ToggleForce, ToolbarAction::ToggleCircuit]),
     Entry::Direct(ToolbarAction::ToggleAsk),
     Entry::Direct(ToolbarAction::ToggleTextBox),
     Entry::Direct(ToolbarAction::OpenBrowser),
@@ -477,6 +480,7 @@ fn is_active(action: ToolbarAction, state: &ToolbarState) -> bool {
         ToolbarAction::ToggleLab => state.lab_visible,
         ToolbarAction::ToggleMotion => state.motion_visible,
         ToolbarAction::ToggleForce => state.force_visible,
+        ToolbarAction::ToggleCircuit => state.circuit_visible,
         ToolbarAction::ToggleAsk => state.ask_visible,
         ToolbarAction::CropToPage => state.crop_armed,
         ToolbarAction::NewBoard => state.new_board_armed,
@@ -847,6 +851,19 @@ fn draw_glyph(
                 let y = ground - r * 0.15 - 4.0 * s * (1.0 - s) * r * 1.35;
                 push_circle(Vec2::new(x, y), if k == 5 { r * 0.26 } else { 1.8 }, COLOR_GLYPH, 10, out_vertices, out_indices);
             }
+        }
+        ToolbarAction::ToggleCircuit => {
+            // A loop with a cell on the left and a bulb on the right.
+            let (x0, x1, y0, y1) = (center.x - r * 1.0, center.x + r * 1.0, center.y - r * 0.8, center.y + r * 0.8);
+            push_line(Vec2::new(x0, y0), Vec2::new(x1, y0), 2.0, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(Vec2::new(x0, y1), Vec2::new(x1, y1), 2.0, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(Vec2::new(x0, y0), Vec2::new(x0, center.y - r * 0.2), 2.0, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(Vec2::new(x0, center.y + r * 0.2), Vec2::new(x0, y1), 2.0, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(Vec2::new(x0 - r * 0.4, center.y - r * 0.2), Vec2::new(x0 + r * 0.4, center.y - r * 0.2), 2.0, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(Vec2::new(x0 - r * 0.2, center.y + r * 0.2), Vec2::new(x0 + r * 0.2, center.y + r * 0.2), 3.5, COLOR_GLYPH, out_vertices, out_indices);
+            let bulb = Vec2::new(x1, center.y);
+            push_line(Vec2::new(x1, y0), Vec2::new(x1, y1), 2.0, COLOR_GLYPH, out_vertices, out_indices);
+            push_circle(bulb, r * 0.42, COLOR_GLYPH, 16, out_vertices, out_indices);
         }
         ToolbarAction::ToggleForce => {
             // A block on the floor pulled by an arrow.
