@@ -202,6 +202,14 @@ enum PointerRole {
     CircuitPaint,
     /// Touch landed on a circuit panel button/edge; already applied.
     CircuitPress,
+    /// Dragging the optics panel by its header.
+    OpticsMove { grab_offset: Vec2 },
+    /// Dragging one of the optics panel's sliders.
+    OpticsSlider { param: crate::optics::Param },
+    /// Dragging the object (or the incoming ray) in the optics view.
+    OpticsDrag,
+    /// Touch landed on an optics panel button; already applied.
+    OpticsPress,
     /// Framing a handwritten formula for the graph panel's "Tahtadan oku".
     FormulaPick,
     /// Dragging the "Sor" card by its header.
@@ -389,6 +397,8 @@ pub struct InputHandler {
     force_stash: Option<crate::force::Force>,
     circuit: Option<crate::circuit::Circuit>,
     circuit_stash: Option<crate::circuit::Circuit>,
+    optics: Option<crate::optics::Optics>,
+    optics_stash: Option<crate::optics::Optics>,
     /// The stamped figure (`Stroke::group`) currently selected for moving:
     /// set right after "Tahtaya bas", or by tapping a figure with the Hand
     /// tool; a touch outside its frame lets go.
@@ -508,6 +518,8 @@ impl InputHandler {
             force_stash: None,
             circuit: None,
             circuit_stash: None,
+            optics: None,
+            optics_stash: None,
             selection: None,
             formula_pick: false,
             formula_rect: None,
@@ -1003,6 +1015,7 @@ impl InputHandler {
             ToolbarAction::ToggleMotion => self.toggle_motion(),
             ToolbarAction::ToggleForce => self.toggle_force(),
             ToolbarAction::ToggleCircuit => self.toggle_circuit(),
+            ToolbarAction::ToggleOptics => self.toggle_optics(),
             ToolbarAction::OpenBrowser => match crate::masaustu::open_browser(crate::masaustu::BROWSER_HOME) {
                 // The fullscreen board would cover the browser window: step
                 // aside like "return to desktop" (back via the dock).
@@ -1344,6 +1357,28 @@ impl InputHandler {
                         PointerRole::SolidPress
                     }
                     crate::solid::SolidPress::Other => PointerRole::SolidPress,
+                };
+                self.sessions.insert(id, PointerSession { role, start_pos: position, start_time: now });
+                return;
+            }
+        }
+
+        // Same UI-panel priority for the optics panel.
+        if let Some(panel) = &mut self.optics {
+            if panel.contains(position) {
+                let role = match panel.press_at(position) {
+                    crate::optics::OpticsPress::Move => PointerRole::OpticsMove { grab_offset: position - panel.position },
+                    crate::optics::OpticsPress::Slider(param) => PointerRole::OpticsSlider { param },
+                    crate::optics::OpticsPress::Drag => PointerRole::OpticsDrag,
+                    crate::optics::OpticsPress::Close => {
+                        self.toggle_optics();
+                        PointerRole::OpticsPress
+                    }
+                    crate::optics::OpticsPress::Stamp => {
+                        self.stamp_optics(now);
+                        PointerRole::OpticsPress
+                    }
+                    crate::optics::OpticsPress::Other => PointerRole::OpticsPress,
                 };
                 self.sessions.insert(id, PointerSession { role, start_pos: position, start_time: now });
                 return;
@@ -1957,6 +1992,23 @@ impl InputHandler {
                     solid.set_slider(position.x);
                 }
             }
+            PointerRole::OpticsMove { grab_offset } => {
+                let grab_offset = *grab_offset;
+                if let Some(panel) = &mut self.optics {
+                    panel.drag_to(position, grab_offset);
+                }
+            }
+            PointerRole::OpticsSlider { param } => {
+                let param = *param;
+                if let Some(panel) = &mut self.optics {
+                    panel.set_slider(param, position.x);
+                }
+            }
+            PointerRole::OpticsDrag => {
+                if let Some(panel) = &mut self.optics {
+                    panel.drag_object(position);
+                }
+            }
             PointerRole::CircuitMove { grab_offset } => {
                 let grab_offset = *grab_offset;
                 if let Some(panel) = &mut self.circuit {
@@ -2124,6 +2176,7 @@ impl InputHandler {
             | PointerRole::MotionPress
             | PointerRole::ForcePress
             | PointerRole::CircuitPress
+            | PointerRole::OpticsPress
             | PointerRole::SolidPress => {}
         }
         if do_erase {
@@ -2147,6 +2200,9 @@ impl InputHandler {
     }
 
     fn end_pointer(&mut self, id: u64, now: f64) {
+        if let Some(panel) = &mut self.optics {
+            panel.release();
+        }
         if let Some(pinch) = &self.pinch {
             if id == pinch.id_a || id == pinch.id_b {
                 // One finger lifted — hand the transform back to ordinary
@@ -2341,6 +2397,25 @@ impl InputHandler {
         let lines = panel.stamp_lines(self.screen_size, self.stamp_ink());
         self.commit_ink(lines);
         self.toggle_lab();
+        self.toast = Some((format!("{name} tahtaya eklendi · köşeden boyutlandırın"), now + 3.5));
+    }
+
+    fn toggle_optics(&mut self) {
+        self.optics = match self.optics.take() {
+            Some(panel) => {
+                self.optics_stash = Some(panel);
+                None
+            }
+            None => Some(self.optics_stash.take().unwrap_or_else(|| crate::optics::Optics::new(self.screen_size))),
+        };
+    }
+
+    fn stamp_optics(&mut self, now: f64) {
+        let Some(panel) = &self.optics else { return };
+        let name = panel.mode_name();
+        let lines = panel.stamp_lines(self.screen_size, self.stamp_ink());
+        self.commit_ink(lines);
+        self.toggle_optics();
         self.toast = Some((format!("{name} tahtaya eklendi · köşeden boyutlandırın"), now + 3.5));
     }
 
@@ -3017,6 +3092,7 @@ impl InputHandler {
             motion_visible: self.motion.is_some(),
             force_visible: self.force.is_some(),
             circuit_visible: self.circuit.is_some(),
+            optics_visible: self.optics.is_some(),
             ask_visible: self.ask.is_some() || self.ask_pick,
             crop_armed: self.crop_pick,
             crop_available: page.pdf_image.is_some(),
@@ -3071,6 +3147,9 @@ impl InputHandler {
         }
         if let Some(panel) = &self.circuit {
             panel.render(now, &self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
+        }
+        if let Some(panel) = &self.optics {
+            panel.render(&self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
         }
         if let Some(card) = &self.ask {
             card.render(now, &self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);

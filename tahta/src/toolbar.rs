@@ -82,6 +82,8 @@ pub enum ToolbarAction {
     ToggleForce,
     /// Shows/hides the DC circuit panel (`circuit.rs`).
     ToggleCircuit,
+    /// Shows/hides the optics panel (`optics.rs`).
+    ToggleOptics,
     /// "Sor": frame part of the board, ask the school's YZsunucu.
     ToggleAsk,
     /// Opens EBA in the system browser (see `masaustu.rs`).
@@ -147,6 +149,7 @@ pub struct ToolbarState {
     pub motion_visible: bool,
     pub force_visible: bool,
     pub circuit_visible: bool,
+    pub optics_visible: bool,
     /// "Alanı yeni sayfaya al" waits for its frame.
     pub crop_armed: bool,
     /// The page has a PDF image to cut from (glyph dims otherwise).
@@ -221,7 +224,7 @@ const ENTRIES: &[Entry] = &[
     // Chemistry.
     Entry::Group(&[ToolbarAction::TogglePeriodic, ToolbarAction::ToggleAtom, ToolbarAction::ToggleMolecule, ToolbarAction::ToggleReaction, ToolbarAction::ToggleLab]),
     // Physics.
-    Entry::Group(&[ToolbarAction::ToggleMotion, ToolbarAction::ToggleForce, ToolbarAction::ToggleCircuit]),
+    Entry::Group(&[ToolbarAction::ToggleMotion, ToolbarAction::ToggleForce, ToolbarAction::ToggleCircuit, ToolbarAction::ToggleOptics]),
     Entry::Direct(ToolbarAction::ToggleAsk),
     Entry::Direct(ToolbarAction::ToggleTextBox),
     Entry::Direct(ToolbarAction::OpenBrowser),
@@ -481,6 +484,7 @@ fn is_active(action: ToolbarAction, state: &ToolbarState) -> bool {
         ToolbarAction::ToggleMotion => state.motion_visible,
         ToolbarAction::ToggleForce => state.force_visible,
         ToolbarAction::ToggleCircuit => state.circuit_visible,
+        ToolbarAction::ToggleOptics => state.optics_visible,
         ToolbarAction::ToggleAsk => state.ask_visible,
         ToolbarAction::CropToPage => state.crop_armed,
         ToolbarAction::NewBoard => state.new_board_armed,
@@ -850,6 +854,28 @@ fn draw_glyph(
                 let x = center.x - r * 0.95 + s * r * 1.7;
                 let y = ground - r * 0.15 - 4.0 * s * (1.0 - s) * r * 1.35;
                 push_circle(Vec2::new(x, y), if k == 5 { r * 0.26 } else { 1.8 }, COLOR_GLYPH, 10, out_vertices, out_indices);
+            }
+        }
+        ToolbarAction::ToggleOptics => {
+            // A lens with two rays meeting behind it.
+            let lens_top = center + Vec2::new(0.0, -r * 1.0);
+            let lens_bot = center + Vec2::new(0.0, r * 1.0);
+            for s in [-1.0f32, 1.0] {
+                let mut prev = lens_top;
+                for k in 1..=8 {
+                    let t = k as f32 / 8.0;
+                    let y = lens_top.y + (lens_bot.y - lens_top.y) * t;
+                    let x = center.x + s * r * 0.35 * (1.0 - (2.0 * t - 1.0).powi(2));
+                    let p = Vec2::new(x, y);
+                    push_line(prev, p, 1.8, COLOR_GLYPH, out_vertices, out_indices);
+                    prev = p;
+                }
+            }
+            let focus = center + Vec2::new(r * 1.05, 0.0);
+            for dy in [-0.6f32, 0.6] {
+                let hit = center + Vec2::new(0.0, r * dy);
+                push_line(center + Vec2::new(-r * 1.1, r * dy), hit, 1.8, COLOR_GLYPH, out_vertices, out_indices);
+                push_line(hit, focus, 1.8, COLOR_GLYPH, out_vertices, out_indices);
             }
         }
         ToolbarAction::ToggleCircuit => {

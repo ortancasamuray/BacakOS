@@ -22,6 +22,7 @@ mod input_handler;
 mod lab;
 mod marks;
 mod motion;
+mod optics;
 mod magnifier;
 mod masaustu;
 mod molecule;
