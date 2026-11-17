@@ -76,6 +76,8 @@ pub enum ToolbarAction {
     ToggleReaction,
     /// Shows/hides the lab equipment panel (`lab.rs`).
     ToggleLab,
+    /// Shows/hides the projectile motion panel (`motion.rs`).
+    ToggleMotion,
     /// "Sor": frame part of the board, ask the school's YZsunucu.
     ToggleAsk,
     /// Opens EBA in the system browser (see `masaustu.rs`).
@@ -138,6 +140,7 @@ pub struct ToolbarState {
     pub molecule_visible: bool,
     pub reaction_visible: bool,
     pub lab_visible: bool,
+    pub motion_visible: bool,
     /// "Alanı yeni sayfaya al" waits for its frame.
     pub crop_armed: bool,
     /// The page has a PDF image to cut from (glyph dims otherwise).
@@ -211,6 +214,8 @@ const ENTRIES: &[Entry] = &[
     Entry::Direct(ToolbarAction::ToggleSolid),
     // Chemistry.
     Entry::Group(&[ToolbarAction::TogglePeriodic, ToolbarAction::ToggleAtom, ToolbarAction::ToggleMolecule, ToolbarAction::ToggleReaction, ToolbarAction::ToggleLab]),
+    // Physics.
+    Entry::Direct(ToolbarAction::ToggleMotion),
     Entry::Direct(ToolbarAction::ToggleAsk),
     Entry::Direct(ToolbarAction::ToggleTextBox),
     Entry::Direct(ToolbarAction::OpenBrowser),
@@ -231,10 +236,10 @@ const ENTRIES: &[Entry] = &[
 
 /// Local index right before which a thin separator is drawn: tool-select
 /// (0-3) | brush/color/undo/redo/clear (4-8) | drafting/widget/view groups
-/// (9-11) + function graph, solids, periodic table, "Sor" (12-15) |
-/// text/browser/screen grab/PDF area to a page (16-19) | page group (20) |
-/// minimize (21).
-const SEPARATOR_BEFORE: [usize; 5] = [4, 9, 16, 20, 21];
+/// (9-11) + function graph, solids, chemistry, physics, "Sor" (12-16) |
+/// text/browser/screen grab/PDF area to a page (17-20) | page group (21) |
+/// minimize (22).
+const SEPARATOR_BEFORE: [usize; 5] = [4, 9, 17, 21, 22];
 
 /// Bottom-center floating toolbar. Screen-space, never affected by canvas
 /// pan/zoom, recomputed each frame from the current window size (though
@@ -467,6 +472,7 @@ fn is_active(action: ToolbarAction, state: &ToolbarState) -> bool {
         ToolbarAction::ToggleMolecule => state.molecule_visible,
         ToolbarAction::ToggleReaction => state.reaction_visible,
         ToolbarAction::ToggleLab => state.lab_visible,
+        ToolbarAction::ToggleMotion => state.motion_visible,
         ToolbarAction::ToggleAsk => state.ask_visible,
         ToolbarAction::CropToPage => state.crop_armed,
         ToolbarAction::NewBoard => state.new_board_armed,
@@ -826,6 +832,17 @@ fn draw_glyph(
                 push_rect(tl + Vec2::new(cx * u * 1.2, cy * u * 1.2), Vec2::splat(u), COLOR_GLYPH, out_vertices, out_indices);
             }
             push_rect(tl + Vec2::new(u * 1.2, u * 4.0), Vec2::new(u * 4.6, u * 0.8), COLOR_GLYPH, out_vertices, out_indices);
+        }
+        ToolbarAction::ToggleMotion => {
+            // A ball's dotted arc over the ground, the ball at its end.
+            let ground = center.y + r * 0.85;
+            push_line(Vec2::new(center.x - r * 1.1, ground), Vec2::new(center.x + r * 1.1, ground), 2.0, COLOR_GLYPH, out_vertices, out_indices);
+            for k in 0..6 {
+                let s = k as f32 / 5.0;
+                let x = center.x - r * 0.95 + s * r * 1.7;
+                let y = ground - r * 0.15 - 4.0 * s * (1.0 - s) * r * 1.35;
+                push_circle(Vec2::new(x, y), if k == 5 { r * 0.26 } else { 1.8 }, COLOR_GLYPH, 10, out_vertices, out_indices);
+            }
         }
         ToolbarAction::ToggleLab => {
             // An Erlenmeyer flask with liquid.

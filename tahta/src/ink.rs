@@ -157,6 +157,10 @@ pub fn stroke_glyph(c: char) -> &'static [&'static [(f32, f32)]] {
         '(' => &[&[(0.3, 0.0), (0.12, 0.2), (0.05, 0.5), (0.12, 0.8), (0.3, 1.0)]],
         ')' => &[&[(0.05, 0.0), (0.23, 0.2), (0.3, 0.5), (0.23, 0.8), (0.05, 1.0)]],
         '+' => &[&[(0.05, 0.55), (0.5, 0.55)], &[(0.275, 0.33), (0.275, 0.77)]],
+        '=' => &[&[(0.05, 0.45), (0.5, 0.45)], &[(0.05, 0.68), (0.5, 0.68)]],
+        '/' => &[&[(0.0, 1.05), (0.4, -0.05)]],
+        'θ' => &[&[(0.3, 0.0), (0.53, 0.15), (0.6, 0.5), (0.53, 0.85), (0.3, 1.0), (0.07, 0.85), (0.0, 0.5), (0.07, 0.15), (0.3, 0.0)], &[(0.02, 0.5), (0.58, 0.5)]],
+        'Δ' => &[&[(0.3, 0.0), (0.62, 1.0), (-0.02, 1.0), (0.3, 0.0)]],
         _ => &[],
     }
 }
@@ -168,6 +172,8 @@ fn stroke_advance(c: char) -> f32 {
         '-' => 0.55,
         ',' => 0.35,
         '°' => 0.4,
+        '/' => 0.55,
+        '=' => 0.65,
         'I' | 'İ' | 'i' | 'ı' | 'l' | '[' | ']' | '(' | ')' => 0.5,
         'r' | 'f' | 't' | 'j' => 0.65,
         // A full circle, so it never reads as the digit 0.
@@ -183,6 +189,12 @@ pub fn stroke_text_width(text: &str, height: f32) -> f32 {
         Some(last) => (advance - stroke_advance(last) + if matches!(last, 'O' | 'Q' | 'Ö') { 0.8 } else { 0.6 }) * height,
         None => 0.0,
     }
+}
+
+/// Pen advance of `text` (where the next glyph would start), for laying
+/// out runs of different sizes one after another.
+pub fn stroke_text_advance(text: &str, height: f32) -> f32 {
+    text.chars().map(stroke_advance).sum::<f32>() * height
 }
 
 pub fn stroke_text(text: &str, top_left: Vec2, height: f32) -> Vec<Vec<Vec2>> {
@@ -217,7 +229,7 @@ mod tests {
 
     #[test]
     fn every_label_char_has_a_glyph() {
-        for c in "0123456789-,°+[]()ABCÇDEFGĞHIİJKLMNOÖPQRSŞTUÜVWXYZabcçdefgğhıijklmnoöpqrsştuüvwxyz".chars() {
+        for c in "0123456789-,°+=/θΔ[]()ABCÇDEFGĞHIİJKLMNOÖPQRSŞTUÜVWXYZabcçdefgğhıijklmnoöpqrsştuüvwxyz".chars() {
             assert!(!stroke_glyph(c).is_empty(), "{c}");
         }
     }

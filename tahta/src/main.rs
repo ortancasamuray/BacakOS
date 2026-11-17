@@ -18,6 +18,7 @@ mod handwriting;
 mod ink;
 mod input_handler;
 mod lab;
+mod motion;
 mod magnifier;
 mod masaustu;
 mod molecule;

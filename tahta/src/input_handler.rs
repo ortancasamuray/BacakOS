@@ -178,6 +178,14 @@ enum PointerRole {
     LabSlider,
     /// Touch landed on a lab panel card/button; already applied.
     LabPress,
+    /// Dragging the motion panel by its header.
+    MotionMove { grab_offset: Vec2 },
+    /// Dragging one of the motion panel's sliders.
+    MotionSlider { param: crate::motion::Param },
+    /// Finger along the drawn path: the ball follows it.
+    MotionScrub,
+    /// Touch landed on a motion panel button; already applied.
+    MotionPress,
     /// Framing a handwritten formula for the graph panel's "Tahtadan oku".
     FormulaPick,
     /// Dragging the "Sor" card by its header.
@@ -359,6 +367,8 @@ pub struct InputHandler {
     reaction_stash: Option<crate::reaction::Reaction>,
     lab: Option<crate::lab::Lab>,
     lab_stash: Option<crate::lab::Lab>,
+    motion: Option<crate::motion::Motion>,
+    motion_stash: Option<crate::motion::Motion>,
     /// The stamped figure (`Stroke::group`) currently selected for moving:
     /// set right after "Tahtaya bas", or by tapping a figure with the Hand
     /// tool; a touch outside its frame lets go.
@@ -472,6 +482,8 @@ impl InputHandler {
             reaction_stash: None,
             lab: None,
             lab_stash: None,
+            motion: None,
+            motion_stash: None,
             selection: None,
             formula_pick: false,
             formula_rect: None,
@@ -833,6 +845,7 @@ impl InputHandler {
             || self.ask.as_ref().is_some_and(|c| c.is_waiting())
             || self.atom.as_ref().is_some_and(|a| a.is_animating(now))
             || self.molecule.as_ref().is_some_and(|m| m.is_animating())
+            || self.motion.as_ref().is_some_and(|m| m.is_animating(now))
             || self.pages[self.current_page]
                 .strokes
                 .iter()
@@ -961,6 +974,7 @@ impl InputHandler {
             ToolbarAction::ToggleMolecule => self.toggle_molecule(),
             ToolbarAction::ToggleReaction => self.toggle_reaction(),
             ToolbarAction::ToggleLab => self.toggle_lab(),
+            ToolbarAction::ToggleMotion => self.toggle_motion(),
             ToolbarAction::OpenBrowser => match crate::masaustu::open_browser(crate::masaustu::BROWSER_HOME) {
                 // The fullscreen board would cover the browser window: step
                 // aside like "return to desktop" (back via the dock).
@@ -1302,6 +1316,28 @@ impl InputHandler {
                         PointerRole::SolidPress
                     }
                     crate::solid::SolidPress::Other => PointerRole::SolidPress,
+                };
+                self.sessions.insert(id, PointerSession { role, start_pos: position, start_time: now });
+                return;
+            }
+        }
+
+        // Same UI-panel priority for the motion panel.
+        if let Some(panel) = &mut self.motion {
+            if panel.contains(position) {
+                let role = match panel.press_at(position, now) {
+                    crate::motion::MotionPress::Move => PointerRole::MotionMove { grab_offset: position - panel.position },
+                    crate::motion::MotionPress::Slider(param) => PointerRole::MotionSlider { param },
+                    crate::motion::MotionPress::Scrub => PointerRole::MotionScrub,
+                    crate::motion::MotionPress::Close => {
+                        self.toggle_motion();
+                        PointerRole::MotionPress
+                    }
+                    crate::motion::MotionPress::Stamp => {
+                        self.stamp_motion(now);
+                        PointerRole::MotionPress
+                    }
+                    crate::motion::MotionPress::Other => PointerRole::MotionPress,
                 };
                 self.sessions.insert(id, PointerSession { role, start_pos: position, start_time: now });
                 return;
@@ -1849,6 +1885,23 @@ impl InputHandler {
                     solid.set_slider(position.x);
                 }
             }
+            PointerRole::MotionMove { grab_offset } => {
+                let grab_offset = *grab_offset;
+                if let Some(panel) = &mut self.motion {
+                    panel.drag_to(position, grab_offset);
+                }
+            }
+            PointerRole::MotionSlider { param } => {
+                let param = *param;
+                if let Some(panel) = &mut self.motion {
+                    panel.set_slider(param, position.x);
+                }
+            }
+            PointerRole::MotionScrub => {
+                if let Some(panel) = &mut self.motion {
+                    panel.scrub_to(position);
+                }
+            }
             PointerRole::LabMove { grab_offset } => {
                 let grab_offset = *grab_offset;
                 if let Some(panel) = &mut self.lab {
@@ -1962,6 +2015,7 @@ impl InputHandler {
             | PointerRole::MoleculePress
             | PointerRole::ReactionPress
             | PointerRole::LabPress
+            | PointerRole::MotionPress
             | PointerRole::SolidPress => {}
         }
         if do_erase {
@@ -2180,6 +2234,28 @@ impl InputHandler {
         self.commit_ink(lines);
         self.toggle_lab();
         self.toast = Some((format!("{name} tahtaya eklendi · köşeden boyutlandırın"), now + 3.5));
+    }
+
+    fn toggle_motion(&mut self) {
+        self.motion = match self.motion.take() {
+            Some(panel) => {
+                self.motion_stash = Some(panel);
+                None
+            }
+            None => Some(self.motion_stash.take().unwrap_or_else(|| crate::motion::Motion::new(self.screen_size))),
+        };
+    }
+
+    fn stamp_motion(&mut self, now: f64) {
+        let Some(panel) = &self.motion else { return };
+        match panel.stamp_lines(self.screen_size, self.stamp_ink(), now) {
+            Some(lines) => {
+                self.commit_ink(lines);
+                self.toggle_motion();
+                self.toast = Some(("Çizim tahtaya eklendi · köşeden boyutlandırın".to_string(), now + 3.5));
+            }
+            None => self.toast = Some(("Önce hız ya da yükseklik verin".to_string(), now + 3.0)),
+        }
     }
 
     fn toggle_reaction(&mut self) {
@@ -2789,6 +2865,7 @@ impl InputHandler {
             molecule_visible: self.molecule.is_some(),
             reaction_visible: self.reaction.is_some(),
             lab_visible: self.lab.is_some(),
+            motion_visible: self.motion.is_some(),
             ask_visible: self.ask.is_some() || self.ask_pick,
             crop_armed: self.crop_pick,
             crop_available: page.pdf_image.is_some(),
@@ -2834,6 +2911,9 @@ impl InputHandler {
         }
         if let Some(mol) = &self.molecule {
             mol.render(now, &self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
+        }
+        if let Some(panel) = &self.motion {
+            panel.render(now, &self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
         }
         if let Some(card) = &self.ask {
             card.render(now, &self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
