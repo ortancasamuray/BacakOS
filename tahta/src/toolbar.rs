@@ -84,6 +84,8 @@ pub enum ToolbarAction {
     ToggleCircuit,
     /// Shows/hides the optics panel (`optics.rs`).
     ToggleOptics,
+    /// Shows/hides the waves and oscillations panel (`waves.rs`).
+    ToggleWaves,
     /// "Sor": frame part of the board, ask the school's YZsunucu.
     ToggleAsk,
     /// Opens EBA in the system browser (see `masaustu.rs`).
@@ -150,6 +152,7 @@ pub struct ToolbarState {
     pub force_visible: bool,
     pub circuit_visible: bool,
     pub optics_visible: bool,
+    pub waves_visible: bool,
     /// "Alanı yeni sayfaya al" waits for its frame.
     pub crop_armed: bool,
     /// The page has a PDF image to cut from (glyph dims otherwise).
@@ -224,7 +227,7 @@ const ENTRIES: &[Entry] = &[
     // Chemistry.
     Entry::Group(&[ToolbarAction::TogglePeriodic, ToolbarAction::ToggleAtom, ToolbarAction::ToggleMolecule, ToolbarAction::ToggleReaction, ToolbarAction::ToggleLab]),
     // Physics.
-    Entry::Group(&[ToolbarAction::ToggleMotion, ToolbarAction::ToggleForce, ToolbarAction::ToggleCircuit, ToolbarAction::ToggleOptics]),
+    Entry::Group(&[ToolbarAction::ToggleMotion, ToolbarAction::ToggleForce, ToolbarAction::ToggleCircuit, ToolbarAction::ToggleOptics, ToolbarAction::ToggleWaves]),
     Entry::Direct(ToolbarAction::ToggleAsk),
     Entry::Direct(ToolbarAction::ToggleTextBox),
     Entry::Direct(ToolbarAction::OpenBrowser),
@@ -485,6 +488,7 @@ fn is_active(action: ToolbarAction, state: &ToolbarState) -> bool {
         ToolbarAction::ToggleForce => state.force_visible,
         ToolbarAction::ToggleCircuit => state.circuit_visible,
         ToolbarAction::ToggleOptics => state.optics_visible,
+        ToolbarAction::ToggleWaves => state.waves_visible,
         ToolbarAction::ToggleAsk => state.ask_visible,
         ToolbarAction::CropToPage => state.crop_armed,
         ToolbarAction::NewBoard => state.new_board_armed,
@@ -854,6 +858,17 @@ fn draw_glyph(
                 let x = center.x - r * 0.95 + s * r * 1.7;
                 let y = ground - r * 0.15 - 4.0 * s * (1.0 - s) * r * 1.35;
                 push_circle(Vec2::new(x, y), if k == 5 { r * 0.26 } else { 1.8 }, COLOR_GLYPH, 10, out_vertices, out_indices);
+            }
+        }
+        ToolbarAction::ToggleWaves => {
+            // A sine wave.
+            const STEPS: usize = 20;
+            let pt = |k: usize| {
+                let u = k as f32 / STEPS as f32;
+                center + Vec2::new((u - 0.5) * r * 2.2, -(u * std::f32::consts::TAU * 1.5).sin() * r * 0.6)
+            };
+            for k in 0..STEPS {
+                push_line(pt(k), pt(k + 1), 2.2, COLOR_GLYPH, out_vertices, out_indices);
             }
         }
         ToolbarAction::ToggleOptics => {

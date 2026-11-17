@@ -43,6 +43,7 @@ mod spotlight;
 mod stopwatch;
 mod stroke;
 mod textbox;
+mod waves;
 mod toolbar;
 mod ui;
 
