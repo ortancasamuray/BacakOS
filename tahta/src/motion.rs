@@ -15,8 +15,9 @@
 use glam::Vec2;
 
 use crate::font_atlas::{FontAtlas, GlyphVertex};
-use crate::ink::{dash_polyline, densify, stroke_text, stroke_text_advance, InkLine};
-use crate::stroke::{push_circle, push_line, push_rect, push_triangle, Vertex};
+use crate::ink::InkLine;
+use crate::marks::{self, layout_text, Anchor, Mark, Style};
+use crate::stroke::{push_circle, push_line, push_rect, Vertex};
 
 const HEADER_H: f32 = 36.0;
 const PADDING: f32 = 12.0;
@@ -188,12 +189,13 @@ fn tick(x: f32) -> String {
     s.to_string()
 }
 
-// --- Marks: what both the screen and the ink draw -------------------------
+// --- Marks (see `marks.rs`) ------------------------------------------------
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Role {
     /// Screen only (grid, tints, the not-yet-flown path).
     Grid,
+    GridText,
     Line,
     PathAhead,
     Path,
@@ -204,101 +206,22 @@ enum Role {
     Area,
 }
 
-#[derive(Clone, Copy, PartialEq, Debug)]
-enum Anchor {
-    Left,
-    Center,
-    Right,
-}
-
-enum Mark {
-    Line { pts: Vec<Vec2>, w: f32, role: Role, dash: bool },
-    Arrow { a: Vec2, b: Vec2, w: f32, role: Role, dash: bool },
-    Dot { c: Vec2, r: f32, role: Role, filled: bool },
-    /// `pos.y` is the cap top; `_x`/`_{max}` subscript, `^2` superscript.
-    Text { s: String, pos: Vec2, h: f32, role: Role, anchor: Anchor },
-    Tri { a: Vec2, b: Vec2, c: Vec2, role: Role },
-}
-
-impl Mark {
-    fn line(pts: Vec<Vec2>, w: f32, role: Role) -> Self {
-        Mark::Line { pts, w, role, dash: false }
+impl From<Role> for Style {
+    fn from(role: Role) -> Style {
+        let (color, ink) = match role {
+            Role::Grid => (COLOR_GRID, false),
+            Role::GridText => (COLOR_TEXT_DIM, false),
+            Role::Line => (COLOR_LINE, true),
+            Role::PathAhead => (COLOR_PATH_AHEAD, false),
+            Role::Path => (COLOR_PATH, true),
+            Role::Ball => (COLOR_BALL, true),
+            Role::V => (COLOR_V, true),
+            Role::Vx => (COLOR_VX, true),
+            Role::Vy => (COLOR_VY, true),
+            Role::Area => (COLOR_AREA, false),
+        };
+        Style { color, ink }
     }
-
-    fn text(s: impl Into<String>, pos: Vec2, h: f32, role: Role, anchor: Anchor) -> Self {
-        Mark::Text { s: s.into(), pos, h, role, anchor }
-    }
-}
-
-/// Text runs: (text, level) with level 0 normal, -1 subscript, 1 superscript.
-fn runs(s: &str) -> Vec<(String, i8)> {
-    let mut out: Vec<(String, i8)> = Vec::new();
-    let mut chars = s.chars().peekable();
-    let mut cur = String::new();
-    while let Some(c) = chars.next() {
-        if c == '_' || c == '^' {
-            let level = if c == '_' { -1 } else { 1 };
-            let mut part = String::new();
-            if chars.peek() == Some(&'{') {
-                chars.next();
-                for d in chars.by_ref() {
-                    if d == '}' {
-                        break;
-                    }
-                    part.push(d);
-                }
-            } else if let Some(d) = chars.next() {
-                part.push(d);
-            }
-            if !cur.is_empty() {
-                out.push((std::mem::take(&mut cur), 0));
-            }
-            out.push((part, level));
-        } else {
-            cur.push(c);
-        }
-    }
-    if !cur.is_empty() {
-        out.push((cur, 0));
-    }
-    out
-}
-
-/// Size and top offset of a run at `level` for text of cap height `h`.
-fn run_metrics(level: i8, h: f32) -> (f32, f32) {
-    match level {
-        0 => (h, 0.0),
-        -1 => (h * 0.68, h * 0.57),
-        _ => (h * 0.65, -h * 0.25),
-    }
-}
-
-/// Lays `s` out from `pos` with `anchor`: each run's (text, top-left, size).
-fn layout_text(s: &str, pos: Vec2, h: f32, anchor: Anchor, advance: impl Fn(&str, f32) -> f32) -> Vec<(String, Vec2, f32)> {
-    let rs = runs(s);
-    let total: f32 = rs.iter().map(|(t, l)| advance(t, run_metrics(*l, h).0)).sum();
-    let mut x = match anchor {
-        Anchor::Left => pos.x,
-        Anchor::Center => pos.x - total / 2.0,
-        Anchor::Right => pos.x - total,
-    };
-    let mut out = Vec::new();
-    for (t, l) in rs {
-        let (size, dy) = run_metrics(l, h);
-        let w = advance(&t, size);
-        out.push((t, Vec2::new(x, pos.y + dy), size));
-        x += w;
-    }
-    out
-}
-
-fn arrow_head(a: Vec2, b: Vec2, size: f32) -> Option<(Vec2, Vec2)> {
-    let d = (b - a).normalize_or_zero();
-    if d == Vec2::ZERO {
-        return None;
-    }
-    let base = b - d * size;
-    Some((base + d.perp() * size * 0.45, base - d.perp() * size * 0.45))
 }
 
 /// World (meters, y up) → screen, same scale on both axes.
@@ -635,7 +558,7 @@ impl Motion {
                 let x = f.pt(Vec2::new(k as f32 * step, 0.0)).x;
                 m.push(Mark::line(vec![Vec2::new(x, ground_y), Vec2::new(x, ground_y - y_hi * f.scale)], 1.0, Role::Grid));
                 if k >= 0 && x < a1.x - 4.0 {
-                    m.push(Mark::text(tick(k as f32 * step), Vec2::new(x, ground_y + 14.0), 13.0, Role::Grid, Anchor::Center));
+                    m.push(Mark::text(tick(k as f32 * step), Vec2::new(x, ground_y + 14.0), 13.0, Role::GridText, Anchor::Center));
                 }
                 k += 1;
             }
@@ -643,11 +566,11 @@ impl Motion {
             while j as f32 * step <= y_hi {
                 let y = f.pt(Vec2::new(0.0, j as f32 * step)).y;
                 m.push(Mark::line(vec![Vec2::new(a0.x - 40.0, y), Vec2::new(a1.x + 30.0, y)], 1.0, Role::Grid));
-                m.push(Mark::text(tick(j as f32 * step), Vec2::new(a0.x - 46.0, y - 6.0), 13.0, Role::Grid, Anchor::Right));
+                m.push(Mark::text(tick(j as f32 * step), Vec2::new(a0.x - 46.0, y - 6.0), 13.0, Role::GridText, Anchor::Right));
                 j += 1;
             }
-            m.push(Mark::text("x (m)", Vec2::new(a1.x + 40.0, ground_y + 14.0), 13.0, Role::Grid, Anchor::Right));
-            m.push(Mark::text("y (m)", Vec2::new(rect.0.x + 12.0, rect.0.y + 38.0), 13.0, Role::Grid, Anchor::Left));
+            m.push(Mark::text("x (m)", Vec2::new(a1.x + 40.0, ground_y + 14.0), 13.0, Role::GridText, Anchor::Right));
+            m.push(Mark::text("y (m)", Vec2::new(rect.0.x + 12.0, rect.0.y + 38.0), 13.0, Role::GridText, Anchor::Left));
         }
 
         // Ground, with hatching below.
@@ -698,7 +621,7 @@ impl Motion {
             let top = f.pt(shot.pos(shot.t_peak()));
             let label = format!("h_{{max}} = {} m", num(shot.peak(), 1));
             if shot.vx > 0.0 {
-                m.push(Mark::Line { pts: vec![top, Vec2::new(top.x, ground_y)], w: 1.4, role: Role::Line, dash: true });
+                m.push(Mark::Line { pts: vec![top, Vec2::new(top.x, ground_y)], w: 1.4, style: Role::Line.into(), dash: true });
                 m.push(Mark::text(label, Vec2::new(top.x + 10.0, top.y + 8.0), 15.0, Role::Line, Anchor::Left));
             } else {
                 m.push(Mark::text(label, Vec2::new(top.x - 16.0, top.y - 7.0), 15.0, Role::Line, Anchor::Right));
@@ -711,7 +634,7 @@ impl Motion {
             let mut k = 0;
             while k as f32 * dt <= shot.t_end + 1e-4 {
                 let p = Self::screen_pos(&shot, &f, k as f32 * dt);
-                m.push(Mark::Dot { c: p, r: 4.5, role: Role::Path, filled: !ink });
+                m.push(Mark::Dot { c: p, r: 4.5, style: Role::Path.into(), filled: !ink });
                 // Their shadows on the ground and on the start's vertical:
                 // equal steps across, growing steps down.
                 if shot.vx > 0.0 {
@@ -736,7 +659,7 @@ impl Motion {
 
         // g, top right.
         let g_at = Vec2::new(a1.x + 20.0, rect.0.y + 72.0);
-        m.push(Mark::Arrow { a: g_at, b: g_at + Vec2::new(0.0, 46.0), w: 2.0, role: Role::Line, dash: false });
+        m.push(Mark::Arrow { a: g_at, b: g_at + Vec2::new(0.0, 46.0), w: 2.0, style: Role::Line.into(), dash: false });
         m.push(Mark::text(format!("g = {} m/s^2", num(PLANETS[self.planet].1, 1)), g_at + Vec2::new(-10.0, 16.0), 15.0, Role::Line, Anchor::Right));
 
         // The ball and its velocity now.
@@ -750,20 +673,20 @@ impl Motion {
             if v.x.abs() * k > 22.0 && v.y.abs() * k > 22.0 {
                 let tx = p + Vec2::new(v.x * k, 0.0);
                 let ty = p + Vec2::new(0.0, -v.y * k);
-                m.push(Mark::Arrow { a: p, b: tx, w: 2.0, role: Role::Vx, dash: ink });
-                m.push(Mark::Arrow { a: p, b: ty, w: 2.0, role: Role::Vy, dash: ink });
-                m.push(Mark::Line { pts: vec![tx, tip, ty], w: 1.0, role: Role::Grid, dash: true });
+                m.push(Mark::Arrow { a: p, b: tx, w: 2.0, style: Role::Vx.into(), dash: ink });
+                m.push(Mark::Arrow { a: p, b: ty, w: 2.0, style: Role::Vy.into(), dash: ink });
+                m.push(Mark::Line { pts: vec![tx, tip, ty], w: 1.0, style: Role::Grid.into(), dash: true });
                 m.push(Mark::text("v_x", tx + Vec2::new(6.0, 4.0), 15.0, Role::Vx, Anchor::Left));
                 m.push(Mark::text("v_y", ty + Vec2::new(-8.0, if v.y > 0.0 { -6.0 } else { -12.0 }), 15.0, Role::Vy, Anchor::Right));
             }
             if v.length() > 1e-3 {
-                m.push(Mark::Arrow { a: p, b: tip, w: 2.8, role: Role::V, dash: false });
+                m.push(Mark::Arrow { a: p, b: tip, w: 2.8, style: Role::V.into(), dash: false });
                 let name = if t <= 1e-4 { "v_0" } else { "v" };
                 let off = Vec2::new(v.x, -v.y).normalize() * 12.0 + Vec2::new(4.0, -8.0);
                 m.push(Mark::text(format!("{name} = {} m/s", num(v.length(), 1)), tip + off, 15.0, Role::V, Anchor::Left));
             }
         }
-        m.push(Mark::Dot { c: p, r: 9.0, role: Role::Ball, filled: !ink });
+        m.push(Mark::Dot { c: p, r: 9.0, style: Role::Ball.into(), filled: !ink });
         m
     }
 
@@ -803,8 +726,8 @@ impl Motion {
             let at = |tt: f32, v: f32| Vec2::new(pa.x + (pb.x - pa.x) * tt / shot.t_end, pb.y - (pb.y - pa.y) * (v - lo) / (hi - lo));
             let zero = at(0.0, 0.0).y;
             // Axes: value up the left, time along zero.
-            m.push(Mark::Arrow { a: Vec2::new(pa.x, pb.y + 4.0), b: Vec2::new(pa.x, pa.y - 14.0), w: 1.8, role: Role::Line, dash: false });
-            m.push(Mark::Arrow { a: Vec2::new(pa.x - 4.0, zero), b: Vec2::new(pb.x + 18.0, zero), w: 1.8, role: Role::Line, dash: false });
+            m.push(Mark::Arrow { a: Vec2::new(pa.x, pb.y + 4.0), b: Vec2::new(pa.x, pa.y - 14.0), w: 1.8, style: Role::Line.into(), dash: false });
+            m.push(Mark::Arrow { a: Vec2::new(pa.x - 4.0, zero), b: Vec2::new(pb.x + 18.0, zero), w: 1.8, style: Role::Line.into(), dash: false });
             m.push(Mark::text(*title, Vec2::new(pa.x + 10.0, pa.y - 22.0), 15.0, Role::Line, Anchor::Left));
             m.push(Mark::text("t (s)", Vec2::new(pb.x + 24.0, zero - 6.0), 13.0, Role::Line, Anchor::Left));
             m.push(Mark::text("0", Vec2::new(pa.x - 8.0, zero - 6.0), 13.0, Role::Line, Anchor::Right));
@@ -828,15 +751,15 @@ impl Motion {
                 let n = ((t / shot.t_end) * SAMPLES as f32).round() as usize;
                 for w in pts[..=n.min(SAMPLES)].windows(2) {
                     let (a, b) = (w[0], w[1]);
-                    m.push(Mark::Tri { a, b, c: Vec2::new(b.x, zero), role: Role::Area });
-                    m.push(Mark::Tri { a, b: Vec2::new(b.x, zero), c: Vec2::new(a.x, zero), role: Role::Area });
+                    m.push(Mark::Tri { a, b, c: Vec2::new(b.x, zero), style: Role::Area.into() });
+                    m.push(Mark::Tri { a, b: Vec2::new(b.x, zero), c: Vec2::new(a.x, zero), style: Role::Area.into() });
                 }
             }
             m.push(Mark::line(pts, 2.5, *role));
             if !ink {
                 let now = at(t, curve(&shot, t));
-                m.push(Mark::Line { pts: vec![Vec2::new(now.x, pa.y - 6.0), Vec2::new(now.x, pb.y)], w: 1.0, role: Role::Grid, dash: true });
-                m.push(Mark::Dot { c: now, r: 6.0, role: Role::Ball, filled: true });
+                m.push(Mark::Line { pts: vec![Vec2::new(now.x, pa.y - 6.0), Vec2::new(now.x, pb.y)], w: 1.0, style: Role::Grid.into(), dash: true });
+                m.push(Mark::Dot { c: now, r: 6.0, style: Role::Ball.into(), filled: true });
             }
         }
         m
@@ -861,108 +784,10 @@ impl Motion {
         }
         let size = Vec2::new(STAMP_W.min(screen_size.x - 160.0), STAMP_H.min(screen_size.y - 240.0));
         let top_left = Vec2::new((screen_size.x - size.x) / 2.0, ((screen_size.y - 130.0 - size.y) / 2.0).max(20.0));
-        let mut lines = Vec::new();
-        let mut add = |points: Vec<Vec2>, width: f32| {
-            if points.len() >= 2 {
-                lines.push(InkLine { points: densify(&points, 3.0), color: ink, width });
-            }
-        };
-        for mark in self.scene((top_left, size), self.time(now), true) {
-            match mark {
-                Mark::Line { role: Role::Grid | Role::Area | Role::PathAhead, .. }
-                | Mark::Text { role: Role::Grid, .. }
-                | Mark::Tri { .. } => {}
-                Mark::Line { pts, w, dash, .. } => {
-                    if dash {
-                        for d in dash_polyline(&pts, 9.0, 6.0) {
-                            add(d, w);
-                        }
-                    } else {
-                        add(pts, w);
-                    }
-                }
-                Mark::Arrow { a, b, w, dash, .. } => {
-                    if dash {
-                        for d in dash_polyline(&[a, b], 9.0, 6.0) {
-                            add(d, w);
-                        }
-                    } else {
-                        add(vec![a, b], w);
-                    }
-                    if let Some((l, r)) = arrow_head(a, b, 14.0) {
-                        add(vec![l, b, r], w);
-                    }
-                }
-                Mark::Dot { c, r, .. } => add(crate::periodic::circle_points(c, r, 16), 2.0),
-                Mark::Text { s, pos, h, anchor, .. } => {
-                    for (t, at, size) in layout_text(&s, pos, h, anchor, stroke_text_advance) {
-                        for g in stroke_text(&t, at, size) {
-                            add(g, (size / 9.0).clamp(1.4, 2.2));
-                        }
-                    }
-                }
-            }
-        }
-        Some(lines)
+        Some(marks::to_ink(&self.scene((top_left, size), self.time(now), true), ink))
     }
 
     // --- Drawing ---------------------------------------------------------
-
-    fn draw_scene(&self, marks: &[Mark], font_atlas: &FontAtlas, v: &mut Vec<Vertex>, i: &mut Vec<u32>, gv: &mut Vec<GlyphVertex>, gi: &mut Vec<u32>) {
-        let color = |role: Role| match role {
-            Role::Grid => COLOR_GRID,
-            Role::Line => COLOR_LINE,
-            Role::PathAhead => COLOR_PATH_AHEAD,
-            Role::Path => COLOR_PATH,
-            Role::Ball => COLOR_BALL,
-            Role::V => COLOR_V,
-            Role::Vx => COLOR_VX,
-            Role::Vy => COLOR_VY,
-            Role::Area => COLOR_AREA,
-        };
-        for mark in marks {
-            match mark {
-                Mark::Line { pts, w, role, dash } => {
-                    let c = color(*role);
-                    if *dash {
-                        for d in dash_polyline(pts, 7.0, 5.0) {
-                            for s in d.windows(2) {
-                                push_line(s[0], s[1], *w, c, v, i);
-                            }
-                        }
-                    } else {
-                        for s in pts.windows(2) {
-                            push_line(s[0], s[1], *w, c, v, i);
-                        }
-                    }
-                }
-                Mark::Arrow { a, b, w, role, .. } => {
-                    let c = color(*role);
-                    if let Some((l, r)) = arrow_head(*a, *b, 13.0) {
-                        push_line(*a, (l + r) / 2.0, *w, c, v, i);
-                        push_triangle(l, *b, r, c, v, i);
-                    }
-                }
-                Mark::Dot { c, r, role, filled } => {
-                    if *filled {
-                        push_circle(*c, *r, color(*role), 16, v, i);
-                    } else {
-                        let pts = crate::periodic::circle_points(*c, *r, 16);
-                        for s in pts.windows(2) {
-                            push_line(s[0], s[1], 2.0, color(*role), v, i);
-                        }
-                    }
-                }
-                Mark::Text { s, pos, h, role, anchor } => {
-                    let c = if *role == Role::Grid { COLOR_TEXT_DIM } else { color(*role) };
-                    for (t, at, size) in layout_text(s, *pos, *h, *anchor, |t, h| font_atlas.measure(t, h)) {
-                        font_atlas.push_text(&t, at, size, c, gv, gi);
-                    }
-                }
-                Mark::Tri { a, b, c, role } => push_triangle(*a, *b, *c, color(*role), v, i),
-            }
-        }
-    }
 
     pub fn render(
         &self,
@@ -993,7 +818,7 @@ impl Motion {
         push_rect(view.0, view.1, COLOR_FIELD, v, i);
         let t = self.time(now);
         let marks = self.scene(view, t, false);
-        self.draw_scene(&marks, font_atlas, v, i, gv, gi);
+        marks::draw(&marks, font_atlas, v, i, gv, gi);
         let shot = self.shot();
         if !shot.is_empty() {
             let pos = shot.pos(t);
@@ -1141,7 +966,6 @@ mod tests {
         let f = Frame { origin: Vec2::new(100.0, 500.0), scale: 10.0 };
         let (up, down) = (Motion::screen_pos(&s, &f, 1.0), Motion::screen_pos(&s, &f, 3.0));
         assert!(close(up.y, down.y, 1e-3) && close(down.x - up.x, VERTICAL_SPLIT, 1e-3));
-        assert_eq!(runs("h_{max} = 3 m/s^2"), vec![("h".into(), 0), ("max".into(), -1), (" = 3 m/s".into(), 0), ("2".into(), 1)]);
     }
 
     #[test]
@@ -1200,26 +1024,13 @@ mod tests {
 
     #[test]
     fn every_stamped_char_has_a_glyph() {
-        let m = Motion::new(SCREEN);
-        let mut texts = Vec::new();
         for graphs in [false, true] {
-            let mut mm = Motion::new(SCREEN);
-            mm.graphs = graphs;
-            for mark in mm.scene((Vec2::ZERO, Vec2::new(1000.0, 560.0)), 1.0, true) {
-                if let Mark::Text { s, role, .. } = mark {
-                    if role != Role::Grid {
-                        texts.push(s);
-                    }
-                }
-            }
-        }
-        let _ = m;
-        assert!(texts.iter().any(|t| t.contains("θ")));
-        for t in texts {
-            for (run, _) in runs(&t) {
-                for ch in run.chars().filter(|c| !c.is_whitespace()) {
-                    assert!(!crate::ink::stroke_glyph(ch).is_empty(), "{ch} in {t}");
-                }
+            for kind in 0..4 {
+                let mut m = Motion::new(SCREEN);
+                m.graphs = graphs;
+                m.kind = KINDS[kind].0;
+                let marks = m.scene((Vec2::ZERO, Vec2::new(1000.0, 560.0)), 1.0, true);
+                assert_eq!(marks::missing_glyphs(&marks), vec![]);
             }
         }
     }

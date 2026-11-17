@@ -78,6 +78,8 @@ pub enum ToolbarAction {
     ToggleLab,
     /// Shows/hides the projectile motion panel (`motion.rs`).
     ToggleMotion,
+    /// Shows/hides the force / vector panel (`force.rs`).
+    ToggleForce,
     /// "Sor": frame part of the board, ask the school's YZsunucu.
     ToggleAsk,
     /// Opens EBA in the system browser (see `masaustu.rs`).
@@ -141,6 +143,7 @@ pub struct ToolbarState {
     pub reaction_visible: bool,
     pub lab_visible: bool,
     pub motion_visible: bool,
+    pub force_visible: bool,
     /// "Alanı yeni sayfaya al" waits for its frame.
     pub crop_armed: bool,
     /// The page has a PDF image to cut from (glyph dims otherwise).
@@ -215,7 +218,7 @@ const ENTRIES: &[Entry] = &[
     // Chemistry.
     Entry::Group(&[ToolbarAction::TogglePeriodic, ToolbarAction::ToggleAtom, ToolbarAction::ToggleMolecule, ToolbarAction::ToggleReaction, ToolbarAction::ToggleLab]),
     // Physics.
-    Entry::Direct(ToolbarAction::ToggleMotion),
+    Entry::Group(&[ToolbarAction::ToggleMotion, ToolbarAction::ToggleForce]),
     Entry::Direct(ToolbarAction::ToggleAsk),
     Entry::Direct(ToolbarAction::ToggleTextBox),
     Entry::Direct(ToolbarAction::OpenBrowser),
@@ -473,6 +476,7 @@ fn is_active(action: ToolbarAction, state: &ToolbarState) -> bool {
         ToolbarAction::ToggleReaction => state.reaction_visible,
         ToolbarAction::ToggleLab => state.lab_visible,
         ToolbarAction::ToggleMotion => state.motion_visible,
+        ToolbarAction::ToggleForce => state.force_visible,
         ToolbarAction::ToggleAsk => state.ask_visible,
         ToolbarAction::CropToPage => state.crop_armed,
         ToolbarAction::NewBoard => state.new_board_armed,
@@ -843,6 +847,21 @@ fn draw_glyph(
                 let y = ground - r * 0.15 - 4.0 * s * (1.0 - s) * r * 1.35;
                 push_circle(Vec2::new(x, y), if k == 5 { r * 0.26 } else { 1.8 }, COLOR_GLYPH, 10, out_vertices, out_indices);
             }
+        }
+        ToolbarAction::ToggleForce => {
+            // A block on the floor pulled by an arrow.
+            let ground = center.y + r * 0.75;
+            push_line(Vec2::new(center.x - r * 1.1, ground), Vec2::new(center.x + r * 1.1, ground), 2.0, COLOR_GLYPH, out_vertices, out_indices);
+            let tl = Vec2::new(center.x - r * 1.0, ground - r * 0.95);
+            let (w, h) = (r * 0.95, r * 0.95);
+            let corners = [tl, tl + Vec2::new(w, 0.0), tl + Vec2::new(w, h), tl + Vec2::new(0.0, h)];
+            for k in 0..4 {
+                push_line(corners[k], corners[(k + 1) % 4], 2.0, COLOR_GLYPH, out_vertices, out_indices);
+            }
+            let (a, b) = (Vec2::new(tl.x + w, ground - h / 2.0), Vec2::new(center.x + r * 1.05, ground - h / 2.0));
+            push_line(a, b, 2.5, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(b, b + Vec2::new(-r * 0.32, -r * 0.25), 2.5, COLOR_GLYPH, out_vertices, out_indices);
+            push_line(b, b + Vec2::new(-r * 0.32, r * 0.25), 2.5, COLOR_GLYPH, out_vertices, out_indices);
         }
         ToolbarAction::ToggleLab => {
             // An Erlenmeyer flask with liquid.

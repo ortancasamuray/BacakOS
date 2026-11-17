@@ -186,6 +186,14 @@ enum PointerRole {
     MotionScrub,
     /// Touch landed on a motion panel button; already applied.
     MotionPress,
+    /// Dragging the force panel by its header.
+    ForceMove { grab_offset: Vec2 },
+    /// Dragging one of the force panel's sliders.
+    ForceSlider { param: crate::force::Param },
+    /// Dragging a vector's tip on the force panel's grid.
+    ForceDrag { index: usize },
+    /// Touch landed on a force panel button; already applied.
+    ForcePress,
     /// Framing a handwritten formula for the graph panel's "Tahtadan oku".
     FormulaPick,
     /// Dragging the "Sor" card by its header.
@@ -369,6 +377,8 @@ pub struct InputHandler {
     lab_stash: Option<crate::lab::Lab>,
     motion: Option<crate::motion::Motion>,
     motion_stash: Option<crate::motion::Motion>,
+    force: Option<crate::force::Force>,
+    force_stash: Option<crate::force::Force>,
     /// The stamped figure (`Stroke::group`) currently selected for moving:
     /// set right after "Tahtaya bas", or by tapping a figure with the Hand
     /// tool; a touch outside its frame lets go.
@@ -484,6 +494,8 @@ impl InputHandler {
             lab_stash: None,
             motion: None,
             motion_stash: None,
+            force: None,
+            force_stash: None,
             selection: None,
             formula_pick: false,
             formula_rect: None,
@@ -846,6 +858,7 @@ impl InputHandler {
             || self.atom.as_ref().is_some_and(|a| a.is_animating(now))
             || self.molecule.as_ref().is_some_and(|m| m.is_animating())
             || self.motion.as_ref().is_some_and(|m| m.is_animating(now))
+            || self.force.as_ref().is_some_and(|f| f.is_animating(now))
             || self.pages[self.current_page]
                 .strokes
                 .iter()
@@ -975,6 +988,7 @@ impl InputHandler {
             ToolbarAction::ToggleReaction => self.toggle_reaction(),
             ToolbarAction::ToggleLab => self.toggle_lab(),
             ToolbarAction::ToggleMotion => self.toggle_motion(),
+            ToolbarAction::ToggleForce => self.toggle_force(),
             ToolbarAction::OpenBrowser => match crate::masaustu::open_browser(crate::masaustu::BROWSER_HOME) {
                 // The fullscreen board would cover the browser window: step
                 // aside like "return to desktop" (back via the dock).
@@ -1316,6 +1330,28 @@ impl InputHandler {
                         PointerRole::SolidPress
                     }
                     crate::solid::SolidPress::Other => PointerRole::SolidPress,
+                };
+                self.sessions.insert(id, PointerSession { role, start_pos: position, start_time: now });
+                return;
+            }
+        }
+
+        // Same UI-panel priority for the force panel.
+        if let Some(panel) = &mut self.force {
+            if panel.contains(position) {
+                let role = match panel.press_at(position, now) {
+                    crate::force::ForcePress::Move => PointerRole::ForceMove { grab_offset: position - panel.position },
+                    crate::force::ForcePress::Slider(param) => PointerRole::ForceSlider { param },
+                    crate::force::ForcePress::Drag(index) => PointerRole::ForceDrag { index },
+                    crate::force::ForcePress::Close => {
+                        self.toggle_force();
+                        PointerRole::ForcePress
+                    }
+                    crate::force::ForcePress::Stamp => {
+                        self.stamp_force(now);
+                        PointerRole::ForcePress
+                    }
+                    crate::force::ForcePress::Other => PointerRole::ForcePress,
                 };
                 self.sessions.insert(id, PointerSession { role, start_pos: position, start_time: now });
                 return;
@@ -1885,6 +1921,24 @@ impl InputHandler {
                     solid.set_slider(position.x);
                 }
             }
+            PointerRole::ForceMove { grab_offset } => {
+                let grab_offset = *grab_offset;
+                if let Some(panel) = &mut self.force {
+                    panel.drag_to(position, grab_offset);
+                }
+            }
+            PointerRole::ForceSlider { param } => {
+                let param = *param;
+                if let Some(panel) = &mut self.force {
+                    panel.set_slider(param, position.x);
+                }
+            }
+            PointerRole::ForceDrag { index } => {
+                let index = *index;
+                if let Some(panel) = &mut self.force {
+                    panel.drag_vector(index, position);
+                }
+            }
             PointerRole::MotionMove { grab_offset } => {
                 let grab_offset = *grab_offset;
                 if let Some(panel) = &mut self.motion {
@@ -2016,6 +2070,7 @@ impl InputHandler {
             | PointerRole::ReactionPress
             | PointerRole::LabPress
             | PointerRole::MotionPress
+            | PointerRole::ForcePress
             | PointerRole::SolidPress => {}
         }
         if do_erase {
@@ -2233,6 +2288,25 @@ impl InputHandler {
         let lines = panel.stamp_lines(self.screen_size, self.stamp_ink());
         self.commit_ink(lines);
         self.toggle_lab();
+        self.toast = Some((format!("{name} tahtaya eklendi · köşeden boyutlandırın"), now + 3.5));
+    }
+
+    fn toggle_force(&mut self) {
+        self.force = match self.force.take() {
+            Some(panel) => {
+                self.force_stash = Some(panel);
+                None
+            }
+            None => Some(self.force_stash.take().unwrap_or_else(|| crate::force::Force::new(self.screen_size))),
+        };
+    }
+
+    fn stamp_force(&mut self, now: f64) {
+        let Some(panel) = &self.force else { return };
+        let name = panel.mode_name();
+        let lines = panel.stamp_lines(self.screen_size, self.stamp_ink(), now);
+        self.commit_ink(lines);
+        self.toggle_force();
         self.toast = Some((format!("{name} tahtaya eklendi · köşeden boyutlandırın"), now + 3.5));
     }
 
@@ -2866,6 +2940,7 @@ impl InputHandler {
             reaction_visible: self.reaction.is_some(),
             lab_visible: self.lab.is_some(),
             motion_visible: self.motion.is_some(),
+            force_visible: self.force.is_some(),
             ask_visible: self.ask.is_some() || self.ask_pick,
             crop_armed: self.crop_pick,
             crop_available: page.pdf_image.is_some(),
@@ -2913,6 +2988,9 @@ impl InputHandler {
             mol.render(now, &self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
         }
         if let Some(panel) = &self.motion {
+            panel.render(now, &self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
+        }
+        if let Some(panel) = &self.force {
             panel.render(now, &self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
         }
         if let Some(card) = &self.ask {
