@@ -152,6 +152,10 @@ impl App {
         self.input.mouse_moved(pos, now);
     }
 
+    pub fn mouse_left(&mut self) {
+        self.input.mouse_left();
+    }
+
     pub fn mouse_pressed(&mut self) {
         let now = self.now_secs();
         self.input.mouse_pressed(now);

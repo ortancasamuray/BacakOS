@@ -357,6 +357,10 @@ pub struct InputHandler {
     current_page: usize,
     sessions: HashMap<u64, PointerSession>,
     last_mouse_pos: Vec2,
+    /// Mouse is over the window (not pressed) — for toolbar tooltips.
+    /// Cleared when it leaves, and by any touch so a stale hover never
+    /// lingers on a touch-only panel.
+    mouse_hover: bool,
 
     active_tool: Tool,
     active_pen: PenSettings,
@@ -488,6 +492,7 @@ impl InputHandler {
             current_page: 0,
             sessions: HashMap::new(),
             last_mouse_pos: Vec2::ZERO,
+            mouse_hover: false,
             active_tool: Tool::Pen,
             eraser_mode: EraserMode::Area,
             eraser_radius: DEFAULT_ERASER_RADIUS,
@@ -2871,6 +2876,11 @@ impl InputHandler {
             self.move_pointer(MOUSE_POINTER_ID, pos, now);
         }
         self.last_mouse_pos = pos;
+        self.mouse_hover = true;
+    }
+
+    pub fn mouse_left(&mut self) {
+        self.mouse_hover = false;
     }
 
     pub fn mouse_pressed(&mut self, now: f64) {
@@ -2884,6 +2894,7 @@ impl InputHandler {
     // --- Touch -------------------------------------------------------------
 
     pub fn touch_started(&mut self, id: u64, pos: Vec2, now: f64) {
+        self.mouse_hover = false;
         self.begin_pointer(id, pos, now);
     }
 
@@ -3236,6 +3247,19 @@ impl InputHandler {
         if let Some(menu) = &self.radial_menu {
             // No live drag-hover any more (tap-to-select, see module docs).
             menu.render(None, &mut normal_v, &mut normal_i);
+        }
+
+        if self.toolbar_visible && self.mouse_hover && !self.sessions.contains_key(&MOUSE_POINTER_ID) {
+            self.toolbar.render_tooltip(
+                self.last_mouse_pos,
+                &toolbar_state,
+                self.screen_size,
+                &self.font_atlas,
+                &mut normal_v,
+                &mut normal_i,
+                &mut glyph_v,
+                &mut glyph_i,
+            );
         }
 
         if let Some((message, expires_at)) = &self.toast {

@@ -8,6 +8,7 @@ use glam::Vec2;
 
 use crate::board::{BoardBackground, GridPattern};
 use crate::brush::BrushType;
+use crate::font_atlas::{FontAtlas, GlyphVertex};
 use crate::stroke::{push_circle, push_line, push_rect, Vertex};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -195,6 +196,10 @@ const COLOR_GLYPH: [f32; 4] = [0.95, 0.95, 0.97, 1.0];
 const COLOR_GLYPH_DISABLED: [f32; 4] = [0.95, 0.95, 0.97, 0.3];
 const COLOR_SEPARATOR: [f32; 4] = [1.0, 1.0, 1.0, 0.10];
 const COLOR_EXPAND_BADGE: [f32; 4] = [0.95, 0.95, 0.97, 0.9];
+const COLOR_TOOLTIP_BG: [f32; 4] = [0.06, 0.07, 0.09, 1.0];
+const COLOR_TOOLTIP_BORDER: [f32; 4] = [1.0, 1.0, 1.0, 0.28];
+/// Gap between a hovered button and its name label above it.
+const TOOLTIP_GAP: f32 = 8.0;
 
 /// One toolbar slot: either applies its action directly, or (a `Group`)
 /// opens a small flyout of related actions above the bar when tapped —
@@ -451,6 +456,65 @@ impl Toolbar {
         self.render_page_dots(state, out_vertices, out_indices);
     }
 
+    /// Name of whatever the mouse is resting on (a bar button, a flyout
+    /// button or a page dot) plus the rect to put the tooltip above. Only
+    /// the mouse hovers — a finger/stylus never shows these, it just taps.
+    fn hover_target(&self, point: Vec2, state: &ToolbarState) -> Option<(String, (Vec2, Vec2))> {
+        if let Some(gi) = self.open_group {
+            if let Entry::Group(actions) = &ENTRIES[gi] {
+                for (rect, action) in self.flyout_child_rects(gi).into_iter().zip(*actions) {
+                    if rect_contains(rect, point) {
+                        return Some((action_label(*action, state).to_string(), rect));
+                    }
+                }
+            }
+        }
+        let dots = self.page_dot_centers(state.page_count);
+        if let Some(i) = dots.iter().position(|c| (point.x - c.x).abs() <= PAGE_DOT_GAP / 2.0 && (point.y - c.y).abs() <= PAGE_DOT_ZONE / 2.0) {
+            let c = dots[i];
+            return Some((format!("Sayfa {}", i + 1), (c - Vec2::splat(6.0), Vec2::splat(12.0))));
+        }
+        let i = self.button_rects.iter().position(|r| rect_contains(*r, point))?;
+        let label = match &ENTRIES[i] {
+            Entry::Direct(action) => action_label(*action, state).to_string(),
+            Entry::Group(_) => group_label(i).to_string(),
+        };
+        let mut rect = self.button_rects[i];
+        // An open flyout sits right above the bar — lift the tooltip over
+        // it instead of covering its buttons.
+        if let Some(gi) = self.open_group {
+            let (fpos, _) = self.flyout_rect(gi);
+            rect.0.y = fpos.y;
+            rect.1.y = 0.0;
+        }
+        Some((label, rect))
+    }
+
+    /// Draws the hovered button's name in a small dark label above it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_tooltip(
+        &self,
+        point: Vec2,
+        state: &ToolbarState,
+        screen_size: Vec2,
+        font: &FontAtlas,
+        out_vertices: &mut Vec<Vertex>,
+        out_indices: &mut Vec<u32>,
+        glyph_vertices: &mut Vec<GlyphVertex>,
+        glyph_indices: &mut Vec<u32>,
+    ) {
+        let Some((label, (pos, size))) = self.hover_target(point, state) else { return };
+        let text_h = 18.0;
+        let pad = Vec2::new(10.0, 6.0);
+        let box_size = Vec2::new(font.measure(&label, text_h), text_h * 1.3) + pad * 2.0;
+        let cx = pos.x + size.x / 2.0;
+        let x = (cx - box_size.x / 2.0).clamp(4.0, (screen_size.x - box_size.x - 4.0).max(4.0));
+        let y = (pos.y - TOOLTIP_GAP - box_size.y).max(4.0);
+        push_rect(Vec2::new(x, y) - Vec2::ONE, box_size + Vec2::splat(2.0), COLOR_TOOLTIP_BORDER, out_vertices, out_indices);
+        push_rect(Vec2::new(x, y), box_size, COLOR_TOOLTIP_BG, out_vertices, out_indices);
+        font.push_text(&label, Vec2::new(x, y) + pad, text_h, COLOR_GLYPH, glyph_vertices, glyph_indices);
+    }
+
     /// A small row of dots above the page-nav buttons — the only "which
     /// page am I on" indicator, since this app has no text renderer yet.
     fn render_page_dots(&self, state: &ToolbarState, out_vertices: &mut Vec<Vertex>, out_indices: &mut Vec<u32>) {
@@ -495,6 +559,77 @@ fn is_active(action: ToolbarAction, state: &ToolbarState) -> bool {
         ToolbarAction::DeletePage => state.delete_page_armed,
         ToolbarAction::OpenFile => state.opener_visible,
         _ => false,
+    }
+}
+
+/// Tooltip name of a button (same words the user guide uses).
+fn action_label(action: ToolbarAction, state: &ToolbarState) -> &'static str {
+    match action {
+        ToolbarAction::SelectTool(Tool::Pen) => "Kalem",
+        ToolbarAction::SelectTool(Tool::Hand) => "El (kaydır)",
+        ToolbarAction::SelectTool(Tool::Eraser) => match state.eraser_mode {
+            EraserMode::Area => "Silgi · tekrar dokun: nesne silgisi",
+            EraserMode::Object => "Nesne silgisi · tekrar dokun: silgi",
+        },
+        ToolbarAction::SelectTool(Tool::Compass) => "Pergel",
+        ToolbarAction::CycleBrush => match state.brush_type {
+            BrushType::Ballpoint => "Kalem türü: tükenmez",
+            BrushType::Calligraphy => "Kalem türü: kaligrafi",
+            BrushType::Highlighter => "Kalem türü: fosforlu",
+            BrushType::LaserPointer => "Kalem türü: lazer işaretçi",
+        },
+        ToolbarAction::CycleColor => "Renk",
+        ToolbarAction::Undo => "Geri al",
+        ToolbarAction::Redo => "Yinele",
+        ToolbarAction::Clear => "Temizle",
+        ToolbarAction::ToggleZone => "Çift bölge",
+        ToolbarAction::ToggleRuler => "Cetvel",
+        ToolbarAction::ToggleSetSquare => "Gönye",
+        ToolbarAction::ToggleProtractor => "İletki",
+        ToolbarAction::ToggleCalculator => "Hesap makinesi",
+        ToolbarAction::ToggleStopwatch => "Kronometre",
+        ToolbarAction::ToggleDice => "Zar",
+        ToolbarAction::ToggleSpotlight => "Spot ışığı",
+        ToolbarAction::ToggleMagnifier => "Büyüteç",
+        ToolbarAction::ToggleTextBox => "Metin",
+        ToolbarAction::ToggleGraph => "Fonksiyon grafiği",
+        ToolbarAction::ToggleSolid => "3D cisim ve kesit",
+        ToolbarAction::TogglePeriodic => "Periyodik tablo",
+        ToolbarAction::ToggleAtom => "Atom modeli",
+        ToolbarAction::ToggleMolecule => "Molekül",
+        ToolbarAction::ToggleReaction => "Tepkime denkleştirme",
+        ToolbarAction::ToggleLab => "Laboratuvar",
+        ToolbarAction::ToggleMotion => "Atış hareketi",
+        ToolbarAction::ToggleForce => "Kuvvet ve vektörler",
+        ToolbarAction::ToggleCircuit => "Elektrik devresi",
+        ToolbarAction::ToggleOptics => "Optik",
+        ToolbarAction::ToggleWaves => "Dalgalar ve titreşim",
+        ToolbarAction::ToggleAsk => "Sor (yapay zekâ)",
+        ToolbarAction::OpenBrowser => "EBA'yı tarayıcıda aç",
+        ToolbarAction::CaptureScreen => "Ekranı tahtaya al",
+        ToolbarAction::CropToPage => "PDF alanını yeni sayfaya al",
+        ToolbarAction::CycleBackground => "Zemin",
+        ToolbarAction::PrevPage => "Önceki sayfa",
+        ToolbarAction::NextPage => "Sonraki sayfa",
+        ToolbarAction::GoToPage(_) => "Sayfa",
+        ToolbarAction::DeletePage => "Bu sayfayı sil",
+        ToolbarAction::ExportPdf => "PDF olarak kaydet",
+        ToolbarAction::MinimizeToDesktop => "Masaüstüne dön",
+        ToolbarAction::NewBoard => "Yeni tahta",
+        ToolbarAction::OpenFile => "Aç",
+    }
+}
+
+/// Tooltip name of a group trigger (index into `ENTRIES`).
+fn group_label(index: usize) -> &'static str {
+    let Entry::Group(actions) = &ENTRIES[index] else { return "" };
+    match actions[0] {
+        ToolbarAction::ToggleRuler => "Geometri: cetvel, gönye, iletki",
+        ToolbarAction::ToggleCalculator => "Etkinlik: hesap makinesi, kronometre, zar",
+        ToolbarAction::ToggleSpotlight => "Odak: spot ışığı, büyüteç",
+        ToolbarAction::TogglePeriodic => "Kimya",
+        ToolbarAction::ToggleMotion => "Fizik",
+        _ => "Sayfa ve dosya",
     }
 }
 

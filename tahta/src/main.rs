@@ -130,6 +130,7 @@ fn main() {
                     WindowEvent::CursorMoved { position, .. } => {
                         app.mouse_moved(position);
                     }
+                    WindowEvent::CursorLeft { .. } => app.mouse_left(),
                     WindowEvent::MouseInput { state, button, .. } => {
                         if button == MouseButton::Left {
                             match state {
