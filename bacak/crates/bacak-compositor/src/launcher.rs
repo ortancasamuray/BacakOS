@@ -67,6 +67,15 @@ pub fn spawn_detached(argv: &[String]) -> bool {
     };
     let mut cmd = Command::new(prog);
     cmd.args(args).stdin(Stdio::null());
+    // The session reaches us without the PAM locale environment: give apps
+    // the system locale (/etc/default/locale) instead of the C locale.
+    if std::env::var_os("LANG").is_none() && std::env::var_os("LC_ALL").is_none() {
+        let lang = std::fs::read_to_string("/etc/default/locale")
+            .ok()
+            .and_then(|t| crate::icons::default_locale_lang(&t))
+            .unwrap_or_else(|| "C.UTF-8".to_string());
+        cmd.env("LANG", lang);
+    }
     // Pure Wayland session, no X server. Steer toolkits that default to
     // X11 toward the Wayland backend so they don't die with "cannot open
     // display" / "could not load the Qt platform plugin xcb". GTK and
