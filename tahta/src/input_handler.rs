@@ -2994,6 +2994,7 @@ impl InputHandler {
         (usize, usize),
         Vec<crate::font_atlas::GlyphVertex>,
         Vec<u32>,
+        Vec<(usize, usize)>,
     ) {
         let mut normal_v = Vec::new();
         let mut normal_i = Vec::new();
@@ -3001,6 +3002,10 @@ impl InputHandler {
         let mut highlight_i = Vec::new();
         let mut glyph_v = Vec::new();
         let mut glyph_i = Vec::new();
+        // Arayüz katmanları: her panelden sonra (normal, yazı) indeks sınırı. Renderer
+        // katman katman çizer (önce şekiller, sonra o katmanın yazıları); böylece üstteki
+        // panelin arka planı alttaki panelin yazısını örter.
+        let mut katman: Vec<(usize, usize)> = Vec::new();
 
         let page = &self.pages[self.current_page];
         board::render_background(page, self.screen_size, self.view_offset, self.view_scale, &mut normal_v, &mut normal_i);
@@ -3187,67 +3192,105 @@ impl InputHandler {
         if self.toolbar_visible {
             self.toolbar.render(&toolbar_state, &mut normal_v, &mut normal_i);
         }
+        katman.push((normal_i.len(), glyph_i.len()));
+
+        // Çizim sırası (arkadan öne) begin_pointer'daki dokunma önceliğinin tersi:
+        // dokunuşu ilk alan panel en üstte görünür.
+        if let Some(table) = &self.periodic {
+            table.render(&self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
+        }
+        katman.push((normal_i.len(), glyph_i.len()));
+
+        if let Some(atom) = &self.atom {
+            atom.render(now, &self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
+        }
+        katman.push((normal_i.len(), glyph_i.len()));
+
+        if let Some(mol) = &self.molecule {
+            mol.render(now, &self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
+        }
+        katman.push((normal_i.len(), glyph_i.len()));
+
+        if let Some(panel) = &self.reaction {
+            panel.render(&self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
+        }
+        katman.push((normal_i.len(), glyph_i.len()));
+
+        if let Some(panel) = &self.lab {
+            panel.render(&self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
+        }
+        katman.push((normal_i.len(), glyph_i.len()));
+
+        if let Some(panel) = &self.motion {
+            panel.render(now, &self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
+        }
+        katman.push((normal_i.len(), glyph_i.len()));
+
+        if let Some(panel) = &self.force {
+            panel.render(now, &self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
+        }
+        katman.push((normal_i.len(), glyph_i.len()));
+
+        if let Some(panel) = &self.circuit {
+            panel.render(now, &self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
+        }
+        katman.push((normal_i.len(), glyph_i.len()));
+
+        if let Some(panel) = &self.optics {
+            panel.render(&self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
+        }
+        katman.push((normal_i.len(), glyph_i.len()));
+
+        if let Some(panel) = &self.waves {
+            panel.render(now, &self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
+        }
+        katman.push((normal_i.len(), glyph_i.len()));
+
+        if let Some(solid) = &self.solid {
+            solid.render(&self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
+        }
+        katman.push((normal_i.len(), glyph_i.len()));
+
+        if let Some(graph) = &self.graph {
+            graph.render(&self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
+        }
+        katman.push((normal_i.len(), glyph_i.len()));
+
+        if let Some(card) = &self.ask {
+            card.render(now, &self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
+        }
+        katman.push((normal_i.len(), glyph_i.len()));
+
+        if let Some(textbox) = &self.textbox {
+            textbox.render(&self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
+        }
+        katman.push((normal_i.len(), glyph_i.len()));
+
+        if let Some(dice) = &self.dice {
+            dice.render(&mut normal_v, &mut normal_i);
+        }
+        katman.push((normal_i.len(), glyph_i.len()));
+
+        if let Some(stopwatch) = &self.stopwatch {
+            stopwatch.render(now, &mut normal_v, &mut normal_i);
+        }
+        katman.push((normal_i.len(), glyph_i.len()));
 
         if let Some(calculator) = &self.calculator {
             calculator.render(&mut normal_v, &mut normal_i);
         }
-        if let Some(stopwatch) = &self.stopwatch {
-            stopwatch.render(now, &mut normal_v, &mut normal_i);
-        }
-        if let Some(dice) = &self.dice {
-            dice.render(&mut normal_v, &mut normal_i);
-        }
-        if let Some(textbox) = &self.textbox {
-            textbox.render(&self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
-        }
-        if let Some(graph) = &self.graph {
-            graph.render(&self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
-        }
-        if let Some(solid) = &self.solid {
-            solid.render(&self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
-        }
-        if let Some(table) = &self.periodic {
-            table.render(&self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
-        }
-        if let Some(atom) = &self.atom {
-            atom.render(now, &self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
-        }
-        if let Some(panel) = &self.lab {
-            panel.render(&self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
-        }
-        if let Some(panel) = &self.reaction {
-            panel.render(&self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
-        }
-        if let Some(mol) = &self.molecule {
-            mol.render(now, &self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
-        }
-        if let Some(panel) = &self.motion {
-            panel.render(now, &self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
-        }
-        if let Some(panel) = &self.force {
-            panel.render(now, &self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
-        }
-        if let Some(panel) = &self.circuit {
-            panel.render(now, &self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
-        }
-        if let Some(panel) = &self.optics {
-            panel.render(&self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
-        }
-        if let Some(panel) = &self.waves {
-            panel.render(now, &self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
-        }
-        if let Some(card) = &self.ask {
-            card.render(now, &self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
-        }
+        katman.push((normal_i.len(), glyph_i.len()));
 
         if let Some(opener) = &self.opener {
             opener.render(self.screen_size, &self.font_atlas, &mut normal_v, &mut normal_i, &mut glyph_v, &mut glyph_i);
         }
+        katman.push((normal_i.len(), glyph_i.len()));
 
         if let Some(menu) = &self.radial_menu {
             // No live drag-hover any more (tap-to-select, see module docs).
             menu.render(None, &mut normal_v, &mut normal_i);
         }
+        katman.push((normal_i.len(), glyph_i.len()));
 
         if self.toolbar_visible && self.mouse_hover && !self.sessions.contains_key(&MOUSE_POINTER_ID) {
             self.toolbar.render_tooltip(
@@ -3261,6 +3304,7 @@ impl InputHandler {
                 &mut glyph_i,
             );
         }
+        katman.push((normal_i.len(), glyph_i.len()));
 
         if let Some((message, expires_at)) = &self.toast {
             if now < *expires_at {
@@ -3271,6 +3315,7 @@ impl InputHandler {
                 self.font_atlas.push_text(message, pos, text_h, [0.95, 0.95, 0.97, 1.0], &mut glyph_v, &mut glyph_i);
             }
         }
+        katman.push((normal_i.len(), glyph_i.len()));
 
         let pictures = page
             .pictures
@@ -3281,7 +3326,7 @@ impl InputHandler {
             })
             .collect();
 
-        (normal_v, normal_i, highlight_v, highlight_i, page.pdf_image.clone(), pictures, (background_index_count, content_index_count), glyph_v, glyph_i)
+        (normal_v, normal_i, highlight_v, highlight_i, page.pdf_image.clone(), pictures, (background_index_count, content_index_count), glyph_v, glyph_i, katman)
     }
 
     /// `(center, radius, zoom)` for the renderer to draw the magnifier's

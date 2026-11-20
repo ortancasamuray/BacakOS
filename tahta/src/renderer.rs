@@ -798,6 +798,7 @@ impl Renderer {
         highlighter: (&[Vertex], &[u32]),
         glyph: (&[GlyphVertex], &[u32]),
         content_ranges: (usize, usize),
+        layers: &[(usize, usize)],
         page_image: Option<&PdfImage>,
         pictures: &[ScreenPicture],
         magnifier_lens: Option<(Vec2, f32, f32)>,
@@ -1001,20 +1002,27 @@ impl Renderer {
                 pass.draw_indexed(0..6, 0, 0..1);
             }
 
-            self.normal_batch.draw_range(&mut pass, &self.normal_pipeline, &self.uniform_bind_group, content_index_count as u32..normal.1.len() as u32);
-
-            // Real-font text (text box display/keyboard) — chrome, so
-            // after the chrome range above, on top of its panel's own
-            // background/key rects. Two bind groups (uniform + atlas
-            // texture), so this doesn't go through `Batch::draw` (which
-            // only sets one).
-            if !glyph.1.is_empty() {
-                pass.set_pipeline(&self.glyph_pipeline);
-                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-                pass.set_bind_group(1, &self.glyph_bind_group, &[]);
-                pass.set_vertex_buffer(0, self.glyph_batch.vertex.buffer.slice(..));
-                pass.set_index_buffer(self.glyph_batch.index.buffer.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(0..glyph.1.len() as u32, 0, 0..1);
+            // UI chrome, layer by layer (`layers` = (normal, glyph) index
+            // ends, one per panel in draw order): each layer's shapes, then
+            // its real-font text. Drawing all text after all shapes let a
+            // lower panel's text show through a panel on top of it.
+            let mut n0 = content_index_count;
+            let mut g0 = 0;
+            let ends = layers.iter().copied().chain(std::iter::once((normal.1.len(), glyph.1.len())));
+            for (n1, g1) in ends {
+                let (n1, g1) = (n1.max(n0), g1.max(g0));
+                self.normal_batch.draw_range(&mut pass, &self.normal_pipeline, &self.uniform_bind_group, n0 as u32..n1 as u32);
+                // Two bind groups (uniform + atlas texture), so this
+                // doesn't go through `Batch::draw` (which only sets one).
+                if g1 > g0 {
+                    pass.set_pipeline(&self.glyph_pipeline);
+                    pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                    pass.set_bind_group(1, &self.glyph_bind_group, &[]);
+                    pass.set_vertex_buffer(0, self.glyph_batch.vertex.buffer.slice(..));
+                    pass.set_index_buffer(self.glyph_batch.index.buffer.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(g0 as u32..g1 as u32, 0, 0..1);
+                }
+                (n0, g0) = (n1, g1);
             }
         }
 
